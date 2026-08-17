@@ -70,3 +70,6 @@ src/
 - ポイント間の待ち時間は `setTimeout` ではなくゲームループ内のタイマー（`Game#after`）で数えているので、
   ポイントがリセットされると必ず破棄される。
 - ES モジュール（`import`/`export`）は使っていない。`file://` で開けなくなるため。
+- ロジック層の回帰テストは `node tests/smoke.mjs`。three.js も DOM も使わず、Node だけで検証する。
+- タスクのバックログは [docs/ROADMAP.md](./docs/ROADMAP.md)。`/loop 2h /evolve` のように定期実行すると、
+  そこから1件ずつ拾って実装・テスト・コミットする（詳細は [.claude/skills/evolve/SKILL.md](./.claude/skills/evolve/SKILL.md)）。
