@@ -138,6 +138,19 @@
       this.hooks.clearCall();
     }
 
+    /**
+     * トス中に ←→ で狙うコースを選ぶ。狙い先（targetSign）と同じ向きに入力すればワイド、
+     * 逆向きなら T、無入力ならボディへ。
+     * @param {1|-1} targetSign このサーブが入るボックスの符号
+     */
+    serveAimMagnitude(targetSign) {
+      const aim = this.input.moveX * INPUT_X_TO_WORLD;
+      if (aim === 0) return rand(SERVE.AIM_BODY_MIN, SERVE.AIM_BODY_MAX);
+      return aim === targetSign
+        ? rand(SERVE.AIM_WIDE_MIN, SERVE.AIM_WIDE_MAX)
+        : rand(SERVE.AIM_T_MIN, SERVE.AIM_T_MAX);
+    }
+
     hit(who) {
       const ball = this.ball;
       const from = { x: ball.x, y: Math.max(ball.y, 0.5), z: ball.z };
@@ -211,20 +224,34 @@
       }
     }
 
+    /**
+     * プレイヤーが動ける範囲。自分のサーブ中（トスから打つまで）だけ、
+     * フットフォルトになる位置（ベースラインの内側／センターマークの反対側／サイドラインの外）
+     * へは動けないよう狭める。
+     */
+    youBounds() {
+      if (!(this.phase === 'serve' && this.server === 'you')) {
+        return {
+          xMin: -PLAYER.X_LIMIT, xMax: PLAYER.X_LIMIT,
+          zMin: -HALF_L - PLAYER.Z_FAR_MARGIN, zMax: PLAYER.Z_NEAR,
+        };
+      }
+      const side = this.match.serveSide; // 現在サーブすべき側（センターマークからの符号）
+      return {
+        xMin: side > 0 ? 0 : -HALF_W,
+        xMax: side > 0 ? HALF_W : 0,
+        zMin: -HALF_L - PLAYER.Z_FAR_MARGIN,
+        zMax: -HALF_L, // ベースラインを踏み越えたら失格（フットフォルト）
+      };
+    }
+
     movePlayers(dt) {
       const mx = this.input.moveX * INPUT_X_TO_WORLD;
       const mz = this.input.moveZ;
       const len = Math.hypot(mx, mz) || 1; // 斜め移動が速くならないように正規化
-      this.you.x = clamp(
-        this.you.x + (mx / len) * PLAYER.SPEED * dt,
-        -PLAYER.X_LIMIT,
-        PLAYER.X_LIMIT,
-      );
-      this.you.z = clamp(
-        this.you.z + (mz / len) * PLAYER.SPEED * dt,
-        -HALF_L - PLAYER.Z_FAR_MARGIN,
-        PLAYER.Z_NEAR,
-      );
+      const bounds = this.youBounds();
+      this.you.x = clamp(this.you.x + (mx / len) * PLAYER.SPEED * dt, bounds.xMin, bounds.xMax);
+      this.you.z = clamp(this.you.z + (mz / len) * PLAYER.SPEED * dt, bounds.zMin, bounds.zMax);
 
       // CPU は自分が返す番なら落下点へ、そうでなければ定位置へ戻る
       const chasing = this.phase === 'rally' && this.ball.last === 'you';
