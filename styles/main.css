@@ -1,0 +1,70 @@
+:root{
+  --ink:#0b1a2b;
+  --line:#e8eef5;
+  --ball:#d8f24a;
+  --clay:#2b6cb0;
+  --dim:rgba(232,238,245,.55);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--ink);overflow:hidden}
+body{font-family:"Helvetica Neue",Arial,"Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;color:var(--line)}
+canvas{display:block}
+
+#hud{position:fixed;inset:0;pointer-events:none}
+
+/* broadcast-style scorebug */
+#bug{
+  position:absolute;top:14px;left:14px;
+  display:grid;grid-template-columns:auto 46px 56px;
+  background:rgba(9,20,34,.82);
+  border-left:4px solid var(--ball);
+  border-radius:2px;
+  overflow:hidden;
+  font-variant-numeric:tabular-nums;
+  box-shadow:0 6px 24px rgba(0,0,0,.35);
+}
+#bug div{padding:6px 10px;font-size:13px;letter-spacing:.04em;line-height:1.15}
+#bug .nm{min-width:112px;text-transform:uppercase;font-weight:600}
+#bug .gm{text-align:center;color:var(--dim)}
+#bug .pt{text-align:center;background:rgba(216,242,74,.12);font-weight:700}
+#bug .row2{display:contents}
+#bug .row2 div{border-top:1px solid rgba(232,238,245,.12)}
+#bug .srv::after{content:"●";color:var(--ball);font-size:9px;margin-left:6px;vertical-align:2px}
+
+#head{
+  position:absolute;top:14px;right:14px;text-align:right;
+  font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)
+}
+
+/* ポイントごとのコール（ポイント／アウト／ゲーム …） */
+#call{
+  position:absolute;left:50%;top:34%;transform:translate(-50%,-50%);
+  text-align:center;opacity:0;transition:opacity .18s
+}
+#call .big{font-size:34px;font-weight:700;letter-spacing:.02em}
+#call .sub{font-size:13px;color:var(--dim);margin-top:4px;letter-spacing:.06em}
+#call.on{opacity:1}
+
+#keys{
+  position:absolute;left:50%;bottom:16px;transform:translateX(-50%);
+  display:flex;gap:18px;font-size:11px;color:var(--dim);letter-spacing:.06em;
+  background:rgba(9,20,34,.6);padding:7px 14px;border-radius:2px;white-space:nowrap
+}
+#keys b{color:var(--line);font-weight:600}
+
+#start{
+  position:fixed;inset:0;display:grid;place-items:center;
+  background:radial-gradient(120% 90% at 50% 40%,rgba(11,26,43,.55),rgba(11,26,43,.95));
+  pointer-events:auto;cursor:pointer
+}
+#start .card{text-align:center;max-width:420px;padding:0 24px}
+#start h1{font-size:40px;margin:0;letter-spacing:-.01em;font-weight:700}
+#start h1 span{color:var(--ball)}
+#start p{color:var(--dim);font-size:13px;line-height:1.8;margin:14px 0 22px}
+#start .cta{display:inline-block;border:1px solid var(--ball);color:var(--ball);
+  padding:9px 20px;font-size:12px;letter-spacing:.16em;text-transform:uppercase}
+
+@media (max-width:520px){
+  #keys{font-size:10px;gap:10px}
+  #bug .nm{min-width:84px}
+}

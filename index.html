@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rally One — 3D Tennis</title>
+<link rel="stylesheet" href="styles/main.css">
+</head>
+<body>
+
+<div id="hud">
+  <div id="bug">
+    <div class="nm" id="n1">YOU</div><div class="gm" id="g1">0</div><div class="pt" id="p1">0</div>
+    <div class="row2">
+      <div class="nm" id="n2">CPU</div><div class="gm" id="g2">0</div><div class="pt" id="p2">0</div>
+    </div>
+  </div>
+  <div id="head">1 set match · <span id="setinfo">first to 6</span></div>
+  <div id="call"><div class="big" id="callBig"></div><div class="sub" id="callSub"></div></div>
+  <div id="keys">
+    <span><b>←→</b> 左右 / 打つ方向</span>
+    <span><b>↑↓</b> 前後</span>
+    <span><b>Space</b> スイング・サーブ</span>
+    <span><b>Shift</b> ロブ</span>
+  </div>
+</div>
+
+<div id="start"><div class="card">
+  <h1>RALLY <span>ONE</span></h1>
+  <p>3Dテニス v0.1 — ループの1周目。<br>
+     ボールが自コートで2バウンドしたら失点。ラインを割っても失点。</p>
+  <div class="cta">Space / クリックで開始</div>
+</div></div>
+
+<!-- 依存の順に読み込む。各ファイルは window.RallyOne に自分の分を足していく。 -->
+<script src="vendor/three.min.js"></script>
+<script src="src/config.js"></script>
+<script src="src/math.js"></script>
+<script src="src/physics.js"></script>
+<script src="src/scoring.js"></script>
+<script src="src/ai.js"></script>
+<script src="src/audio.js"></script>
+<script src="src/input.js"></script>
+<script src="src/hud.js"></script>
+<script src="src/game.js"></script>
+<script src="src/scene/renderer.js"></script>
+<script src="src/scene/court.js"></script>
+<script src="src/scene/net.js"></script>
+<script src="src/scene/player.js"></script>
+<script src="src/scene/ball.js"></script>
+<script src="src/scene/world.js"></script>
+<script src="src/main.js"></script>
+
+</body>
+</html>
