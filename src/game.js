@@ -215,11 +215,14 @@
       const ball = this.ball;
       const player = this.actor(who);
       const from = { x: ball.x, y: Math.max(ball.y, 0.5), z: ball.z };
-      // AI（cpu/cpuMate は人間の逆をつく、youMate はダブルスで唯一のAI仲間なので
-      // 相手チームの主力 cpu の逆をつく）。人間の 'you' だけ playerShot() で自分の入力を使う。
+      // AI（cpu/cpuMate は人間の逆をつきつつ you 陣地(z<0)へ、youMate はダブルスで唯一の
+      // AI仲間なので相手チームの主力 cpu の逆をつきつつ cpu 陣地(z>0)へ）。
+      // 人間の 'you' だけ playerShot() で自分の入力を使う。
       const shot = who === 'you'
         ? this.playerShot()
-        : { target: shotTarget(TEAM_OF[who] === 'cpu' ? this.you.x : this.cpu.x), flight: CPU.SHOT_T };
+        : TEAM_OF[who] === 'cpu'
+          ? { target: shotTarget(this.you.x, -1), flight: CPU.SHOT_T }
+          : { target: shotTarget(this.cpu.x, 1), flight: CPU.SHOT_T };
 
       // ball.x/z はまだ打点のまま（solveShot が書き換えるのは vx/vy/vz だけ）なので、
       // ここで打点とプレイヤー位置からフォア/バックを判定できる。

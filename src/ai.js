@@ -31,15 +31,17 @@
   }
 
   /**
-   * 打球の狙い先。プレイヤーの逆をつきつつ、一定確率でミスもする。
-   * @param {number} playerX プレイヤーの現在位置
+   * 打球の狙い先。相手プレイヤーの逆をつきつつ、一定確率でミスもする。
+   * @param {number} opponentX 逆をつく相手（返球を受ける側）の現在位置
+   * @param {1|-1} [dir] 打ち込む方向。既定は -1（z<0側＝you陣地。cpu が you を狙う従来の向き）。
+   *   you 陣地の選手（youMate）が cpu 陣地（z>0）を狙うときは +1 を渡す。
    * @returns {{x:number, y:number, z:number}} ワールド座標の目標地点
    */
-  function shotTarget(playerX) {
-    let x = -signOr(playerX, Math.random() - 0.5) * rand(CPU.AIM_X_MIN, CPU.AIM_X_MAX);
-    let z = -rand(CPU.AIM_Z_MIN, CPU.AIM_Z_MAX);
+  function shotTarget(opponentX, dir = -1) {
+    let x = -signOr(opponentX, Math.random() - 0.5) * rand(CPU.AIM_X_MIN, CPU.AIM_X_MAX);
+    let z = dir * rand(CPU.AIM_Z_MIN, CPU.AIM_Z_MAX);
 
-    if (Math.random() < CPU.OUT_LONG) z = -(HALF_L + 0.9);               // ベースラインオーバー
+    if (Math.random() < CPU.OUT_LONG) z = dir * (HALF_L + 0.9);          // ベースラインオーバー
     if (Math.random() < CPU.OUT_WIDE) x = Math.sign(x) * (HALF_W + 0.7); // サイドアウト
 
     return { x, y: PHYSICS.BALL_R, z };

@@ -298,6 +298,30 @@ function tossAndHit(g) {
   ok(g.ball.last === 'cpu', `hit('cpuMate') -> ball.last is team 'cpu', got ${g.ball.last}`);
 }
 
+// --- ダブルス：youMate は cpu 陣地(z>0)へ、cpu/cpuMate は you 陣地(z<0)へ正しく打ち返す ---
+// (退行テスト: youMate が shotTarget() の既定方向をそのまま使っていた結果、自陣を狙って
+//  相手コートに届かないバグがあった。着地点の z 座標の符号で検証する)
+{
+  const landingFor = (who, ballZ) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(true);
+    g.you.x = 0; g.cpu.x = 0;
+    g.ball.x = 0.3; g.ball.y = 1; g.ball.z = ballZ;
+    g.hit(who);
+    return R.physics.predictLanding(g.ball);
+  };
+  for (let i = 0; i < 20; i++) {
+    const youMateLanding = landingFor('youMate', -2);
+    ok(youMateLanding.z > 0, `youMate should return into the cpu court (z>0), got z=${youMateLanding.z}`);
+
+    const cpuLanding = landingFor('cpu', 2);
+    ok(cpuLanding.z < 0, `cpu should return into the you court (z<0), got z=${cpuLanding.z}`);
+
+    const cpuMateLanding = landingFor('cpuMate', 2);
+    ok(cpuMateLanding.z < 0, `cpuMate should return into the you court (z<0), got z=${cpuMateLanding.z}`);
+  }
+}
+
 // --- ダブルス：checkSwings は4人ぶんの reach を見る（人間が届かない球を味方が拾う） ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
