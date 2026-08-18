@@ -41,18 +41,56 @@ const { HALF_W, HALF_L, COURT, PLAYER, SERVE } = R.config;
 const fakeInput = { moveX: 0, moveZ: 0, lob: false };
 const noHooks = { sound() {}, call() {}, clearCall() {}, score() {} };
 
-// --- serve lands in the service box ---
+/** 1回目 Space でトス、しばらく待って2回目 Space で打つ、を模した実際のフロー */
+function tossAndHit(g) {
+  g.swing();
+  for (let f = 0; f < 12; f++) g.update(1 / 60);
+  g.swing();
+}
+
+// --- serve lands in the service box（実際の「トス→打つ」の2段階を通す） ---
 {
   let inBox = 0;
   for (let i = 0; i < 200; i++) {
     const g = new R.Game({ input: fakeInput, hooks: noHooks });
     g.started = true;
     g.newPoint();
-    g.serve('you');
+    tossAndHit(g);
     const L = R.physics.predictLanding(g.ball);
     if (!L.net && Math.abs(L.x) <= HALF_W && L.z > 0 && L.z <= COURT.SERVICE) inBox++;
   }
   ok(inBox === 200, `serves in the service box: ${inBox}/200`);
+}
+
+// --- サーブは2段階（1回目 Space でトス、2回目で打つ） ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  ok(!g.tossActive && !g.ball.live, 'precondition: not tossed yet');
+
+  g.swing();
+  ok(g.tossActive === true, '1st Space starts the toss');
+  ok(g.ball.live === false, 'ball is not live during the toss (no rally physics)');
+  ok(g.ball.vy > 0, 'toss ball moves upward');
+  ok(g.phase === 'serve', 'still in serve phase during the toss');
+
+  g.swing();
+  ok(g.tossActive === false, '2nd Space ends the toss');
+  ok(g.ball.live === true, 'ball becomes live after the hit');
+  ok(g.phase === 'rally', 'phase moves to rally after the hit');
+}
+
+// --- トスを打たずに待つと自動でリセットされる（フォルト扱いにはしない） ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.swing();
+  ok(g.tossActive === true, 'tossed');
+  for (let i = 0; i < 180 && g.tossActive; i++) g.update(1 / 60); // 3秒＝落ちてくるまで十分待つ
+  ok(g.tossActive === false, 'toss auto-resets after falling without a hit');
+  ok(g.ball.live === false, 'ball is not live after an unfulfilled toss');
+  ok(g.phase === 'serve', 'still serve phase, can retry');
+  ok(Math.abs(g.ball.y - SERVE.BALL_Y) < 0.01, `ball returns to hand height, y=${g.ball.y}`);
 }
 
 // --- 自分のサーブ中はフットフォルトになる位置へ動けない ---
@@ -89,7 +127,7 @@ const noHooks = { sound() {}, call() {}, clearCall() {}, score() {} };
     const input = { moveX, moveZ: 0, lob: false };
     const g = new R.Game({ input, hooks: noHooks });
     g.start();
-    g.serve('you');
+    tossAndHit(g);
     return R.physics.predictLanding(g.ball);
   };
   // predictLanding() は 1/120s 刻みで着地を検知するため、その1ステップぶん

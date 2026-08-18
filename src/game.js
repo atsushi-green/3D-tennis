@@ -62,6 +62,8 @@
       this.phase = 'idle';
       this.server = 'you';
       this.started = false;
+      /** true の間、ボールはトス中（重力で上下するだけ）。2回目の Space で打つまで待つ。 */
+      this.tossActive = false;
       /** setTimeout ではなくゲームループで数える。ポイント間で確実に破棄できる。 */
       this.timers = [];
     }
@@ -78,10 +80,14 @@
       this.newPoint();
     }
 
-    /** Space / クリック：サーブ、またはスイング */
+    /** Space / クリック：1回目でトス、トス中の2回目で打つ。ラリー中はスイング。 */
     swing() {
-      if (this.phase === 'serve' && this.server === 'you') this.serve('you');
-      else if (this.phase === 'rally') this.you.swing = PLAYER.SWING_WINDOW;
+      if (this.phase === 'serve' && this.server === 'you') {
+        if (this.tossActive) this.serve('you');
+        else this.tossBall();
+      } else if (this.phase === 'rally') {
+        this.you.swing = PLAYER.SWING_WINDOW;
+      }
     }
 
     /* ------------------------------------------------------ ポイント進行 */
@@ -89,6 +95,7 @@
     newPoint() {
       this.clearTimers();
       this.phase = 'serve';
+      this.tossActive = false;
 
       const ball = this.ball;
       ball.live = false;
@@ -99,7 +106,7 @@
       if (this.server === 'you') {
         this.you.x = side * SERVE.STANCE_X;
         this.you.z = -HALF_L - 0.5;
-        this.hooks.call('サーブ', '←→ でコース選択 ／ Space でトス＆サーブ');
+        this.hooks.call('サーブ', '←→ でコース選択 ／ Space でトス');
       } else {
         this.cpu.x = -side * SERVE.STANCE_X;
         this.cpu.z = HALF_L + 0.5;
@@ -121,11 +128,23 @@
       ball.y = ball.py = SERVE.BALL_Y;
     }
 
+    /** 1回目の Space。ボールを真上にトスし、重力で自然に落ちてくるのに任せる。 */
+    tossBall() {
+      const ball = this.ball;
+      ball.vx = 0;
+      ball.vz = 0;
+      ball.vy = Math.sqrt(2 * Math.abs(PHYSICS.GRAVITY) * (SERVE.TOSS_PEAK - SERVE.BALL_Y));
+      this.tossActive = true;
+      this.hooks.call('トス', 'Space で打つ！');
+    }
+
     serve(who) {
       const ball = this.ball;
       const dir = who === 'you' ? 1 : -1;   // 打ち込む方向
       const side = this.match.serveSide;
-      const from = { x: ball.x, y: SERVE.TOSS_Y, z: ball.z };
+      // プレイヤーはトス中の実際の高さで打つ。CPU はトス演出を挟まないので固定の打点高さを使う。
+      const contactY = who === 'you' ? Math.max(ball.y, SERVE.BALL_Y) : SERVE.TOSS_Y;
+      const from = { x: ball.x, y: contactY, z: ball.z };
       // サービスはコートの対角へ入れる。狙う横位置（コース）はプレイヤーのみ選べる
       const targetSign = who === 'you' ? -side : side;
       const magnitude = who === 'you'
@@ -143,6 +162,7 @@
       ball.bounces = 0;
       ball.last = who;
 
+      this.tossActive = false;
       this.phase = 'rally';
       this.actor(who).anim = PLAYER.SERVE_ANIM;
       this.hooks.sound('serve');
@@ -288,6 +308,18 @@
 
     stepBall(dt) {
       const ball = this.ball;
+
+      if (this.tossActive) {
+        integrate(ball, dt); // 重力だけで自然に上下させる（ラリーの当たり判定は通さない）
+        if (ball.y <= SERVE.BALL_Y) {
+          // 打たずに落ちてきた。トスをやり直せるようにリセットする（フォルトにはしない）
+          this.tossActive = false;
+          this.placeServeBall();
+          this.hooks.call('サーブ', '←→ でコース選択 ／ Space でトス');
+        }
+        return;
+      }
+
       if (!ball.live) {
         if (this.phase === 'serve') this.placeServeBall();
         return;
