@@ -172,6 +172,31 @@ function tossAndHit(g) {
   ok(g.cpu.stroke === 'backhand', `cpu: ball on its off side -> backhand, got ${g.cpu.stroke}`);
 }
 
+// --- サーブは stroke='serve'（横振りではなく専用の縦振りポーズを使う） ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  tossAndHit(g);
+  ok(g.you.stroke === 'serve', `serve sets stroke='serve', got ${g.you.stroke}`);
+}
+
+// --- 打点でインパクト演出（ball.impact）が発火し、時間とともに減衰する ---
+{
+  const { FX } = R.config;
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  ok(g.ball.impact === 0, 'no impact before anything happens');
+
+  tossAndHit(g);
+  ok(g.ball.impact > 0 && g.ball.impact <= FX.IMPACT_DURATION, `serve sets ball.impact, got ${g.ball.impact}`);
+  for (let i = 0; i < 60; i++) g.update(1 / 60); // 1秒待てば必ず減衰しきる
+  ok(g.ball.impact === 0, `ball.impact decays back to 0, got ${g.ball.impact}`);
+
+  g.ball.x = 1.5; g.ball.y = 1; g.ball.z = -2;
+  g.hit('you');
+  ok(g.ball.impact > 0, `rally hit also sets ball.impact, got ${g.ball.impact}`);
+}
+
 // --- full match simulation（フリーズ・タイマーリーク・スコア破綻がないか） ---
 {
   const events = [];

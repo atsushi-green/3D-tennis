@@ -8,16 +8,11 @@
 (function (RallyOne) {
   'use strict';
 
-  const { GAIT, PLAYER, THEME } = RallyOne.config;
+  const { GAIT, PLAYER, SWING, THEME } = RallyOne.config;
   const scene3d = RallyOne.scene = RallyOne.scene || {};
 
   const TWO_PI = Math.PI * 2;
-
-  const ARM_REST = -0.9;   // 構えたときの腕の角度
-  const ARM_START = -1.2;  // フォアハンドのスイング開始
-  const ARM_SWEEP = 2.4;   // 振り抜く角度
   const ARM_SPAN = PLAYER.SERVE_ANIM; // アニメーションの基準時間
-  const TORSO_TWIST = 0.22; // スイング中の体幹のひねり（フォア/バックで逆向き）
 
   function createRacketArm(shirt, mat) {
     const arm = new THREE.Group();
@@ -129,27 +124,43 @@
   };
 
   /**
-   * スイングの残り時間から腕の角度を決める。
-   * バックハンドはフォアハンドと逆方向に振り抜き、体幹のひねりも逆になる
-   * （ラケット自体はモデル上いつも同じ側にあるが、振る向きを反転させて打ち分けを表現する）。
+   * スイングの残り時間から腕の角度を決める。3種類のポーズを軸を分けて切り替える：
+   * - フォアハンド／バックハンド: rotation.y（横振り）。バックハンドは弧そのものを
+   *   体の反対側（+π）へ丸ごと移すので、同じ弧を逆順になぞるだけだった以前と違い
+   *   ラケットが実際に体の逆サイドで振られて見分けやすい。
+   * - サーブ: rotation.z（縦振り）。トス中は構え、打った瞬間から真上→前へ振り下ろす。
    * @param {THREE.Group} player
-   * @param {number} anim 残り時間（秒）。0 なら構えの姿勢
-   * @param {'forehand'|'backhand'} [stroke]
+   * @param {number} anim 残り時間（秒）。0 なら構え／トスの姿勢
+   * @param {'forehand'|'backhand'|'serve'} [stroke]
+   * @param {boolean} [tossing] トス中（打つ前）かどうか。サーブの構えを出す
    */
-  scene3d.setSwingPose = function setSwingPose(player, anim, stroke) {
+  scene3d.setSwingPose = function setSwingPose(player, anim, stroke, tossing) {
+    const arm = player.userData.arm;
     const torso = player.userData.gait.torso;
+
     if (anim <= 0) {
-      player.userData.arm.rotation.y = ARM_REST;
+      arm.rotation.y = tossing ? 0 : SWING.REST_Y;
+      arm.rotation.z = tossing ? SWING.SERVE_READY_Z : 0;
       torso.rotation.y = 0;
       return;
     }
+
     const progress = (ARM_SPAN - anim) / ARM_SPAN;
+
+    if (stroke === 'serve') {
+      arm.rotation.y = 0;
+      arm.rotation.z = SWING.SERVE_START_Z + progress * (SWING.SERVE_FOLLOW_Z - SWING.SERVE_START_Z);
+      torso.rotation.y = 0;
+      return;
+    }
+
     const backhand = stroke === 'backhand';
-    const start = backhand ? ARM_START + ARM_SWEEP : ARM_START;
-    const sweep = backhand ? -ARM_SWEEP : ARM_SWEEP;
-    player.userData.arm.rotation.y = start + progress * sweep;
+    // バックハンドは弧全体を π 回して体の反対サイドへ丸ごと移す（逆順になぞるだけにしない）
+    const side = backhand ? Math.PI : 0;
+    arm.rotation.y = side + SWING.GROUND_START + progress * SWING.GROUND_SWEEP;
+    arm.rotation.z = 0;
     // sin カーブでひねって戻す（構え→打点→フォロースルーで元の向きに近づく）
-    torso.rotation.y = (backhand ? -1 : 1) * TORSO_TWIST * Math.sin(progress * Math.PI);
+    torso.rotation.y = (backhand ? -1 : 1) * SWING.TORSO_TWIST * Math.sin(progress * Math.PI);
   };
 
   /**

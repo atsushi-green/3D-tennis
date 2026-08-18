@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    BOUNDS, COURT, CPU, HALF_L, HALF_W, PHYSICS, PLAYER, SERVE, SHOT, TIMING,
+    BOUNDS, COURT, CPU, FX, HALF_L, HALF_W, PHYSICS, PLAYER, SERVE, SHOT, TIMING,
   } = RallyOne.config;
   const { approach, clamp, rand, signOr } = RallyOne.math;
   const { hitsNet, integrate, solveShot } = RallyOne.physics;
@@ -55,6 +55,7 @@
         px: 0, py: SERVE.BALL_Y, pz: -HALF_L, // 1ステップ前の位置
         vx: 0, vy: 0, vz: 0,
         bounces: 0, last: 'you', live: false,
+        impact: 0, // 打った瞬間の演出（着弾フラッシュ・膨張）の残り時間
       };
       this.you = { x: 0, z: -HALF_L - 0.6, swing: 0, anim: 0, speed: 0, stroke: 'forehand' };
       this.cpu = { x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, stroke: 'forehand' };
@@ -164,7 +165,10 @@
 
       this.tossActive = false;
       this.phase = 'rally';
-      this.actor(who).anim = PLAYER.SERVE_ANIM;
+      const server = this.actor(who);
+      server.anim = PLAYER.SERVE_ANIM;
+      server.stroke = 'serve';
+      ball.impact = FX.IMPACT_DURATION;
       this.hooks.sound('serve');
       this.hooks.clearCall();
     }
@@ -197,6 +201,7 @@
       Object.assign(ball, solveShot(from, shot.target, shot.flight));
       ball.last = who;
       ball.bounces = 0;
+      ball.impact = FX.IMPACT_DURATION;
 
       player.anim = PLAYER.SWING_ANIM;
       player.stroke = stroke;
@@ -252,6 +257,7 @@
       this.you.swing = Math.max(0, this.you.swing - dt);
       this.you.anim = Math.max(0, this.you.anim - dt);
       this.cpu.anim = Math.max(0, this.cpu.anim - dt);
+      this.ball.impact = Math.max(0, this.ball.impact - dt);
 
       this.movePlayers(dt);
 

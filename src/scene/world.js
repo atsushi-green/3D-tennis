@@ -5,7 +5,7 @@
 (function (RallyOne) {
   'use strict';
 
-  const { CAMERA, PLAYER, THEME } = RallyOne.config;
+  const { CAMERA, FX, PLAYER, THEME } = RallyOne.config;
   const { lerp } = RallyOne.math;
   const { predictLanding } = RallyOne.physics;
   const scene3d = RallyOne.scene;
@@ -26,7 +26,8 @@
       cpu: scene3d.createShadow(0.26),
     };
     const marker = scene3d.createMarker();
-    scene.add(you, cpu, ballMesh, shadows.ball, shadows.you, shadows.cpu, marker);
+    const impactFlash = scene3d.createImpactFlash();
+    scene.add(you, cpu, ballMesh, shadows.ball, shadows.you, shadows.cpu, marker, impactFlash);
 
     addEventListener('resize', stage.resize);
 
@@ -54,16 +55,20 @@
     function sync(state, dt) {
       const ball = state.ball;
 
+      const youTossing = state.tossActive === true && state.server === 'you';
+
       you.position.set(state.you.x, 0, state.you.z);
       cpu.position.set(state.cpu.x, 0, state.cpu.z);
-      scene3d.setSwingPose(you, state.you.anim, state.you.stroke);
-      scene3d.setSwingPose(cpu, state.cpu.anim, state.cpu.stroke);
+      scene3d.setSwingPose(you, state.you.anim, state.you.stroke, youTossing);
+      scene3d.setSwingPose(cpu, state.cpu.anim, state.cpu.stroke, false);
       scene3d.setGaitPose(you, state.you.speed, PLAYER.SPEED, dt);
       scene3d.setGaitPose(cpu, state.cpu.speed, PLAYER.CPU_CHASE, dt);
 
       ballMesh.position.set(ball.x, ball.y, ball.z);
       ballMesh.rotation.x += dt * 9;
       ballMesh.rotation.z += dt * 5;
+      scene3d.applyImpactPunch(ballMesh, ball, FX);
+      scene3d.placeImpact(impactFlash, ball, FX);
 
       scene3d.placeBallShadow(shadows.ball, ball);
       scene3d.placeGroundShadow(shadows.you, state.you);

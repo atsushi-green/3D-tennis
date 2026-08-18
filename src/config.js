@@ -156,6 +156,28 @@
     LEAN_MAX: 0.14,    // 走行時の前傾(rad)
   };
 
+  /**
+   * ラケットを振るポーズ（打点・フォロースルーの角度）。
+   * グラウンドストロークは横振り(rotation.y)、サーブは縦振り(rotation.z)で軸を分ける。
+   */
+  const SWING = {
+    REST_Y: -0.9,       // 構えたときの横振り角
+    GROUND_START: -1.2, // フォアハンドの打点（ここからバックハンドは体の反対側に鏡映しになる）
+    GROUND_SWEEP: 2.4,  // 振り抜く角度
+    TORSO_TWIST: 0.22,  // スイング中の体幹のひねり（フォア/バックで逆向き）
+    SERVE_READY_Z: -0.5,  // トス中に軽く後方へ引いておく角度
+    SERVE_START_Z: 1.4,   // 打点（ほぼ真上）
+    SERVE_FOLLOW_Z: 2.7,  // フォロースルー（体の前まで振り下ろす）
+  };
+
+  /** 打点の視覚フィードバック（当たった瞬間の演出） */
+  const FX = {
+    IMPACT_DURATION: 0.16,  // ボールの弾け＆フラッシュが続く時間(秒)
+    IMPACT_SCALE: 2.2,      // ボールが一瞬膨らむ倍率
+    FLASH_START_SCALE: 1.6, // 着弾フラッシュの初期半径（ボール半径倍）。最初から目立つ大きさにしておく
+    FLASH_SCALE: 3.6,       // 着弾フラッシュの最大半径（ボール半径倍）
+  };
+
   /** カメラ（プレイヤー側からの中継カメラ風） */
   const CAMERA = {
     FOV: 52,
@@ -169,6 +191,6 @@
 
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
-    BOUNDS, CPU, RULES, TIMING, THEME, CAMERA, GAIT,
+    BOUNDS, CPU, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX,
   };
 })(window.RallyOne = window.RallyOne || {});

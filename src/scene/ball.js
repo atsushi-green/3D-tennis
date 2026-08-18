@@ -27,6 +27,43 @@
     return mesh;
   };
 
+  /** 打点にパッと出て一瞬で消える着弾フラッシュ。「当たった」ことを一目で伝える。 */
+  scene3d.createImpactFlash = function createImpactFlash() {
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(PHYSICS.BALL_R, 12, 10),
+      new THREE.MeshBasicMaterial({
+        color: 0xffffff, transparent: true, opacity: 0, depthWrite: false,
+      }),
+    );
+    mesh.visible = false;
+    return mesh;
+  };
+
+  /**
+   * @param {THREE.Mesh} flash
+   * @param {object} ball
+   * @param {{IMPACT_DURATION:number, FLASH_SCALE:number}} fx
+   */
+  scene3d.placeImpact = function placeImpact(flash, ball, fx) {
+    const t = ball.impact > 0 ? ball.impact / fx.IMPACT_DURATION : 0; // 1(直後)→0(消える)
+    if (t <= 0) {
+      flash.visible = false;
+      return;
+    }
+    flash.visible = true;
+    flash.position.set(ball.x, ball.y, ball.z);
+    // 最初から目立つ大きさで出て、さらに膨らみながら消えていく
+    flash.scale.setScalar(fx.FLASH_START_SCALE + (1 - t) * (fx.FLASH_SCALE - fx.FLASH_START_SCALE));
+    flash.material.opacity = t * 0.9;
+  };
+
+  /** 打点でボール本体も一瞬だけ膨らませ、当たった衝撃を強調する（t=1＝打った瞬間が最大） */
+  scene3d.applyImpactPunch = function applyImpactPunch(ballMesh, ball, fx) {
+    const t = ball.impact > 0 ? ball.impact / fx.IMPACT_DURATION : 0;
+    const punch = 1 + t * t * (fx.IMPACT_SCALE - 1); // 出た直後が一番大きく、すぐ戻る
+    ballMesh.scale.setScalar(punch);
+  };
+
   scene3d.createMarker = function createMarker() {
     const mesh = new THREE.Mesh(
       new THREE.RingGeometry(0.28, 0.36, 28),
