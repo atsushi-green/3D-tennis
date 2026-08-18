@@ -56,11 +56,11 @@
    * プレイヤーのショット目標。
    * 飛翔時間(T)が短いほど同じ着地点により速い初速で届く＝威力の強い、
    * ネットぎりぎりの平たい球になる。長いほど山なりで安全な球になる。
+   * TAP_T〜CHARGE_T の間を、Space を溜めた量（0〜1）で補間する。
    */
   const SHOT = {
-    DRIVE_T: 0.86,       // 通常打（飛翔時間。短いほど速い球）
-    POWER_T: 0.66,       // 強打（↑ を押しながら）：速いが余裕が少ない
-    SOFT_T: 1.08,        // 緩め（↓ を押しながら）：遅いが安全
+    TAP_T: 0.86,    // 溜めなし（すぐ離す）：従来の通常球相当
+    CHARGE_T: 0.58, // 最大まで溜めた強打：低く鋭く速い
     LOB_T: 1.45,
     DRIVE_Z: 7.4,        // 狙う深さ（ネットからの距離）
     DRIVE_Z_SPREAD: 2.0, // 毎回少しばらつかせる
@@ -74,7 +74,8 @@
     BALL_Y: 1.45,     // 構えているときのボールの高さ
     TOSS_Y: 1.9,      // 打点（CPUのサーブが使う固定値。プレイヤーは実際のトスの高さを使う）
     TOSS_PEAK: 2.55,  // プレイヤーのトスが届く最高到達点。ここから重力で落ちてくる
-    T: 0.62,          // 飛翔時間
+    T: 0.62,          // 飛翔時間（溜めなし。CPUは常にこの値）
+    CHARGE_T: 0.42,   // 最大まで溜めたサーブの飛翔時間。トスの落下と競合するのでリスクを伴う
     CLEARANCE: 0.14,  // ネットを越す余裕（フラット気味に打つので小さめ）
     STANCE_X: 1.6,    // センターマークからの立ち位置
     AIM_X_MIN: 1.2,   // サービスボックス内の狙い（CPU が使う。おまかせでランダム）
@@ -205,6 +206,15 @@
     FLASH_SCALE: 3.6,       // 着弾フラッシュの最大半径（ボール半径倍）
   };
 
+  /**
+   * Space を押しっぱなしにしている間のテイクバック（溜め）。
+   * ラリー中もサーブの「打つ」瞬間も共通で使う。離した瞬間の溜め量(0〜1)で
+   * SHOT.TAP_T〜CHARGE_T / SERVE.T〜CHARGE_T を補間する。
+   */
+  const CHARGE = {
+    MAX_TIME: 0.55, // これ以上溜めても威力は増えない(秒)
+  };
+
   /** カメラ（プレイヤー側からの中継カメラ風） */
   const CAMERA = {
     FOV: 52,
@@ -218,6 +228,6 @@
 
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
-    BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX,
+    BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE,
   };
 })(window.RallyOne = window.RallyOne || {});

@@ -2,7 +2,7 @@
 (function (RallyOne) {
   'use strict';
 
-  const { PHYSICS } = RallyOne.config;
+  const { CHARGE, PHYSICS } = RallyOne.config;
   const { sfx, unlock } = RallyOne.audio;
 
   const input = new RallyOne.Input();
@@ -31,7 +31,8 @@
       hud.hideStartScreen();
       game.start(true);
     },
-    onSwing: () => game.swing(),
+    onChargeStart: () => game.chargeStart(),
+    onChargeRelease: () => game.chargeRelease(),
   });
 
   hud.renderScore(game.match, game.server);
@@ -50,6 +51,7 @@
     if (game.started) {
       game.update(dt);
       world.sync(game, dt);
+      hud.setCharge(game.you.charging ? game.you.chargeTime / CHARGE.MAX_TIME : 0);
     }
     world.render();
   }

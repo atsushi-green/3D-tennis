@@ -15,6 +15,8 @@
         callBig: $('callBig'),
         callSub: $('callSub'),
         start: $('start'),
+        charge: $('charge'),
+        chargeFill: $('chargeFill'),
       };
     }
 
@@ -44,6 +46,15 @@
 
     hideStartScreen() {
       this.el.start.style.display = 'none';
+    }
+
+    /** @param {number} fraction 溜め量 0〜1。0以下なら非表示。 */
+    setCharge(fraction) {
+      const on = fraction > 0;
+      this.el.charge.classList.toggle('on', on);
+      if (!on) return;
+      this.el.chargeFill.style.width = `${Math.min(fraction, 1) * 100}%`;
+      this.el.chargeFill.classList.toggle('full', fraction >= 1);
     }
   }
 

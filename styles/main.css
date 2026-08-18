@@ -52,6 +52,17 @@ canvas{display:block}
 }
 #keys b{color:var(--line);font-weight:600}
 
+/* Space を溜めている間だけ出るテイクバックメーター */
+#charge{
+  position:absolute;left:50%;bottom:56px;transform:translateX(-50%);
+  width:200px;height:7px;border-radius:4px;overflow:hidden;
+  background:rgba(9,20,34,.65);border:1px solid rgba(232,238,245,.18);
+  opacity:0;transition:opacity .1s
+}
+#charge.on{opacity:1}
+#chargeFill{height:100%;width:0%;background:var(--ball)}
+#chargeFill.full{background:#fff;box-shadow:0 0 10px 2px var(--ball)}
+
 #start{
   position:fixed;inset:0;display:grid;place-items:center;
   background:radial-gradient(120% 90% at 50% 40%,rgba(11,26,43,.55),rgba(11,26,43,.95));

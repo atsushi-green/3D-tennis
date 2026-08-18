@@ -21,7 +21,8 @@
     }
 
     /**
-     * @param {{onStart:Function, onStartDoubles:Function, onSwing:Function, isStarted:Function}} handlers
+     * @param {{onStart:Function, onStartDoubles:Function, onChargeStart:Function,
+     *   onChargeRelease:Function, isStarted:Function}} handlers
      */
     attach(handlers) {
       addEventListener('keydown', (e) => {
@@ -32,17 +33,27 @@
           if (e.code === 'KeyD') handlers.onStartDoubles();
           else handlers.onStart();
         } else if (SWING.indexOf(e.code) !== -1) {
-          handlers.onSwing();
+          handlers.onChargeStart();
         }
       });
 
-      addEventListener('keyup', (e) => this.held.delete(e.code));
-      // ウィンドウを離れている間の keyup は届かないので、戻ったときに押下状態を捨てる
-      addEventListener('blur', () => this.held.clear());
+      addEventListener('keyup', (e) => {
+        this.held.delete(e.code);
+        if (handlers.isStarted() && SWING.indexOf(e.code) !== -1) handlers.onChargeRelease();
+      });
+      // ウィンドウを離れている間の keyup は届かないので、戻ったときに押下状態を捨てる。
+      // Space を押しっぱなしのまま離脱された場合に備え、溜めも強制的に離す。
+      addEventListener('blur', () => {
+        this.held.clear();
+        if (handlers.isStarted()) handlers.onChargeRelease();
+      });
 
       addEventListener('pointerdown', () => {
         if (!handlers.isStarted()) handlers.onStart();
-        else handlers.onSwing();
+        else handlers.onChargeStart();
+      });
+      addEventListener('pointerup', () => {
+        if (handlers.isStarted()) handlers.onChargeRelease();
       });
     }
 

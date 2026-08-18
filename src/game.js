@@ -6,9 +6,11 @@
   'use strict';
 
   const {
-    BOUNDS, COURT, CPU, DOUBLES, FX, HALF_L, HALF_W, PHYSICS, PLAYER, SERVE, SHOT, TIMING,
+    BOUNDS, CHARGE, COURT, CPU, DOUBLES, FX, HALF_L, HALF_W, PHYSICS, PLAYER, SERVE, SHOT, TIMING,
   } = RallyOne.config;
-  const { approach, approach2D, clamp, rand, signOr } = RallyOne.math;
+  const {
+    approach, approach2D, clamp, lerp, rand, signOr,
+  } = RallyOne.math;
   const { hitsNet, integrate, solveShot } = RallyOne.physics;
   const {
     chasePosition, homePosition, shotTarget, isResponder, coverPosition,
@@ -65,6 +67,7 @@
       this.you = {
         x: 0, z: -HALF_L - 0.6, vx: 0, vz: 0, // vx/vz は実速度（加速度で目標速度に近づける）
         swing: 0, anim: 0, speed: 0, stroke: 'forehand',
+        charging: false, chargeTime: 0, swingCharge: 0, // Space 押しっぱなしのテイクバック
       };
       this.cpu = { x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, stroke: 'forehand' };
       // ダブルス（this.doubles === true）のときだけ動く AI パートナー。シングルスでは未使用のまま。
@@ -96,14 +99,51 @@
       this.newPoint();
     }
 
-    /** Space / クリック：1回目でトス、トス中の2回目で打つ。ラリー中はスイング。 */
-    swing() {
-      if (this.phase === 'serve' && this.server === 'you') {
-        if (this.tossActive) this.serve('you');
-        else this.tossBall();
+    /**
+     * Space / クリックを押した瞬間。
+     * サーブの1回目（トス前）は即トス。それ以外（トス中の2回目、ラリー中）は
+     * テイクバックを溜め始める。実際に打つのは chargeRelease()（離した瞬間）。
+     */
+    chargeStart() {
+      if (this.phase === 'serve' && this.server === 'you' && !this.tossActive) {
+        this.tossBall();
+        return;
+      }
+      if (this.phase === 'serve' && this.server === 'you' && this.tossActive) {
+        this.you.charging = true;
+        this.you.chargeTime = 0;
+      } else if (this.phase === 'rally') {
+        this.you.charging = true;
+        this.you.chargeTime = 0;
+      }
+    }
+
+    /** Space / クリックを離した瞬間。溜めた量に応じた威力で打つ。 */
+    chargeRelease() {
+      if (!this.you.charging) return;
+      this.you.charging = false;
+      this.you.swingCharge = clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1);
+
+      if (this.phase === 'serve' && this.server === 'you' && this.tossActive) {
+        this.serve('you');
       } else if (this.phase === 'rally') {
         this.you.swing = PLAYER.SWING_WINDOW;
       }
+    }
+
+    /**
+     * 溜め時間を毎フレーム加算する。ラリー中・トス中以外の文脈になったら
+     * （ポイントが終わった、トスが自動リセットされた等）溜めを打ち切ってキャンセルする。
+     */
+    tickCharge(dt) {
+      if (!this.you.charging) return;
+      const validContext = this.phase === 'rally'
+        || (this.phase === 'serve' && this.server === 'you' && this.tossActive);
+      if (!validContext) {
+        this.you.charging = false;
+        return;
+      }
+      this.you.chargeTime = Math.min(this.you.chargeTime + dt, CHARGE.MAX_TIME);
     }
 
     /* ------------------------------------------------------ ポイント進行 */
@@ -117,6 +157,9 @@
       ball.live = false;
       ball.bounces = 0;
       ball.vx = ball.vy = ball.vz = 0;
+
+      this.you.charging = false;
+      this.you.chargeTime = 0; // 前のポイントの溜めを持ち越さない
 
       const side = this.match.serveSide;
       if (this.server === 'you') {
@@ -181,9 +224,11 @@
         y: BALL_R,
         z: dir * (COURT.SERVICE - rand(SERVE.DEPTH_MIN, SERVE.DEPTH_MAX)),
       };
+      // プレイヤーは「打つ」瞬間の溜め量で威力が変わる。CPU は常に一定。
+      const flightT = who === 'you' ? lerp(SERVE.T, SERVE.CHARGE_T, this.you.swingCharge) : SERVE.T;
 
       ball.y = from.y;
-      Object.assign(ball, solveShot(from, target, SERVE.T, SERVE.CLEARANCE));
+      Object.assign(ball, solveShot(from, target, flightT, SERVE.CLEARANCE));
       ball.live = true;
       ball.bounces = 0;
       ball.last = who;
@@ -239,18 +284,14 @@
     }
 
     /**
-     * ←→ で左右に打ち分け、Shift でロブ、↑↓ で威力を調整（↑強打／↓緩め、無入力は通常）。
-     * 強打は速いが飛翔時間が短くネットぎりぎりになりやすく、緩めは遅い代わりに安全。
+     * ←→ で左右に打ち分け、Shift でロブ。威力は Space を離した瞬間の溜め量
+     * （chargeRelease() が計算した this.you.swingCharge、0〜1）で決まる。
      * 無入力ならクロス気味に返す。
      */
     playerShot() {
       const lob = this.input.lob;
       const aim = this.input.moveX * INPUT_X_TO_WORLD;
-      const power = this.input.moveZ;
-      const flight = lob ? SHOT.LOB_T
-        : power > 0 ? SHOT.POWER_T
-        : power < 0 ? SHOT.SOFT_T
-        : SHOT.DRIVE_T;
+      const flight = lob ? SHOT.LOB_T : lerp(SHOT.TAP_T, SHOT.CHARGE_T, this.you.swingCharge);
       return {
         target: {
           x: aim !== 0 ? aim * SHOT.AIM_X : -signOr(this.you.x, 1) * SHOT.DEFAULT_X,
@@ -308,6 +349,10 @@
       for (let remaining = dt; remaining > 0; remaining -= STEP) {
         this.stepBall(Math.min(remaining, STEP));
       }
+
+      // トスの自動リセットなど、このフレームの stepBall() の結果を見てから
+      // 溜めを継続してよいか判定する（先に判定すると1フレーム遅れてしまう）。
+      this.tickCharge(dt);
     }
 
     /**

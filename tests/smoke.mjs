@@ -41,11 +41,17 @@ const { HALF_W, HALF_L, COURT, PLAYER, SERVE } = R.config;
 const fakeInput = { moveX: 0, moveZ: 0, lob: false };
 const noHooks = { sound() {}, call() {}, clearCall() {}, score() {} };
 
+/** 旧 g.swing() 相当：即座に離す（溜め時間0）タップ。1回の Space 押下を表す。 */
+function tap(g) {
+  g.chargeStart();
+  g.chargeRelease();
+}
+
 /** 1回目 Space でトス、しばらく待って2回目 Space で打つ、を模した実際のフロー */
 function tossAndHit(g) {
-  g.swing();
+  tap(g);
   for (let f = 0; f < 12; f++) g.update(1 / 60);
-  g.swing();
+  tap(g);
 }
 
 // --- serve lands in the service box（実際の「トス→打つ」の2段階を通す） ---
@@ -68,13 +74,13 @@ function tossAndHit(g) {
   g.start();
   ok(!g.tossActive && !g.ball.live, 'precondition: not tossed yet');
 
-  g.swing();
+  tap(g);
   ok(g.tossActive === true, '1st Space starts the toss');
   ok(g.ball.live === false, 'ball is not live during the toss (no rally physics)');
   ok(g.ball.vy > 0, 'toss ball moves upward');
   ok(g.phase === 'serve', 'still in serve phase during the toss');
 
-  g.swing();
+  tap(g);
   ok(g.tossActive === false, '2nd Space ends the toss');
   ok(g.ball.live === true, 'ball becomes live after the hit');
   ok(g.phase === 'rally', 'phase moves to rally after the hit');
@@ -84,7 +90,7 @@ function tossAndHit(g) {
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start();
-  g.swing();
+  tap(g);
   ok(g.tossActive === true, 'tossed');
   for (let i = 0; i < 180 && g.tossActive; i++) g.update(1 / 60); // 3秒＝落ちてくるまで十分待つ
   ok(g.tossActive === false, 'toss auto-resets after falling without a hit');
@@ -147,23 +153,104 @@ function tossAndHit(g) {
   ok(Math.hypot(g.you.vx, g.you.vz) < 0.01, 'eventually comes to a full stop');
 }
 
-// --- ↑↓ でショットの威力を選べる（Shift のロブが最優先） ---
+// --- Space を溜めるほど強い球になる（ラリー） ---
 {
-  const { POWER_T, SOFT_T, DRIVE_T, LOB_T } = R.config.SHOT;
-  const input = { moveX: 0, moveZ: 0, lob: false };
-  const g = new R.Game({ input, hooks: noHooks });
+  const { TAP_T, CHARGE_T, LOB_T } = R.config.SHOT;
+  const { MAX_TIME } = R.config.CHARGE;
 
-  input.moveZ = 1;
-  ok(g.playerShot().flight === POWER_T, `up = power shot, got ${g.playerShot().flight}`);
+  // タップ（溜め0）: 通常球
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.chargeStart();
+    ok(g.you.charging === true, 'holding Space starts charging');
+    g.chargeRelease();
+    ok(g.you.charging === false, 'releasing stops charging');
+    ok(g.you.swingCharge === 0, `tap with no hold time -> charge 0, got ${g.you.swingCharge}`);
+    ok(g.playerShot().flight === TAP_T, `tap -> TAP_T flight, got ${g.playerShot().flight}`);
+  }
 
-  input.moveZ = -1;
-  ok(g.playerShot().flight === SOFT_T, `down = soft shot, got ${g.playerShot().flight}`);
+  // 最大まで溜めてから離す: 強打
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.chargeStart();
+    for (let i = 0; i < 60; i++) g.update(1 / 60); // 1秒 > MAX_TIME、頭打ちを確認
+    ok(g.you.chargeTime === MAX_TIME, `charge caps at MAX_TIME, got ${g.you.chargeTime}`);
+    g.chargeRelease();
+    ok(g.you.swingCharge === 1, `full charge -> swingCharge 1, got ${g.you.swingCharge}`);
+    ok(g.playerShot().flight === CHARGE_T, `full charge -> CHARGE_T flight, got ${g.playerShot().flight}`);
+  }
 
-  input.moveZ = 0;
-  ok(g.playerShot().flight === DRIVE_T, `no input = normal shot, got ${g.playerShot().flight}`);
+  // 溜め量に応じて連続的に威力が変わる（中間の溜めは TAP_T と CHARGE_T の間）
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.chargeStart();
+    for (let i = 0; i < 15; i++) g.update(1 / 60); // MAX_TIME の約半分
+    g.chargeRelease();
+    const flight = g.playerShot().flight;
+    ok(flight < TAP_T && flight > CHARGE_T, `partial charge is between TAP_T and CHARGE_T, got ${flight}`);
+  }
 
-  input.lob = true; input.moveZ = 1;
-  ok(g.playerShot().flight === LOB_T, `lob takes priority over power selection, got ${g.playerShot().flight}`);
+  // ロブは溜め量に関わらず最優先
+  {
+    const input = { moveX: 0, moveZ: 0, lob: true };
+    const g = new R.Game({ input, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.chargeStart();
+    for (let i = 0; i < 60; i++) g.update(1 / 60);
+    g.chargeRelease();
+    ok(g.playerShot().flight === LOB_T, `lob overrides charge, got ${g.playerShot().flight}`);
+  }
+}
+
+// --- Space を溜めるほど強いサーブになる ---
+{
+  const { T, CHARGE_T } = R.config.SERVE;
+  const tapLanding = () => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    tap(g); // トス
+    tap(g); // 即リリースで打つ（溜め0）
+    return g.ball;
+  };
+  const chargedLanding = () => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    tap(g); // トス
+    g.chargeStart();
+    // MAX_TIME ぶんだけ溜める（トスの滞空時間 ~0.77s より短いので、トスを逃さず打てる）
+    const frames = Math.round(R.config.CHARGE.MAX_TIME * 60);
+    for (let i = 0; i < frames; i++) g.update(1 / 60);
+    g.chargeRelease();
+    return g.ball;
+  };
+  const tapBall = tapLanding();
+  const chargedBall = chargedLanding();
+  const tapSpeed = Math.hypot(tapBall.vx, tapBall.vy, tapBall.vz);
+  const chargedSpeed = Math.hypot(chargedBall.vx, chargedBall.vy, chargedBall.vz);
+  ok(chargedSpeed > tapSpeed,
+    `charged serve is faster than a tap serve: charged=${chargedSpeed.toFixed(2)} tap=${tapSpeed.toFixed(2)}`);
+  ok(T > CHARGE_T, `precondition: SERVE.CHARGE_T should be shorter (faster) than SERVE.T`);
+}
+
+// --- 溜め中にポイントが切り替わる/トスが流れると、溜めはキャンセルされる ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  tap(g); // トス
+  g.chargeStart();
+  for (let i = 0; i < 10; i++) g.update(1 / 60);
+  ok(g.you.charging === true, 'precondition: charging mid-toss');
+
+  for (let i = 0; i < 180 && g.tossActive; i++) g.update(1 / 60); // トスを見送って自動リセットさせる
+  ok(g.tossActive === false, 'toss auto-reset while charging');
+  ok(g.you.charging === false, 'charging is cancelled when the toss resets');
 }
 
 // --- サーブのコースを ←→ で打ち分けられる ---
@@ -252,8 +339,8 @@ function tossAndHit(g) {
   });
   g.start();
   for (let i = 0; i < 60 * 600; i++) {
-    if (g.phase === 'serve' && g.server === 'you') g.swing();
-    if (g.phase === 'rally' && i % 6 === 0) g.swing();
+    if (g.phase === 'serve' && g.server === 'you') tap(g);
+    if (g.phase === 'rally' && i % 6 === 0) tap(g);
     g.update(1 / 60);
   }
   ok(events.length > 20, `calls fired: ${events.length}`);
@@ -362,8 +449,8 @@ function tossAndHit(g) {
   });
   g.start(true);
   for (let i = 0; i < 60 * 600; i++) {
-    if (g.phase === 'serve' && g.server === 'you') g.swing();
-    if (g.phase === 'rally' && i % 6 === 0) g.swing();
+    if (g.phase === 'serve' && g.server === 'you') tap(g);
+    if (g.phase === 'rally' && i % 6 === 0) tap(g);
     g.update(1 / 60);
   }
   ok(events.length > 20, `doubles: calls fired: ${events.length}`);
