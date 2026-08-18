@@ -40,27 +40,47 @@
   };
 
   /**
+   * その打球の演出の総時間。溜めた強打ほど長く残る（game.js が ball.impact に
+   * 同じ倍率をかけて入れているので、正規化にも同じ式を使う）。
+   */
+  function impactDuration(ball, fx) {
+    const power = ball.impactPower || 0;
+    return fx.IMPACT_DURATION * (1 + (fx.CHARGE_TIME_BOOST - 1) * power);
+  }
+
+  /** 残り時間を 1(打った瞬間)→0(消える) に正規化する */
+  function impactProgress(ball, fx) {
+    return ball.impact > 0 ? Math.min(ball.impact / impactDuration(ball, fx), 1) : 0;
+  }
+
+  /**
    * @param {THREE.Mesh} flash
    * @param {object} ball
-   * @param {{IMPACT_DURATION:number, FLASH_SCALE:number}} fx
+   * @param {object} fx RallyOne.config.FX
    */
   scene3d.placeImpact = function placeImpact(flash, ball, fx) {
-    const t = ball.impact > 0 ? ball.impact / fx.IMPACT_DURATION : 0; // 1(直後)→0(消える)
+    const t = impactProgress(ball, fx);
     if (t <= 0) {
       flash.visible = false;
       return;
     }
+    const power = ball.impactPower || 0;
+    // 溜めた強打ほど大きく弾ける
+    const boost = 1 + (fx.CHARGE_FLASH_BOOST - 1) * power;
     flash.visible = true;
     flash.position.set(ball.x, ball.y, ball.z);
     // 最初から目立つ大きさで出て、さらに膨らみながら消えていく
-    flash.scale.setScalar(fx.FLASH_START_SCALE + (1 - t) * (fx.FLASH_SCALE - fx.FLASH_START_SCALE));
+    const grow = fx.FLASH_START_SCALE + (1 - t) * (fx.FLASH_SCALE - fx.FLASH_START_SCALE);
+    flash.scale.setScalar(grow * boost);
     flash.material.opacity = t * 0.9;
   };
 
   /** 打点でボール本体も一瞬だけ膨らませ、当たった衝撃を強調する（t=1＝打った瞬間が最大） */
   scene3d.applyImpactPunch = function applyImpactPunch(ballMesh, ball, fx) {
-    const t = ball.impact > 0 ? ball.impact / fx.IMPACT_DURATION : 0;
-    const punch = 1 + t * t * (fx.IMPACT_SCALE - 1); // 出た直後が一番大きく、すぐ戻る
+    const t = impactProgress(ball, fx);
+    const power = ball.impactPower || 0;
+    const peak = fx.IMPACT_SCALE * (1 + (fx.CHARGE_FLASH_BOOST - 1) * power * 0.5);
+    const punch = 1 + t * t * (peak - 1); // 出た直後が一番大きく、すぐ戻る
     ballMesh.scale.setScalar(punch);
   };
 

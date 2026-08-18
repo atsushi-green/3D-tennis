@@ -181,7 +181,9 @@ function tossAndHit(g) {
     ok(g.you.chargeTime === MAX_TIME, `charge caps at MAX_TIME, got ${g.you.chargeTime}`);
     g.chargeRelease();
     ok(g.you.swingCharge === 1, `full charge -> swingCharge 1, got ${g.you.swingCharge}`);
-    ok(g.playerShot().flight === CHARGE_T, `full charge -> CHARGE_T flight, got ${g.playerShot().flight}`);
+    // lerp の丸め誤差があるので厳密比較はしない
+    ok(Math.abs(g.playerShot().flight - CHARGE_T) < 1e-9,
+      `full charge -> CHARGE_T flight, got ${g.playerShot().flight}`);
   }
 
   // 溜め量に応じて連続的に威力が変わる（中間の溜めは TAP_T と CHARGE_T の間）
@@ -207,6 +209,42 @@ function tossAndHit(g) {
     g.chargeRelease();
     ok(g.playerShot().flight === LOB_T, `lob overrides charge, got ${g.playerShot().flight}`);
   }
+}
+
+// --- 溜めの強弱が体感できる差になっている（初速・深さ・演出）---
+// 「溜めても変わった気がしない」という退行を防ぐため、最低限の差を数値で固定する。
+{
+  const hitWith = (charge) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.you.x = 0; g.you.z = -5;
+    g.ball.x = 0.3; g.ball.y = 1.0; g.ball.z = -5;
+    g.you.swingCharge = charge;
+    g.hit('you');
+    return {
+      speed: Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz),
+      landing: R.physics.predictLanding(g.ball),
+      impact: g.ball.impact,
+      power: g.ball.impactPower,
+    };
+  };
+  const tapShot = hitWith(0);
+  const fullShot = hitWith(1);
+
+  ok(fullShot.speed > tapShot.speed * 1.6,
+    `full charge should be at least 60% faster: tap=${tapShot.speed.toFixed(1)} full=${fullShot.speed.toFixed(1)}`);
+  ok(fullShot.landing.z > tapShot.landing.z + 2.5,
+    `full charge should land clearly deeper: tap=${tapShot.landing.z.toFixed(1)} full=${fullShot.landing.z.toFixed(1)}`);
+  ok(fullShot.impact > tapShot.impact,
+    `full charge should have a longer impact effect: tap=${tapShot.impact} full=${fullShot.impact}`);
+  ok(fullShot.power === 1 && tapShot.power === 0,
+    `impactPower carries the charge for the FX layer: tap=${tapShot.power} full=${fullShot.power}`);
+
+  // 深く打ってもコート内に収まること（アウトばかりになっていないか）
+  let out = 0;
+  for (let i = 0; i < 100; i++) if (hitWith(1).landing.z > HALF_L) out++;
+  ok(out === 0, `full-charge shots should still land in: ${out}/100 went long`);
 }
 
 // --- Space を溜めるほど強いサーブになる ---

@@ -39,12 +39,17 @@
   }
 
   const sfx = {
-    serve: () => tone(320, 0.09, 0.16),
-    // バックハンドはフォアハンドよりわずかに低く・こもった音にして打感を変える
-    hit: (who, stroke) => {
+    // 溜めたサーブほど鋭く大きな音に
+    serve: (charge = 0) => tone(320 * (1 + charge * 0.35), 0.09, 0.16 + charge * 0.12),
+    /**
+     * バックハンドはフォアハンドよりわずかに低く・こもった音にして打感を変える。
+     * さらに溜めた強打ほど高く・強く鳴らして「弾いた」感を出す。
+     */
+    hit: (who, stroke, charge = 0) => {
       const base = who === 'you' ? 520 : 430;
       const backhand = stroke === 'backhand';
-      tone(backhand ? base * 0.84 : base, backhand ? 0.1 : 0.08, 0.20);
+      const freq = (backhand ? base * 0.84 : base) * (1 + charge * 0.3);
+      tone(freq, (backhand ? 0.1 : 0.08) + charge * 0.05, 0.20 + charge * 0.16);
     },
     bounce: () => tone(180, 0.06, 0.10),
     point: (winner) => tone(winner === 'you' ? 660 : 220, 0.16, 0.14),

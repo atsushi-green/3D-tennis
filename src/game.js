@@ -62,7 +62,8 @@
         px: 0, py: SERVE.BALL_Y, pz: -HALF_L, // 1ステップ前の位置
         vx: 0, vy: 0, vz: 0,
         bounces: 0, last: 'you', live: false,
-        impact: 0, // 打った瞬間の演出（着弾フラッシュ・膨張）の残り時間
+        impact: 0,      // 打った瞬間の演出（着弾フラッシュ・膨張）の残り時間
+        impactPower: 0, // その打球の溜め量(0〜1)。演出の派手さに使う
       };
       this.you = {
         x: 0, z: -HALF_L - 0.6, vx: 0, vz: 0, // vx/vz は実速度（加速度で目標速度に近づける）
@@ -238,8 +239,10 @@
       const server = this.actor(who);
       server.anim = PLAYER.SERVE_ANIM;
       server.stroke = 'serve';
-      ball.impact = FX.IMPACT_DURATION;
-      this.hooks.sound('serve');
+      const serveCharge = who === 'you' ? this.you.swingCharge : 0;
+      ball.impact = FX.IMPACT_DURATION * lerp(1, FX.CHARGE_TIME_BOOST, serveCharge);
+      ball.impactPower = serveCharge;
+      this.hooks.sound('serve', serveCharge);
       this.hooks.clearCall();
     }
 
@@ -273,14 +276,18 @@
       // ここで打点とプレイヤー位置からフォア/バックを判定できる。
       const stroke = classifyStroke(who, ball, player);
 
+      // 人間の打球だけ溜め量に応じて演出を強める（AIは常に0＝通常の演出）
+      const charge = who === 'you' ? this.you.swingCharge : 0;
+
       Object.assign(ball, solveShot(from, shot.target, shot.flight));
       ball.last = TEAM_OF[who]; // スコア判定はチーム単位。誰が打ったかは player.stroke 側で個別に持つ
       ball.bounces = 0;
-      ball.impact = FX.IMPACT_DURATION;
+      ball.impact = FX.IMPACT_DURATION * lerp(1, FX.CHARGE_TIME_BOOST, charge);
+      ball.impactPower = charge; // フラッシュの大きさに使う
 
       player.anim = PLAYER.SWING_ANIM;
       player.stroke = stroke;
-      this.hooks.sound('hit', TEAM_OF[who], stroke); // 音程はチーム単位（誰が打っても同じ）
+      this.hooks.sound('hit', TEAM_OF[who], stroke, charge); // 音程はチーム単位（誰が打っても同じ）
     }
 
     /**
@@ -291,12 +298,15 @@
     playerShot() {
       const lob = this.input.lob;
       const aim = this.input.moveX * INPUT_X_TO_WORLD;
-      const flight = lob ? SHOT.LOB_T : lerp(SHOT.TAP_T, SHOT.CHARGE_T, this.you.swingCharge);
+      const charge = this.you.swingCharge;
+      const flight = lob ? SHOT.LOB_T : lerp(SHOT.TAP_T, SHOT.CHARGE_T, charge);
+      // 溜めるほど深く。速さと深さの両方が変わるので「強い球を打った」感が出る。
+      const depth = lerp(SHOT.TAP_Z, SHOT.CHARGE_Z, charge);
       return {
         target: {
           x: aim !== 0 ? aim * SHOT.AIM_X : -signOr(this.you.x, 1) * SHOT.DEFAULT_X,
           y: BALL_R,
-          z: lob ? SHOT.LOB_Z : rand(SHOT.DRIVE_Z, SHOT.DRIVE_Z + SHOT.DRIVE_Z_SPREAD),
+          z: lob ? SHOT.LOB_Z : rand(depth, depth + SHOT.DRIVE_Z_SPREAD),
         },
         flight,
       };
