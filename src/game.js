@@ -8,7 +8,7 @@
   const {
     BOUNDS, COURT, CPU, FX, HALF_L, HALF_W, PHYSICS, PLAYER, SERVE, SHOT, TIMING,
   } = RallyOne.config;
-  const { approach, clamp, rand, signOr } = RallyOne.math;
+  const { approach, approach2D, clamp, rand, signOr } = RallyOne.math;
   const { hitsNet, integrate, solveShot } = RallyOne.physics;
   const { chasePosition, homePosition, shotTarget } = RallyOne.ai;
   const { Match } = RallyOne.scoring;
@@ -57,7 +57,10 @@
         bounces: 0, last: 'you', live: false,
         impact: 0, // 打った瞬間の演出（着弾フラッシュ・膨張）の残り時間
       };
-      this.you = { x: 0, z: -HALF_L - 0.6, swing: 0, anim: 0, speed: 0, stroke: 'forehand' };
+      this.you = {
+        x: 0, z: -HALF_L - 0.6, vx: 0, vz: 0, // vx/vz は実速度（加速度で目標速度に近づける）
+        swing: 0, anim: 0, speed: 0, stroke: 'forehand',
+      };
       this.cpu = { x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, stroke: 'forehand' };
 
       this.phase = 'idle';
@@ -107,6 +110,7 @@
       if (this.server === 'you') {
         this.you.x = side * SERVE.STANCE_X;
         this.you.z = -HALF_L - 0.5;
+        this.you.vx = this.you.vz = 0; // 前のポイントの勢いを持ち越さない
         this.hooks.call('サーブ', '←→ でコース選択 ／ Space でトス');
       } else {
         this.cpu.x = -side * SERVE.STANCE_X;
@@ -208,17 +212,26 @@
       this.hooks.sound('hit', who, stroke);
     }
 
-    /** ←→ で左右に打ち分け、Shift でロブ。無入力ならクロス気味に返す。 */
+    /**
+     * ←→ で左右に打ち分け、Shift でロブ、↑↓ で威力を調整（↑強打／↓緩め、無入力は通常）。
+     * 強打は速いが飛翔時間が短くネットぎりぎりになりやすく、緩めは遅い代わりに安全。
+     * 無入力ならクロス気味に返す。
+     */
     playerShot() {
       const lob = this.input.lob;
       const aim = this.input.moveX * INPUT_X_TO_WORLD;
+      const power = this.input.moveZ;
+      const flight = lob ? SHOT.LOB_T
+        : power > 0 ? SHOT.POWER_T
+        : power < 0 ? SHOT.SOFT_T
+        : SHOT.DRIVE_T;
       return {
         target: {
           x: aim !== 0 ? aim * SHOT.AIM_X : -signOr(this.you.x, 1) * SHOT.DEFAULT_X,
           y: BALL_R,
           z: lob ? SHOT.LOB_Z : rand(SHOT.DRIVE_Z, SHOT.DRIVE_Z + SHOT.DRIVE_Z_SPREAD),
         },
-        flight: lob ? SHOT.LOB_T : SHOT.DRIVE_T,
+        flight,
       };
     }
 
@@ -296,8 +309,19 @@
       const mz = this.input.moveZ;
       const len = Math.hypot(mx, mz) || 1; // 斜め移動が速くならないように正規化
       const bounds = this.youBounds();
-      this.you.x = clamp(this.you.x + (mx / len) * PLAYER.SPEED * dt, bounds.xMin, bounds.xMax);
-      this.you.z = clamp(this.you.z + (mz / len) * PLAYER.SPEED * dt, bounds.zMin, bounds.zMax);
+
+      // 目標速度（入力なしなら0）へ、加速度で少しずつ近づける。
+      // 急停止・瞬間方向転換にならないので、コート上で滑るような自然さが出る。
+      const hasInput = mx !== 0 || mz !== 0;
+      const desiredVx = hasInput ? (mx / len) * PLAYER.SPEED : 0;
+      const desiredVz = hasInput ? (mz / len) * PLAYER.SPEED : 0;
+      const rate = (hasInput ? PLAYER.ACCEL : PLAYER.DECEL) * dt;
+      const v = approach2D(this.you.vx, this.you.vz, desiredVx, desiredVz, rate);
+      this.you.vx = v.x;
+      this.you.vz = v.z;
+
+      this.you.x = clamp(this.you.x + this.you.vx * dt, bounds.xMin, bounds.xMax);
+      this.you.z = clamp(this.you.z + this.you.vz * dt, bounds.zMin, bounds.zMax);
 
       // CPU は自分が返す番なら落下点へ、そうでなければ定位置へ戻る
       const chasing = this.phase === 'rally' && this.ball.last === 'you';

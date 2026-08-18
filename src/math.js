@@ -25,5 +25,19 @@
     return a + (b - a) * t;
   }
 
-  RallyOne.math = { clamp, rand, signOr, approach, lerp };
+  /**
+   * (cx,cz) から (tx,tz) へ、大きさ maxDelta を超えない範囲で2Dベクトルとして近づける。
+   * 加速度で速度を目標値に寄せるのに使う（軸ごとに clamp すると斜め方向だけ
+   * 加速が速くなってしまうため、ベクトルの大きさで制限する）。
+   */
+  function approach2D(cx, cz, tx, tz, maxDelta) {
+    const dx = tx - cx;
+    const dz = tz - cz;
+    const dist = Math.hypot(dx, dz);
+    if (dist <= maxDelta || dist === 0) return { x: tx, z: tz };
+    const t = maxDelta / dist;
+    return { x: cx + dx * t, z: cz + dz * t };
+  }
+
+  RallyOne.math = { clamp, rand, signOr, approach, approach2D, lerp };
 })(window.RallyOne = window.RallyOne || {});

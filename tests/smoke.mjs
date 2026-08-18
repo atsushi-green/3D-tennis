@@ -120,6 +120,52 @@ function tossAndHit(g) {
   ok(g.you.z === PLAYER.Z_NEAR, `after contact: normal bounds apply, z=${g.you.z}`);
 }
 
+// --- 移動は加速度ベース：急に最高速にならず、離しても急停止しない（滑るような自然さ） ---
+{
+  const input = { moveX: 0, moveZ: 1, lob: false };
+  const g = new R.Game({ input, hooks: noHooks });
+  g.start();
+  g.serve('you'); // rally phase にしてフットフォルト制限の狭い可動域を外す
+  g.you.x = 0; g.you.z = -5; g.you.vx = 0; g.you.vz = 0;
+
+  g.movePlayers(1 / 60); // たった1フレーム
+  const earlySpeed = Math.hypot(g.you.vx, g.you.vz);
+  ok(earlySpeed > 0 && earlySpeed < PLAYER.SPEED - 0.01,
+    `after 1 frame, speed ramps up rather than snapping to max: ${earlySpeed}`);
+
+  for (let i = 0; i < 60; i++) g.movePlayers(1 / 60); // 加速しきるのに十分な時間
+  const cruiseSpeed = Math.hypot(g.you.vx, g.you.vz);
+  ok(Math.abs(cruiseSpeed - PLAYER.SPEED) < 0.01, `eventually reaches full speed: ${cruiseSpeed}`);
+
+  input.moveZ = 0; // 入力を離す
+  g.movePlayers(1 / 60);
+  const afterRelease = Math.hypot(g.you.vx, g.you.vz);
+  ok(afterRelease > 0.01 && afterRelease < PLAYER.SPEED - 0.01,
+    `releasing input doesn't stop instantly: ${afterRelease}`);
+
+  for (let i = 0; i < 60; i++) g.movePlayers(1 / 60);
+  ok(Math.hypot(g.you.vx, g.you.vz) < 0.01, 'eventually comes to a full stop');
+}
+
+// --- ↑↓ でショットの威力を選べる（Shift のロブが最優先） ---
+{
+  const { POWER_T, SOFT_T, DRIVE_T, LOB_T } = R.config.SHOT;
+  const input = { moveX: 0, moveZ: 0, lob: false };
+  const g = new R.Game({ input, hooks: noHooks });
+
+  input.moveZ = 1;
+  ok(g.playerShot().flight === POWER_T, `up = power shot, got ${g.playerShot().flight}`);
+
+  input.moveZ = -1;
+  ok(g.playerShot().flight === SOFT_T, `down = soft shot, got ${g.playerShot().flight}`);
+
+  input.moveZ = 0;
+  ok(g.playerShot().flight === DRIVE_T, `no input = normal shot, got ${g.playerShot().flight}`);
+
+  input.lob = true; input.moveZ = 1;
+  ok(g.playerShot().flight === LOB_T, `lob takes priority over power selection, got ${g.playerShot().flight}`);
+}
+
 // --- サーブのコースを ←→ で打ち分けられる ---
 {
   const { AIM_WIDE_MIN, AIM_WIDE_MAX, AIM_T_MIN, AIM_T_MAX, AIM_BODY_MIN, AIM_BODY_MAX } = SERVE;
