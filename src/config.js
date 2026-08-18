@@ -131,6 +131,30 @@
     CPU: { shirt: 0xef6b5a, shorts: 0x2a1c22 },
   };
 
+  /**
+   * 歩行/走行のプロシージャルアニメーション。
+   * 真のIKではなく、股関節・膝の角度を速度に応じて数式で生成する簡易版。
+   */
+  const GAIT = {
+    HIP_Y: 0.74,      // 股関節の高さ（脚の付け根＝旧レッグメッシュの上端）
+    HIP_X: 0.12,      // 股関節の左右オフセット
+    THIGH_LEN: 0.38,
+    SHIN_LEN: 0.36,
+    THIGH_R: [0.085, 0.07],  // 太もも半径 [上,下]
+    SHIN_R: [0.06, 0.045],   // すね半径 [上,下]
+    FOOT: [0.11, 0.05, 0.17], // 足のサイズ [幅, 高さ, 奥行き]
+    MIN_SPEED: 0.15,   // これ未満は「静止」扱い（歩行アニメを止める）
+    BLEND_RATE: 8,     // 静止⇔移動のブレンドが追従する速さ（大きいほど素早く切替）
+    WALK_HZ: 1.8,      // 歩行のケイデンス（脚の往復/秒）
+    RUN_HZ: 3.0,       // 走行のケイデンス
+    WALK_SWING: 0.55,  // 歩行時の太もも振り角(rad)
+    RUN_SWING: 1.0,    // 走行時の太もも振り角(rad)
+    KNEE_BEND: 1.15,   // 膝の最大曲げ角(rad)
+    ARM_SWING: 0.5,    // 逆手（ラケットを持たない腕）の振り角(rad)
+    BOB_AMP: 0.045,    // 体幹の上下ゆれ(m)
+    LEAN_MAX: 0.14,    // 走行時の前傾(rad)
+  };
+
   /** カメラ（プレイヤー側からの中継カメラ風） */
   const CAMERA = {
     FOV: 52,
@@ -144,6 +168,6 @@
 
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
-    BOUNDS, CPU, RULES, TIMING, THEME, CAMERA,
+    BOUNDS, CPU, RULES, TIMING, THEME, CAMERA, GAIT,
   };
 })(window.RallyOne = window.RallyOne || {});

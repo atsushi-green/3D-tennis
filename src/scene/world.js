@@ -5,7 +5,7 @@
 (function (RallyOne) {
   'use strict';
 
-  const { CAMERA, THEME } = RallyOne.config;
+  const { CAMERA, PLAYER, THEME } = RallyOne.config;
   const { lerp } = RallyOne.math;
   const { predictLanding } = RallyOne.physics;
   const scene3d = RallyOne.scene;
@@ -58,6 +58,8 @@
       cpu.position.set(state.cpu.x, 0, state.cpu.z);
       scene3d.setSwingPose(you, state.you.anim);
       scene3d.setSwingPose(cpu, state.cpu.anim);
+      scene3d.setGaitPose(you, state.you.speed, PLAYER.SPEED, dt);
+      scene3d.setGaitPose(cpu, state.cpu.speed, PLAYER.CPU_CHASE, dt);
 
       ballMesh.position.set(ball.x, ball.y, ball.z);
       ballMesh.rotation.x += dt * 9;

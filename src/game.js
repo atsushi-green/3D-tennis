@@ -45,8 +45,8 @@
         vx: 0, vy: 0, vz: 0,
         bounces: 0, last: 'you', live: false,
       };
-      this.you = { x: 0, z: -HALF_L - 0.6, swing: 0, anim: 0 };
-      this.cpu = { x: 0, z: CPU.HOME_Z, anim: 0 };
+      this.you = { x: 0, z: -HALF_L - 0.6, swing: 0, anim: 0, speed: 0 };
+      this.cpu = { x: 0, z: CPU.HOME_Z, anim: 0, speed: 0 };
 
       this.phase = 'idle';
       this.server = 'you';
@@ -246,6 +246,9 @@
     }
 
     movePlayers(dt) {
+      const youBefore = { x: this.you.x, z: this.you.z };
+      const cpuBefore = { x: this.cpu.x, z: this.cpu.z };
+
       const mx = this.input.moveX * INPUT_X_TO_WORLD;
       const mz = this.input.moveZ;
       const len = Math.hypot(mx, mz) || 1; // 斜め移動が速くならないように正規化
@@ -259,6 +262,11 @@
       const step = (chasing ? PLAYER.CPU_CHASE : PLAYER.CPU_RECOVER) * dt;
       this.cpu.x = approach(this.cpu.x, target.x, step);
       this.cpu.z = approach(this.cpu.z, target.z, step);
+
+      // 歩行/走行アニメーションが参照する実速度。壁際でクランプされた分は含めない
+      // （実際に動いていないのに走って見えるのを防ぐ）。
+      this.you.speed = Math.hypot(this.you.x - youBefore.x, this.you.z - youBefore.z) / dt;
+      this.cpu.speed = Math.hypot(this.cpu.x - cpuBefore.x, this.cpu.z - cpuBefore.z) / dt;
     }
 
     stepBall(dt) {
