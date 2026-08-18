@@ -109,6 +109,23 @@
     CHASE_BEHIND: 0.5,  // 落下点の少し後ろに構える
   };
 
+  /**
+   * ダブルス（2vs2）。人間が操作するのは 'you' だけで、'youMate'（味方）と
+   * 'cpuMate'（相手の2人目）はどちらもAI。方針：
+   * - スコア・ゲーム/セットのルールはシングルスと共通（チーム単位で流用）。
+   * - ライン判定はコート幅だけダブルスサイドラインに広げる。サービスボックスは
+   *   シングルスと同じ幅のまま（実際のルールもそう）。
+   * - サーバーは各チーム固定（you / cpu）。パートナー間のサーバー交代は実装しない。
+   * - ペアの2人のうち、落下点に近い方が返球を担当し、もう一方はネット際で
+   *   逆サイドに寄って構える（本格的なフォーメーション/ポーチ戦略は実装しない）。
+   */
+  const DOUBLES = {
+    NET_Z_YOU: -1.8,  // 構えるときのネットからの深さ（自陣側）
+    NET_Z_CPU: 1.8,
+    SLOT_X: 3.2,      // 構え位置の横方向の振れ幅
+    MIRROR: 0.55,     // 相方の反対側へ寄る度合い（0〜1）
+  };
+
   /** スコアのルール（1セットマッチ） */
   const RULES = {
     GAME_POINTS: 4, // 40 の次でゲーム
@@ -201,6 +218,6 @@
 
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
-    BOUNDS, CPU, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX,
+    BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX,
   };
 })(window.RallyOne = window.RallyOne || {});

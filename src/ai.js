@@ -5,7 +5,7 @@
 (function (RallyOne) {
   'use strict';
 
-  const { CPU, HALF_L, HALF_W, PHYSICS } = RallyOne.config;
+  const { CPU, DOUBLES, HALF_L, HALF_W, PHYSICS } = RallyOne.config;
   const { clamp, rand, signOr } = RallyOne.math;
   const { predictLanding } = RallyOne.physics;
 
@@ -45,5 +45,29 @@
     return { x, y: PHYSICS.BALL_R, z };
   }
 
-  RallyOne.ai = { chasePosition, homePosition, shotTarget };
+  /**
+   * ダブルスのペアのうち、どちらが返球を担当するか。
+   * 落下点までの距離が近い方が応答し、もう一方は構えに回る。
+   * @returns {boolean} me（1人目）が担当するなら true
+   */
+  function isResponder(me, mate, ball) {
+    const landing = predictLanding(ball);
+    const dMe = Math.hypot(me.x - landing.x, me.z - landing.z);
+    const dMate = Math.hypot(mate.x - landing.x, mate.z - landing.z);
+    return dMe <= dMate;
+  }
+
+  /**
+   * 応答しない方が構える位置。相方の反対サイドへ寄って、ネット際で待つ。
+   * @param {number} responderX 応答している側の現在位置
+   * @param {number} netZ 自陣のネット際の深さ（DOUBLES.NET_Z_YOU / NET_Z_CPU）
+   */
+  function coverPosition(responderX, netZ) {
+    const x = clamp(-responderX * DOUBLES.MIRROR, -DOUBLES.SLOT_X, DOUBLES.SLOT_X);
+    return { x, z: netZ };
+  }
+
+  RallyOne.ai = {
+    chasePosition, homePosition, shotTarget, isResponder, coverPosition,
+  };
 })(window.RallyOne = window.RallyOne || {});

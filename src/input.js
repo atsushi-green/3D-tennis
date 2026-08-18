@@ -21,15 +21,19 @@
     }
 
     /**
-     * @param {{onStart:Function, onSwing:Function, isStarted:Function}} handlers
+     * @param {{onStart:Function, onStartDoubles:Function, onSwing:Function, isStarted:Function}} handlers
      */
     attach(handlers) {
       addEventListener('keydown', (e) => {
         if (SWALLOW.indexOf(e.code) !== -1) e.preventDefault();
         if (e.repeat) return;
         this.held.add(e.code);
-        if (!handlers.isStarted()) handlers.onStart();
-        else if (SWING.indexOf(e.code) !== -1) handlers.onSwing();
+        if (!handlers.isStarted()) {
+          if (e.code === 'KeyD') handlers.onStartDoubles();
+          else handlers.onStart();
+        } else if (SWING.indexOf(e.code) !== -1) {
+          handlers.onSwing();
+        }
       });
 
       addEventListener('keyup', (e) => this.held.delete(e.code));

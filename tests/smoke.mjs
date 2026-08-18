@@ -261,5 +261,92 @@ function tossAndHit(g) {
   ok(g.timers.length <= 1, `timers do not leak: ${g.timers.length}`);
 }
 
+// --- ダブルス：isResponder は着地点に近い方を選ぶ、coverPosition は逆サイドのネット際 ---
+{
+  const { isResponder, coverPosition } = R.ai;
+  const ball = { x: 0, y: 1, z: 3, vx: 0, vy: 2, vz: 0 };
+  const near = { x: 0.2, z: 3 };
+  const far = { x: 5, z: -5 };
+  ok(isResponder(near, far, ball) === true, 'closer player responds');
+  ok(isResponder(far, near, ball) === false, 'farther player does not respond');
+
+  const cover = coverPosition(2, 1.8);
+  ok(cover.z === 1.8, `coverPosition uses the given net depth, z=${cover.z}`);
+  ok(cover.x < 0, `coverPosition mirrors away from the responder's side, x=${cover.x}`);
+}
+
+// --- ダブルス：hit() は個人ごとの演出を持ちつつ、ball.last はチーム単位のまま ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(true);
+  ok(g.doubles === true, 'precondition: doubles mode is active');
+
+  g.you.x = 0;
+  g.ball.x = 1.5; g.ball.y = 1; g.ball.z = -2;
+  g.hit('you');
+  ok(g.ball.last === 'you', `hit('you') -> ball.last is team 'you', got ${g.ball.last}`);
+
+  g.youMate.x = 3; g.youMate.z = -3;
+  g.ball.x = 3.2; g.ball.y = 1; g.ball.z = -3;
+  g.hit('youMate');
+  ok(g.ball.last === 'you', `hit('youMate') -> ball.last is still team 'you', got ${g.ball.last}`);
+  ok(['forehand', 'backhand'].includes(g.youMate.stroke), `youMate gets its own stroke, got ${g.youMate.stroke}`);
+
+  g.cpuMate.x = -3; g.cpuMate.z = 3;
+  g.ball.x = -3.2; g.ball.y = 1; g.ball.z = 3;
+  g.hit('cpuMate');
+  ok(g.ball.last === 'cpu', `hit('cpuMate') -> ball.last is team 'cpu', got ${g.ball.last}`);
+}
+
+// --- ダブルス：checkSwings は4人ぶんの reach を見る（人間が届かない球を味方が拾う） ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(true);
+  g.phase = 'rally';
+  g.ball.last = 'cpu';
+  g.ball.x = 0.1; g.ball.y = 1; g.ball.z = -1;
+  g.you.x = 10; g.you.z = -10;   // 人間は遠い
+  g.youMate.x = 0; g.youMate.z = -1; // 味方は近い
+  g.checkSwings();
+  ok(g.ball.last === 'you', `youMate returns a ball out of the human's reach, ball.last=${g.ball.last}`);
+}
+
+// --- ダブルス：コート幅の out 判定がダブルスサイドラインまで広がる ---
+{
+  const midAlleyX = (HALF_W + COURT.DW / 2) / 2; // シングルスラインの外、ダブルスラインの内側
+  const ballR = R.config.PHYSICS.BALL_R;
+  const setupBounce = (doublesMode) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.doubles = doublesMode;
+    g.phase = 'rally';
+    Object.assign(g.ball, {
+      last: 'you', x: midAlleyX, z: 5, y: ballR, vy: -1, bounces: 0,
+    });
+    return g;
+  };
+
+  ok(setupBounce(false).bounce() === true, 'singles: alley position is out (ends the point)');
+  ok(setupBounce(true).bounce() === false, 'doubles: same position is in (doubles sideline)');
+}
+
+// --- ダブルス：フルマッチのシミュレーション（フリーズ・タイマーリークがないか） ---
+{
+  const events = [];
+  const g = new R.Game({
+    input: fakeInput,
+    hooks: { ...noHooks, call: (big, sub) => events.push(`${big}|${sub}`) },
+  });
+  g.start(true);
+  for (let i = 0; i < 60 * 600; i++) {
+    if (g.phase === 'serve' && g.server === 'you') g.swing();
+    if (g.phase === 'rally' && i % 6 === 0) g.swing();
+    g.update(1 / 60);
+  }
+  ok(events.length > 20, `doubles: calls fired: ${events.length}`);
+  ok(Number.isFinite(g.ball.x) && Number.isFinite(g.ball.y), 'doubles: ball stays finite');
+  ok(Number.isFinite(g.youMate.x) && Number.isFinite(g.cpuMate.x), 'doubles: mates stay finite');
+  ok(g.timers.length <= 1, `doubles: timers do not leak: ${g.timers.length}`);
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);

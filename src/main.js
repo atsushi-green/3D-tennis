@@ -24,7 +24,12 @@
     onStart: () => {
       unlock(); // AudioContext はユーザー操作の中でしか起こせない
       hud.hideStartScreen();
-      game.start();
+      game.start(false);
+    },
+    onStartDoubles: () => {
+      unlock();
+      hud.hideStartScreen();
+      game.start(true);
     },
     onSwing: () => game.swing(),
   });

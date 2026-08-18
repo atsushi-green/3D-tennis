@@ -6,11 +6,13 @@
   'use strict';
 
   const {
-    BOUNDS, COURT, CPU, FX, HALF_L, HALF_W, PHYSICS, PLAYER, SERVE, SHOT, TIMING,
+    BOUNDS, COURT, CPU, DOUBLES, FX, HALF_L, HALF_W, PHYSICS, PLAYER, SERVE, SHOT, TIMING,
   } = RallyOne.config;
   const { approach, approach2D, clamp, rand, signOr } = RallyOne.math;
   const { hitsNet, integrate, solveShot } = RallyOne.physics;
-  const { chasePosition, homePosition, shotTarget } = RallyOne.ai;
+  const {
+    chasePosition, homePosition, shotTarget, isResponder, coverPosition,
+  } = RallyOne.ai;
   const { Match } = RallyOne.scoring;
 
   const { BALL_R, STEP } = PHYSICS;
@@ -28,10 +30,13 @@
   }
 
   /**
-   * 'you' は world +x 側、'cpu' は180°回転しているので world -x 側が
-   * それぞれのラケット側（モデルの構造上、腕は常にローカル+x側に作られる）。
+   * 'you'/'youMate' は world +x 側、'cpu'/'cpuMate' は180°回転しているので
+   * world -x 側がそれぞれのラケット側（モデルの構造上、腕は常にローカル+x側に作られる）。
    */
-  const RACKET_SIDE = { you: 1, cpu: -1 };
+  const RACKET_SIDE = { you: 1, youMate: 1, cpu: -1, cpuMate: -1 };
+
+  /** 個々の選手が、チームとしてはどちら側か（ダブルスの味方はチームメイトと同じチーム） */
+  const TEAM_OF = { you: 'you', youMate: 'you', cpu: 'cpu', cpuMate: 'cpu' };
 
   /** 打点でのボールの位置が、ラケット側か逆側（体の反対側に手を伸ばす＝バックハンド）か */
   function classifyStroke(who, ball, player) {
@@ -62,10 +67,15 @@
         swing: 0, anim: 0, speed: 0, stroke: 'forehand',
       };
       this.cpu = { x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, stroke: 'forehand' };
+      // ダブルス（this.doubles === true）のときだけ動く AI パートナー。シングルスでは未使用のまま。
+      this.youMate = { x: 0, z: DOUBLES.NET_Z_YOU, anim: 0, speed: 0, stroke: 'forehand' };
+      this.cpuMate = { x: 0, z: DOUBLES.NET_Z_CPU, anim: 0, speed: 0, stroke: 'forehand' };
 
       this.phase = 'idle';
       this.server = 'you';
       this.started = false;
+      /** true ならダブルス（you+youMate vs cpu+cpuMate）。既定はシングルス。 */
+      this.doubles = false;
       /** true の間、ボールはトス中（重力で上下するだけ）。2回目の Space で打つまで待つ。 */
       this.tossActive = false;
       /** setTimeout ではなくゲームループで数える。ポイント間で確実に破棄できる。 */
@@ -73,14 +83,16 @@
     }
 
     actor(who) {
-      return who === 'you' ? this.you : this.cpu;
+      return this[who];
     }
 
     /* -------------------------------------------------------------- 入力 */
 
-    start() {
+    /** @param {boolean} [doubles] true ならダブルス（you+youMate vs cpu+cpuMate）で開始 */
+    start(doubles) {
       if (this.started) return;
       this.started = true;
+      this.doubles = !!doubles;
       this.newPoint();
     }
 
@@ -120,7 +132,16 @@
           if (this.phase === 'serve') this.serve('cpu');
         });
       }
+      if (this.doubles) this.positionMates(side);
       this.placeServeBall();
+    }
+
+    /** ダブルスのパートナーを、サーブのサイドに合わせてネット際の構えに置く */
+    positionMates(side) {
+      this.youMate.x = side * DOUBLES.SLOT_X * 0.6;
+      this.youMate.z = DOUBLES.NET_Z_YOU;
+      this.cpuMate.x = -side * DOUBLES.SLOT_X * 0.6;
+      this.cpuMate.z = DOUBLES.NET_Z_CPU;
     }
 
     /** サーブ待ちの間、ボールはサーバーの手元に置いておく */
@@ -194,22 +215,24 @@
       const ball = this.ball;
       const player = this.actor(who);
       const from = { x: ball.x, y: Math.max(ball.y, 0.5), z: ball.z };
+      // AI（cpu/cpuMate は人間の逆をつく、youMate はダブルスで唯一のAI仲間なので
+      // 相手チームの主力 cpu の逆をつく）。人間の 'you' だけ playerShot() で自分の入力を使う。
       const shot = who === 'you'
         ? this.playerShot()
-        : { target: shotTarget(this.you.x), flight: CPU.SHOT_T };
+        : { target: shotTarget(TEAM_OF[who] === 'cpu' ? this.you.x : this.cpu.x), flight: CPU.SHOT_T };
 
       // ball.x/z はまだ打点のまま（solveShot が書き換えるのは vx/vy/vz だけ）なので、
       // ここで打点とプレイヤー位置からフォア/バックを判定できる。
       const stroke = classifyStroke(who, ball, player);
 
       Object.assign(ball, solveShot(from, shot.target, shot.flight));
-      ball.last = who;
+      ball.last = TEAM_OF[who]; // スコア判定はチーム単位。誰が打ったかは player.stroke 側で個別に持つ
       ball.bounces = 0;
       ball.impact = FX.IMPACT_DURATION;
 
       player.anim = PLAYER.SWING_ANIM;
       player.stroke = stroke;
-      this.hooks.sound('hit', who, stroke);
+      this.hooks.sound('hit', TEAM_OF[who], stroke); // 音程はチーム単位（誰が打っても同じ）
     }
 
     /**
@@ -270,6 +293,10 @@
       this.you.swing = Math.max(0, this.you.swing - dt);
       this.you.anim = Math.max(0, this.you.anim - dt);
       this.cpu.anim = Math.max(0, this.cpu.anim - dt);
+      if (this.doubles) {
+        this.youMate.anim = Math.max(0, this.youMate.anim - dt);
+        this.cpuMate.anim = Math.max(0, this.cpuMate.anim - dt);
+      }
       this.ball.impact = Math.max(0, this.ball.impact - dt);
 
       this.movePlayers(dt);
@@ -322,18 +349,57 @@
 
       this.you.x = clamp(this.you.x + this.you.vx * dt, bounds.xMin, bounds.xMax);
       this.you.z = clamp(this.you.z + this.you.vz * dt, bounds.zMin, bounds.zMax);
-
-      // CPU は自分が返す番なら落下点へ、そうでなければ定位置へ戻る
-      const chasing = this.phase === 'rally' && this.ball.last === 'you';
-      const target = chasing ? chasePosition(this.ball) : homePosition();
-      const step = (chasing ? PLAYER.CPU_CHASE : PLAYER.CPU_RECOVER) * dt;
-      this.cpu.x = approach(this.cpu.x, target.x, step);
-      this.cpu.z = approach(this.cpu.z, target.z, step);
-
       // 歩行/走行アニメーションが参照する実速度。壁際でクランプされた分は含めない
       // （実際に動いていないのに走って見えるのを防ぐ）。
       this.you.speed = Math.hypot(this.you.x - youBefore.x, this.you.z - youBefore.z) / dt;
-      this.cpu.speed = Math.hypot(this.cpu.x - cpuBefore.x, this.cpu.z - cpuBefore.z) / dt;
+
+      if (this.doubles) this.moveDoublesTeams(dt);
+      else this.moveSinglesCpu(cpuBefore, dt);
+    }
+
+    /** シングルスの CPU 移動（従来どおり）。ダブルスでは使わない。 */
+    moveSinglesCpu(cpuBefore, dt) {
+      const chasing = this.phase === 'rally' && this.ball.last === 'you';
+      const target = chasing ? chasePosition(this.ball) : homePosition();
+      this.moveTowards(this.cpu, cpuBefore, target, chasing ? PLAYER.CPU_CHASE : PLAYER.CPU_RECOVER, dt);
+    }
+
+    /**
+     * ダブルスの4人の移動。各ペアは、落下点に近い方（＝ isResponder ）が返球に向かい、
+     * もう一方は相方の反対サイドのネット際で構える（本格的なフォーメーション戦略ではない簡易版）。
+     */
+    moveDoublesTeams(dt) {
+      const ball = this.ball;
+      const cpuBefore = { x: this.cpu.x, z: this.cpu.z };
+      const cpuMateBefore = { x: this.cpuMate.x, z: this.cpuMate.z };
+      const youMateBefore = { x: this.youMate.x, z: this.youMate.z };
+
+      // cpu チーム：you 側の打球が向かってくる番なら、cpu/cpuMate のうち近い方が追う
+      const cpuTeamChasing = this.phase === 'rally' && ball.last === 'you';
+      if (cpuTeamChasing && isResponder(this.cpu, this.cpuMate, ball)) {
+        this.moveTowards(this.cpu, cpuBefore, chasePosition(ball), PLAYER.CPU_CHASE, dt);
+        this.moveTowards(this.cpuMate, cpuMateBefore, coverPosition(this.cpu.x, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
+      } else if (cpuTeamChasing) {
+        this.moveTowards(this.cpuMate, cpuMateBefore, chasePosition(ball), PLAYER.CPU_CHASE, dt);
+        this.moveTowards(this.cpu, cpuBefore, coverPosition(this.cpuMate.x, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
+      } else {
+        this.moveTowards(this.cpu, cpuBefore, homePosition(), PLAYER.CPU_RECOVER, dt);
+        this.moveTowards(this.cpuMate, cpuMateBefore, coverPosition(0, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
+      }
+
+      // youMate：人間（you）の打球が向かってくる番で、自分の方が you より近ければ追う
+      const mateChasing = this.phase === 'rally' && ball.last === 'cpu'
+        && isResponder(this.youMate, this.you, ball);
+      const mateTarget = mateChasing ? chasePosition(ball) : coverPosition(this.you.x, DOUBLES.NET_Z_YOU);
+      this.moveTowards(this.youMate, youMateBefore, mateTarget, mateChasing ? PLAYER.CPU_CHASE : PLAYER.CPU_RECOVER, dt);
+    }
+
+    /** cpu/cpuMate/youMate 共通の移動：目標位置へ一定速度で寄せ、実速度も記録する（歩行アニメ用）。 */
+    moveTowards(actor, before, target, speed, dt) {
+      const step = speed * dt;
+      actor.x = approach(actor.x, target.x, step);
+      actor.z = approach(actor.z, target.z, step);
+      actor.speed = Math.hypot(actor.x - before.x, actor.z - before.z) / dt;
     }
 
     stepBall(dt) {
@@ -386,7 +452,9 @@
 
       if (ball.bounces === 1) {
         const ownSide = (ball.last === 'you' && ball.z < 0) || (ball.last === 'cpu' && ball.z > 0);
-        const inCourt = Math.abs(ball.x) <= HALF_W + 0.03 && Math.abs(ball.z) <= HALF_L + 0.03;
+        // ダブルスはコート幅がダブルスサイドラインまで広がる（サービスボックスの幅は変えない）
+        const rallyHalfWidth = this.doubles ? COURT.DW / 2 : HALF_W;
+        const inCourt = Math.abs(ball.x) <= rallyHalfWidth + 0.03 && Math.abs(ball.z) <= HALF_L + 0.03;
         if (ownSide || !inCourt) {
           this.endPoint(opponent(ball.last), ownSide ? '相手コートに届かず' : 'アウト');
           return true;
@@ -402,7 +470,7 @@
     checkSwings() {
       const ball = this.ball;
 
-      // プレイヤーは Space を押した瞬間の前後だけ打てる
+      // プレイヤーは Space を押した瞬間の前後だけ打てる。人間が優先（AIパートナーに横取りさせない）
       if (ball.last !== 'you' && ball.z < PLAYER.NET_MARGIN && this.you.swing > 0) {
         if (reaches(ball, this.you, PLAYER.REACH) && ball.y < PLAYER.REACH_Y) {
           this.hit('you');
@@ -410,10 +478,20 @@
         }
       }
 
+      // ダブルスの youMate：人間が届かなかった／振らなかった球を、CPUと同様に自動で拾う
+      if (this.doubles && ball.last !== 'you' && ball.z < PLAYER.NET_MARGIN) {
+        const inRange = ball.y < PLAYER.CPU_REACH_Y && ball.y > PLAYER.CPU_REACH_Y_MIN;
+        if (reaches(ball, this.youMate, PLAYER.CPU_REACH) && inRange) this.hit('youMate');
+      }
+
       // CPU は届く範囲なら自動で振る
       if (ball.last !== 'cpu' && ball.z > PLAYER.NET_MARGIN) {
         const inRange = ball.y < PLAYER.CPU_REACH_Y && ball.y > PLAYER.CPU_REACH_Y_MIN;
-        if (reaches(ball, this.cpu, PLAYER.CPU_REACH) && inRange) this.hit('cpu');
+        if (reaches(ball, this.cpu, PLAYER.CPU_REACH) && inRange) {
+          this.hit('cpu');
+        } else if (this.doubles && reaches(ball, this.cpuMate, PLAYER.CPU_REACH) && inRange) {
+          this.hit('cpuMate');
+        }
       }
     }
 
