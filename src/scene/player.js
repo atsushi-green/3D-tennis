@@ -14,9 +14,10 @@
   const TWO_PI = Math.PI * 2;
 
   const ARM_REST = -0.9;   // 構えたときの腕の角度
-  const ARM_START = -1.2;  // スイング開始
+  const ARM_START = -1.2;  // フォアハンドのスイング開始
   const ARM_SWEEP = 2.4;   // 振り抜く角度
   const ARM_SPAN = PLAYER.SERVE_ANIM; // アニメーションの基準時間
+  const TORSO_TWIST = 0.22; // スイング中の体幹のひねり（フォア/バックで逆向き）
 
   function createRacketArm(shirt, mat) {
     const arm = new THREE.Group();
@@ -129,12 +130,26 @@
 
   /**
    * スイングの残り時間から腕の角度を決める。
+   * バックハンドはフォアハンドと逆方向に振り抜き、体幹のひねりも逆になる
+   * （ラケット自体はモデル上いつも同じ側にあるが、振る向きを反転させて打ち分けを表現する）。
    * @param {THREE.Group} player
    * @param {number} anim 残り時間（秒）。0 なら構えの姿勢
+   * @param {'forehand'|'backhand'} [stroke]
    */
-  scene3d.setSwingPose = function setSwingPose(player, anim) {
+  scene3d.setSwingPose = function setSwingPose(player, anim, stroke) {
+    const torso = player.userData.gait.torso;
+    if (anim <= 0) {
+      player.userData.arm.rotation.y = ARM_REST;
+      torso.rotation.y = 0;
+      return;
+    }
     const progress = (ARM_SPAN - anim) / ARM_SPAN;
-    player.userData.arm.rotation.y = anim > 0 ? ARM_START + progress * ARM_SWEEP : ARM_REST;
+    const backhand = stroke === 'backhand';
+    const start = backhand ? ARM_START + ARM_SWEEP : ARM_START;
+    const sweep = backhand ? -ARM_SWEEP : ARM_SWEEP;
+    player.userData.arm.rotation.y = start + progress * sweep;
+    // sin カーブでひねって戻す（構え→打点→フォロースルーで元の向きに近づく）
+    torso.rotation.y = (backhand ? -1 : 1) * TORSO_TWIST * Math.sin(progress * Math.PI);
   };
 
   /**

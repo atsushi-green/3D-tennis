@@ -110,6 +110,30 @@ const noHooks = { sound() {}, call() {}, clearCall() {}, score() {} };
   }
 }
 
+// --- フォアハンド/バックハンドの判定（打点がラケット側か逆側か） ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.you.x = 0;
+  g.ball.x = 1.5; g.ball.y = 1; g.ball.z = -2; // 'you' の world +x 側 = ラケット側
+  g.hit('you');
+  ok(g.you.stroke === 'forehand', `ball on racket side -> forehand, got ${g.you.stroke}`);
+
+  g.ball.x = -1.5; g.ball.y = 1; g.ball.z = -2; // world -x 側 = 逆側
+  g.hit('you');
+  ok(g.you.stroke === 'backhand', `ball on off side -> backhand, got ${g.you.stroke}`);
+
+  // cpu は180°回転しているので判定が反転する（world -x 側がラケット側）
+  g.cpu.x = 0;
+  g.ball.x = -1.5; g.ball.y = 1; g.ball.z = 2;
+  g.hit('cpu');
+  ok(g.cpu.stroke === 'forehand', `cpu: ball on its racket side -> forehand, got ${g.cpu.stroke}`);
+
+  g.ball.x = 1.5; g.ball.y = 1; g.ball.z = 2;
+  g.hit('cpu');
+  ok(g.cpu.stroke === 'backhand', `cpu: ball on its off side -> backhand, got ${g.cpu.stroke}`);
+}
+
 // --- full match simulation（フリーズ・タイマーリーク・スコア破綻がないか） ---
 {
   const events = [];

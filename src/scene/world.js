@@ -56,8 +56,8 @@
 
       you.position.set(state.you.x, 0, state.you.z);
       cpu.position.set(state.cpu.x, 0, state.cpu.z);
-      scene3d.setSwingPose(you, state.you.anim);
-      scene3d.setSwingPose(cpu, state.cpu.anim);
+      scene3d.setSwingPose(you, state.you.anim, state.you.stroke);
+      scene3d.setSwingPose(cpu, state.cpu.anim, state.cpu.stroke);
       scene3d.setGaitPose(you, state.you.speed, PLAYER.SPEED, dt);
       scene3d.setGaitPose(cpu, state.cpu.speed, PLAYER.CPU_CHASE, dt);
 

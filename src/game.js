@@ -27,6 +27,17 @@
     return Math.hypot(ball.x - player.x, ball.z - player.z) < reach;
   }
 
+  /**
+   * 'you' は world +x 側、'cpu' は180°回転しているので world -x 側が
+   * それぞれのラケット側（モデルの構造上、腕は常にローカル+x側に作られる）。
+   */
+  const RACKET_SIDE = { you: 1, cpu: -1 };
+
+  /** 打点でのボールの位置が、ラケット側か逆側（体の反対側に手を伸ばす＝バックハンド）か */
+  function classifyStroke(who, ball, player) {
+    return RACKET_SIDE[who] * (ball.x - player.x) >= 0 ? 'forehand' : 'backhand';
+  }
+
   /** phase: idle → serve → rally → over → (serve …) */
   class Game {
     /**
@@ -45,8 +56,8 @@
         vx: 0, vy: 0, vz: 0,
         bounces: 0, last: 'you', live: false,
       };
-      this.you = { x: 0, z: -HALF_L - 0.6, swing: 0, anim: 0, speed: 0 };
-      this.cpu = { x: 0, z: CPU.HOME_Z, anim: 0, speed: 0 };
+      this.you = { x: 0, z: -HALF_L - 0.6, swing: 0, anim: 0, speed: 0, stroke: 'forehand' };
+      this.cpu = { x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, stroke: 'forehand' };
 
       this.phase = 'idle';
       this.server = 'you';
@@ -153,17 +164,23 @@
 
     hit(who) {
       const ball = this.ball;
+      const player = this.actor(who);
       const from = { x: ball.x, y: Math.max(ball.y, 0.5), z: ball.z };
       const shot = who === 'you'
         ? this.playerShot()
         : { target: shotTarget(this.you.x), flight: CPU.SHOT_T };
 
+      // ball.x/z はまだ打点のまま（solveShot が書き換えるのは vx/vy/vz だけ）なので、
+      // ここで打点とプレイヤー位置からフォア/バックを判定できる。
+      const stroke = classifyStroke(who, ball, player);
+
       Object.assign(ball, solveShot(from, shot.target, shot.flight));
       ball.last = who;
       ball.bounces = 0;
 
-      this.actor(who).anim = PLAYER.SWING_ANIM;
-      this.hooks.sound('hit', who);
+      player.anim = PLAYER.SWING_ANIM;
+      player.stroke = stroke;
+      this.hooks.sound('hit', who, stroke);
     }
 
     /** ←→ で左右に打ち分け、Shift でロブ。無入力ならクロス気味に返す。 */

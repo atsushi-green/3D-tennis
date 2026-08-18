@@ -40,7 +40,12 @@
 
   const sfx = {
     serve: () => tone(320, 0.09, 0.16),
-    hit: (who) => tone(who === 'you' ? 520 : 430, 0.08, 0.20),
+    // バックハンドはフォアハンドよりわずかに低く・こもった音にして打感を変える
+    hit: (who, stroke) => {
+      const base = who === 'you' ? 520 : 430;
+      const backhand = stroke === 'backhand';
+      tone(backhand ? base * 0.84 : base, backhand ? 0.1 : 0.08, 0.20);
+    },
     bounce: () => tone(180, 0.06, 0.10),
     point: (winner) => tone(winner === 'you' ? 660 : 220, 0.16, 0.14),
   };

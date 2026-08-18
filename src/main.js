@@ -12,7 +12,7 @@
   const game = new RallyOne.Game({
     input,
     hooks: {
-      sound: (name, arg) => sfx[name](arg),
+      sound: (name, ...args) => sfx[name](...args),
       call: (big, sub) => hud.showCall(big, sub),
       clearCall: () => hud.hideCall(),
       score: () => hud.renderScore(game.match, game.server),
