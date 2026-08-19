@@ -7,6 +7,7 @@
 
   const {
     BOUNDS, CHARGE, COURT, CPU, DOUBLES, FX, HALF_L, HALF_W, PHYSICS, PLAYER, SERVE, SHOT, TIMING,
+    TIMING_AIM,
   } = RallyOne.config;
   const {
     approach, approach2D, clamp, lerp, rand, signOr,
@@ -263,18 +264,20 @@
       const ball = this.ball;
       const player = this.actor(who);
       const from = { x: ball.x, y: Math.max(ball.y, 0.5), z: ball.z };
+
+      // ball.x/z はまだ打点のまま（solveShot が書き換えるのは vx/vy/vz だけ）なので、
+      // ここで打点とプレイヤー位置からフォア/バックを判定できる。shot の計算より前に
+      // 必要（playerShot() がタイミングのずれを出すのに使う）。
+      const stroke = classifyStroke(who, ball, player);
+
       // AI（cpu/cpuMate は人間の逆をつきつつ you 陣地(z<0)へ、youMate はダブルスで唯一の
       // AI仲間なので相手チームの主力 cpu の逆をつきつつ cpu 陣地(z>0)へ）。
       // 人間の 'you' だけ playerShot() で自分の入力を使う。
       const shot = who === 'you'
-        ? this.playerShot()
+        ? this.playerShot(stroke, ball.z - player.z)
         : TEAM_OF[who] === 'cpu'
           ? { target: shotTarget(this.you.x, -1), flight: CPU.SHOT_T }
           : { target: shotTarget(this.cpu.x, 1), flight: CPU.SHOT_T };
-
-      // ball.x/z はまだ打点のまま（solveShot が書き換えるのは vx/vy/vz だけ）なので、
-      // ここで打点とプレイヤー位置からフォア/バックを判定できる。
-      const stroke = classifyStroke(who, ball, player);
 
       // 人間の打球だけ溜め量に応じて演出を強める（AIは常に0＝通常の演出）
       const charge = who === 'you' ? this.you.swingCharge : 0;
@@ -294,17 +297,33 @@
      * ←→ で左右に打ち分け、Shift でロブ。威力は Space を離した瞬間の溜め量
      * （chargeRelease() が計算した this.you.swingCharge、0〜1）で決まる。
      * 無入力ならクロス気味に返す。
+     *
+     * 打点のタイミングでもコースがずれる：ボールを前（遠く）で捉えるほど「引っ張り」、
+     * 引きつけて近くで打つほど「流れる」。フォアとバックでは体を横切る向きが逆なので、
+     * 引っ張る方向も逆になる（pullDir で吸収する）。ロブは対象外。
+     * @param {'forehand'|'backhand'} [stroke]
+     * @param {number} [contactDz] 打点の z - プレイヤーの z（前にあるほど大きい）
      */
-    playerShot() {
+    playerShot(stroke = 'forehand', contactDz = TIMING_AIM.NEUTRAL_DZ) {
       const lob = this.input.lob;
       const aim = this.input.moveX * INPUT_X_TO_WORLD;
       const charge = this.you.swingCharge;
       const flight = lob ? SHOT.LOB_T : lerp(SHOT.TAP_T, SHOT.CHARGE_T, charge);
       // 溜めるほど深く。速さと深さの両方が変わるので「強い球を打った」感が出る。
       const depth = lerp(SHOT.TAP_Z, SHOT.CHARGE_Z, charge);
+
+      const baseX = aim !== 0 ? aim * SHOT.AIM_X : -signOr(this.you.x, 1) * SHOT.DEFAULT_X;
+      let x = baseX;
+      if (!lob) {
+        const timing = clamp((contactDz - TIMING_AIM.NEUTRAL_DZ) / TIMING_AIM.HALF_BAND, -1, 1);
+        const pullDir = (stroke === 'forehand' ? -1 : 1) * RACKET_SIDE.you;
+        const shiftLimit = HALF_W + TIMING_AIM.OUT_MARGIN;
+        x = clamp(baseX + timing * pullDir * TIMING_AIM.MAX_SHIFT, -shiftLimit, shiftLimit);
+      }
+
       return {
         target: {
-          x: aim !== 0 ? aim * SHOT.AIM_X : -signOr(this.you.x, 1) * SHOT.DEFAULT_X,
+          x,
           y: BALL_R,
           z: lob ? SHOT.LOB_Z : rand(depth, depth + SHOT.DRIVE_Z_SPREAD),
         },

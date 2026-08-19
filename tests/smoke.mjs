@@ -247,6 +247,64 @@ function tossAndHit(g) {
   ok(out === 0, `full-charge shots should still land in: ${out}/100 went long`);
 }
 
+// --- 打点のタイミングでコースがずれる（早い=引っ張る／遅い=流れる、フォアとバックで逆） ---
+{
+  const { NEUTRAL_DZ, HALF_BAND, MAX_SHIFT } = R.config.TIMING_AIM;
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.you.x = 0; // baseX を固定するため
+
+  const early = NEUTRAL_DZ + HALF_BAND; // timing = +1（前で捉えた＝早い）
+  const late = NEUTRAL_DZ - HALF_BAND;  // timing = -1（引きつけた＝遅い）
+  const neutral = NEUTRAL_DZ;           // timing = 0（ずれない）
+
+  const foreEarly = g.playerShot('forehand', early).target.x;
+  const foreLate = g.playerShot('forehand', late).target.x;
+  const foreNeutral = g.playerShot('forehand', neutral).target.x;
+  const backEarly = g.playerShot('backhand', early).target.x;
+  const backLate = g.playerShot('backhand', late).target.x;
+
+  ok(Math.abs(foreEarly - foreNeutral - (-MAX_SHIFT)) < 1e-9,
+    `forehand early pulls by -MAX_SHIFT, got shift=${(foreEarly - foreNeutral).toFixed(2)}`);
+  ok(Math.abs(foreLate - foreNeutral - MAX_SHIFT) < 1e-9,
+    `forehand late flows by +MAX_SHIFT, got shift=${(foreLate - foreNeutral).toFixed(2)}`);
+
+  // フォアとバックでは体を横切る向きが逆なので、同じ早い/遅いでもずれる方向が逆になる
+  ok(Math.sign(backEarly - foreNeutral) === -Math.sign(foreEarly - foreNeutral),
+    `backhand early should pull the OPPOSITE way from forehand early: fore=${(foreEarly - foreNeutral).toFixed(2)} back=${(backEarly - foreNeutral).toFixed(2)}`);
+  ok(Math.sign(backLate - foreNeutral) === -Math.sign(foreLate - foreNeutral),
+    `backhand late should flow the OPPOSITE way from forehand late: fore=${(foreLate - foreNeutral).toFixed(2)} back=${(backLate - foreNeutral).toFixed(2)}`);
+
+  // ロブはタイミングの影響を受けない
+  const input2 = { moveX: 0, moveZ: 0, lob: true };
+  const gLob = new R.Game({ input: input2, hooks: noHooks });
+  gLob.you.x = 0;
+  const lobEarly = gLob.playerShot('forehand', early).target.x;
+  const lobLate = gLob.playerShot('forehand', late).target.x;
+  ok(lobEarly === lobLate, `lob ignores timing, got early=${lobEarly} late=${lobLate}`);
+
+  // ←→ の方向指定と足し算で合成される（タイミングだけが上書きするわけではない）
+  const input3 = { moveX: -1, moveZ: 0, lob: false }; // 画面右 = world +x
+  const gAim = new R.Game({ input: input3, hooks: noHooks });
+  gAim.you.x = 0;
+  const aimOnly = gAim.playerShot('forehand', neutral).target.x;
+  const aimPlusEarly = gAim.playerShot('forehand', early).target.x;
+  ok(Math.abs(aimPlusEarly - aimOnly - (-MAX_SHIFT)) < 1e-9,
+    `arrow-key aim composes with timing shift, got diff=${(aimPlusEarly - aimOnly).toFixed(2)}`);
+
+  // 通常のタイミング（実測レンジの中心付近）ならコート内に収まる
+  let out = 0;
+  for (let i = 0; i < 100; i++) {
+    const gg = new R.Game({ input: fakeInput, hooks: noHooks });
+    gg.start();
+    gg.phase = 'rally';
+    gg.you.x = 0; gg.you.z = -5;
+    gg.ball.x = 0.3; gg.ball.y = 1.0; gg.ball.z = -5 + (0.9 + Math.random() * 0.6); // 実測レンジ内
+    gg.hit('you');
+    if (R.physics.predictLanding(gg.ball).z > HALF_L) out++;
+  }
+  ok(out === 0, `normal-timing shots should still land in: ${out}/100 went long`);
+}
+
 // --- Space を溜めるほど強いサーブになる ---
 {
   const { T, CHARGE_T } = R.config.SERVE;

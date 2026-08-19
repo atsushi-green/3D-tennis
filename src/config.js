@@ -221,6 +221,19 @@
     MAX_TIME: 0.55, // これ以上溜めても威力は増えない(秒)
   };
 
+  /**
+   * 打点のタイミングによるコースのずれ。
+   * ボールを体の前（遠い位置）で捉えるほど「引っ張り」、引きつけて体の近くで
+   * 打つほど「流れる」。実プレイでの打点 (ball.z - player.z) はおよそ
+   * 0.4〜1.55m の範囲に収まるので、その真ん中を素直な（ずれない）打点とする。
+   */
+  const TIMING_AIM = {
+    NEUTRAL_DZ: 0.95, // これより前で捉えると引っ張り、これより近いと流れる(m)
+    HALF_BAND: 0.60,  // NEUTRAL_DZ からこれだけ離れるとずれが最大になる(m)
+    MAX_SHIFT: 2.60,  // 最大でどれだけ狙いが横にずれるか(m)
+    OUT_MARGIN: 0.85, // ずれてもサイドラインのこれ以上外へは行かない(m)
+  };
+
   /** カメラ（プレイヤー側からの中継カメラ風） */
   const CAMERA = {
     FOV: 52,
@@ -234,6 +247,6 @@
 
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
-    BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE,
+    BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM,
   };
 })(window.RallyOne = window.RallyOne || {});
