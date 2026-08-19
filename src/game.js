@@ -68,13 +68,19 @@
       };
       this.you = {
         x: 0, z: -HALF_L - 0.6, vx: 0, vz: 0, // vx/vz は実速度（加速度で目標速度に近づける）
-        swing: 0, anim: 0, speed: 0, stroke: 'forehand',
+        swing: 0, anim: 0, speed: 0, stroke: 'forehand', prep: null,
         charging: false, chargeTime: 0, swingCharge: 0, // Space 押しっぱなしのテイクバック
       };
-      this.cpu = { x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, stroke: 'forehand' };
+      this.cpu = {
+        x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, stroke: 'forehand', prep: null,
+      };
       // ダブルス（this.doubles === true）のときだけ動く AI パートナー。シングルスでは未使用のまま。
-      this.youMate = { x: 0, z: DOUBLES.NET_Z_YOU, anim: 0, speed: 0, stroke: 'forehand' };
-      this.cpuMate = { x: 0, z: DOUBLES.NET_Z_CPU, anim: 0, speed: 0, stroke: 'forehand' };
+      this.youMate = {
+        x: 0, z: DOUBLES.NET_Z_YOU, anim: 0, speed: 0, stroke: 'forehand', prep: null,
+      };
+      this.cpuMate = {
+        x: 0, z: DOUBLES.NET_Z_CPU, anim: 0, speed: 0, stroke: 'forehand', prep: null,
+      };
 
       this.phase = 'idle';
       /** 現在サーブする「チーム」。'you' | 'cpu'。個人は servingPlayer() で解決する。 */
@@ -459,6 +465,7 @@
     update(dt) {
       this.tickTimers(dt);
 
+      const swingBefore = this.you.swing;
       this.you.swing = Math.max(0, this.you.swing - dt);
       this.you.anim = Math.max(0, this.you.anim - dt);
       this.cpu.anim = Math.max(0, this.cpu.anim - dt);
@@ -475,9 +482,56 @@
         this.stepBall(Math.min(remaining, STEP));
       }
 
+      // スイング入力の有効時間が、一度も hit() を呼ばずに（＝届かず）尽きた瞬間。
+      // hit() は成功した時点で this.you.swing を自分で 0 にするので、ここで
+      // 0 を検知できるのは「振ったのに届かなかった」ときだけ。届いたかどうかが
+      // 見た目でも分かるよう、空振りでもスイングモーションだけは再生する。
+      if (swingBefore > 0 && this.you.swing === 0) this.missSwing();
+
+      this.updatePrep();
+
       // トスの自動リセットなど、このフレームの stepBall() の結果を見てから
       // 溜めを継続してよいか判定する（先に判定すると1フレーム遅れてしまう）。
       this.tickCharge(dt);
+    }
+
+    /** 空振り。当たり判定はせず、振る方向だけボールの位置から見繕う。 */
+    missSwing() {
+      this.you.anim = PLAYER.SWING_ANIM;
+      this.you.stroke = classifyStroke('you', this.ball, this.you);
+    }
+
+    /**
+     * ボールが自分の陣に向かっていて、まだ振っていない選手にテイクバック（構え）の
+     * ポーズを出す。全キャラ共通：実際に打てる距離(REACH)より広い PREP_REACH 圏内に
+     * 入った時点でラケットを引いておくので、実際にスイングが始まる前からフォア/バックが
+     * 見分けられる。人間は Space を溜めている間は距離に関わらず常にテイクバックを出す
+     * （＝打つ意思がすでに明確なため）。
+     */
+    updatePrep() {
+      if (this.phase !== 'rally') {
+        this.you.prep = null;
+        this.cpu.prep = null;
+        this.youMate.prep = null;
+        this.cpuMate.prep = null;
+        return;
+      }
+      this.you.prep = this.you.charging
+        ? classifyStroke('you', this.ball, this.you)
+        : this.computePrep('you', PLAYER.PREP_REACH);
+      this.cpu.prep = this.computePrep('cpu', PLAYER.CPU_PREP_REACH);
+      this.youMate.prep = this.doubles ? this.computePrep('youMate', PLAYER.CPU_PREP_REACH) : null;
+      this.cpuMate.prep = this.doubles ? this.computePrep('cpuMate', PLAYER.CPU_PREP_REACH) : null;
+    }
+
+    /** @returns {'forehand'|'backhand'|null} 圏内かつ自分が拾うべき球なら見込みのストロークを返す */
+    computePrep(who, reach) {
+      const ball = this.ball;
+      if (!ball.live || TEAM_OF[who] === ball.last) return null;
+      const player = this.actor(who);
+      const onMySide = TEAM_OF[who] === 'you' ? ball.z < PLAYER.NET_MARGIN : ball.z > PLAYER.NET_MARGIN;
+      if (!onMySide || !reaches(ball, player, reach)) return null;
+      return classifyStroke(who, ball, player);
     }
 
     /**

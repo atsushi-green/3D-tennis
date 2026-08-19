@@ -64,7 +64,7 @@
     /** プレイヤー1人ぶんの位置・スイング・歩行ポーズと影をまとめて反映する */
     function syncPlayer(mesh, shadow, state, maxSpeed, dt, tossing) {
       mesh.position.set(state.x, 0, state.z);
-      scene3d.setSwingPose(mesh, state.anim, state.stroke, !!tossing);
+      scene3d.setSwingPose(mesh, state.anim, state.stroke, !!tossing, state.prep);
       scene3d.setGaitPose(mesh, state.speed, maxSpeed, dt);
       scene3d.placeGroundShadow(shadow, state);
     }

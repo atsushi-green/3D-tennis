@@ -133,14 +133,26 @@
    * @param {number} anim 残り時間（秒）。0 なら構え／トスの姿勢
    * @param {'forehand'|'backhand'|'serve'} [stroke]
    * @param {boolean} [tossing] トス中（打つ前）かどうか。サーブの構えを出す
+   * @param {'forehand'|'backhand'|null} [prep] 打つ前のテイクバック。まだ振っていない
+   *   （anim<=0）間、ボールがどちらの打点に来そうかに応じてラケットを引いておく。
+   *   スイング開始時の角度（GROUND_START）と同じ角度なので、実際に振り始めても
+   *   ポーズが飛ばずに繋がる。
    */
-  scene3d.setSwingPose = function setSwingPose(player, anim, stroke, tossing) {
+  scene3d.setSwingPose = function setSwingPose(player, anim, stroke, tossing, prep) {
     const arm = player.userData.arm;
     const torso = player.userData.gait.torso;
 
     if (anim <= 0) {
-      arm.rotation.y = tossing ? 0 : SWING.REST_Y;
-      arm.rotation.z = tossing ? SWING.SERVE_READY_Z : 0;
+      if (tossing) {
+        arm.rotation.y = 0;
+        arm.rotation.z = SWING.SERVE_READY_Z;
+      } else if (prep) {
+        arm.rotation.y = (prep === 'backhand' ? Math.PI : 0) + SWING.GROUND_START;
+        arm.rotation.z = 0;
+      } else {
+        arm.rotation.y = SWING.REST_Y;
+        arm.rotation.z = 0;
+      }
       torso.rotation.y = 0;
       return;
     }
