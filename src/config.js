@@ -97,6 +97,12 @@
   /** ボールがこの範囲を出たら問答無用でアウト（計算が破綻したときの保険） */
   const BOUNDS = { X: 18, Z: 24 };
 
+  /** レシーブ側の構え位置。サーブが狙う対角のボックス付近、ベースラインの少し後ろ。 */
+  const RETURN = {
+    STANCE_X: 2.0, // ボックスの中央あたりに構える
+    BACK: 1.0,     // ベースラインの後ろにどれだけ下がるか
+  };
+
   /** CPU の戦術と気まぐれ（＝難易度） */
   const CPU = {
     SHOT_T: 0.92,       // 飛翔時間
@@ -247,6 +253,6 @@
 
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
-    BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM,
+    BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN,
   };
 })(window.RallyOne = window.RallyOne || {});

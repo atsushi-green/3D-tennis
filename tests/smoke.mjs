@@ -126,6 +126,50 @@ function tossAndHit(g) {
   ok(g.you.z === PLAYER.Z_NEAR, `after contact: normal bounds apply, z=${g.you.z}`);
 }
 
+// --- サーブはクロスサイドから始まり、ポイントごとに逆クロスサイドへ交互になる ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  ok(g.match.serveSide === 1, `fresh game starts on the cross side (+1), got ${g.match.serveSide}`);
+  g.match.awardPoint('you');
+  ok(g.match.serveSide === -1, `next point is the reverse-cross side (-1), got ${g.match.serveSide}`);
+  g.match.awardPoint('cpu');
+  ok(g.match.serveSide === 1, `back to the cross side on the 3rd point, got ${g.match.serveSide}`);
+}
+
+// --- レシーバーはポイント開始時にレシーブポジションへ移動する ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.you.x = 999; g.you.z = 999; // ありえない位置から始めて、移動したことを確認する
+  g.server = 'cpu'; // you チームが受ける番
+  g.start();
+  ok(Math.abs(g.you.x) < HALF_W + 1, `receiver moves near the return box, x=${g.you.x}`);
+  ok(g.you.z < -HALF_L, `receiver is positioned behind their own baseline, z=${g.you.z}`);
+}
+
+// --- サーブはノーバウンドで打ち返してはいけない（volley禁止） ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  tap(g); // トス
+  tap(g); // 打つ（サーブ）
+  ok(g.serveInFlight === true, 'serve sets serveInFlight');
+  ok(g.ball.last === 'you', 'precondition: served by team you');
+
+  // ボールが cpu 側に来た状態を作る（実際の弾道を待たず、判定だけを検証する）
+  g.ball.x = 0; g.ball.y = 1.0; g.ball.z = 5;
+  g.cpu.x = 0; g.cpu.z = 5;
+
+  // cpu が届く位置にいても、バウンド前は打ち返せない
+  g.checkSwings();
+  ok(g.ball.last === 'you', 'cannot volley the serve before it bounces');
+
+  // 1バウンドしたら打ち返せる
+  g.ball.bounces = 1;
+  g.checkSwings();
+  ok(g.ball.last === 'cpu', 'can return the serve once it has bounced');
+  ok(g.serveInFlight === false, 'returning the serve clears serveInFlight');
+}
+
 // --- 移動は加速度ベース：急に最高速にならず、離しても急停止しない（滑るような自然さ） ---
 {
   const input = { moveX: 0, moveZ: 1, lob: false };
@@ -534,6 +578,49 @@ function tossAndHit(g) {
 
   ok(setupBounce(false).bounce() === true, 'singles: alley position is out (ends the point)');
   ok(setupBounce(true).bounce() === false, 'doubles: same position is in (doubles sideline)');
+}
+
+// --- ダブルス：サーバーはゲームごとに交代し、各チーム内でもパートナーと交互になる ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(true);
+  ok(g.server === 'you' && g.servingPlayer() === 'you', 'you serves first for team you by default');
+
+  // you チームに1ゲームぶん与える（4-0）
+  for (let i = 0; i < 4; i++) { g.phase = 'rally'; g.endPoint('you', 'test'); }
+  ok(g.server === 'cpu', `server switches to team cpu after a game, got ${g.server}`);
+  ok(g.serverPartner.you === 'youMate',
+    `team you's server rotates to youMate for next time, got ${g.serverPartner.you}`);
+
+  // cpu チームに1ゲームぶん与える
+  for (let i = 0; i < 4; i++) { g.phase = 'rally'; g.endPoint('cpu', 'test'); }
+  ok(g.server === 'you', `server switches back to team you, got ${g.server}`);
+  ok(g.servingPlayer() === 'youMate', `youMate serves this time (rotated), got ${g.servingPlayer()}`);
+  ok(g.serverPartner.cpu === 'cpuMate',
+    `team cpu's server also rotated to cpuMate, got ${g.serverPartner.cpu}`);
+
+  // さらに you チームの番が回ってくると、主力に戻る
+  for (let i = 0; i < 4; i++) { g.phase = 'rally'; g.endPoint('cpu', 'test'); }
+  for (let i = 0; i < 4; i++) { g.phase = 'rally'; g.endPoint('you', 'test'); }
+  ok(g.serverPartner.you === 'you', `team you's server rotates back to you, got ${g.serverPartner.you}`);
+}
+
+// --- ダブルス：レシーバーは固定（サイドで主力/相方が決まる）、もう一方はネット際で構える ---
+{
+  const { DOUBLES } = R.config;
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.doubles = true; // receivingPlayer() はシングルスでは常にチーム名を返すため
+  ok(g.receivingPlayer('you', 1) === 'you', 'primary receives on side=+1');
+  ok(g.receivingPlayer('you', -1) === 'youMate', 'mate receives on side=-1');
+  ok(g.receivingPlayer('cpu', 1) === 'cpu', 'primary receives on side=+1 (cpu team)');
+  ok(g.receivingPlayer('cpu', -1) === 'cpuMate', 'mate receives on side=-1 (cpu team)');
+
+  g.server = 'cpu'; // you チームが受ける番
+  g.start(true);
+  ok(g.match.serveSide === 1, 'precondition: fresh match starts on side=1');
+  // side=1 なので you が受け、youMate はネット際で構えているはず
+  ok(Math.abs(g.you.x) < HALF_W + 1 && g.you.z < -HALF_L, `you (receiver) is at the return position, x=${g.you.x} z=${g.you.z}`);
+  ok(Math.abs(g.youMate.z - DOUBLES.NET_Z_YOU) < 0.01, `youMate (not receiving) waits at the net, z=${g.youMate.z}`);
 }
 
 // --- ダブルス：フルマッチのシミュレーション（フリーズ・タイマーリークがないか） ---

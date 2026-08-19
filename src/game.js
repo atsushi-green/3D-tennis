@@ -6,8 +6,8 @@
   'use strict';
 
   const {
-    BOUNDS, CHARGE, COURT, CPU, DOUBLES, FX, HALF_L, HALF_W, PHYSICS, PLAYER, SERVE, SHOT, TIMING,
-    TIMING_AIM,
+    BOUNDS, CHARGE, COURT, CPU, DOUBLES, FX, HALF_L, HALF_W, PHYSICS, PLAYER, RETURN, SERVE, SHOT,
+    TIMING, TIMING_AIM,
   } = RallyOne.config;
   const {
     approach, approach2D, clamp, lerp, rand, signOr,
@@ -77,18 +77,44 @@
       this.cpuMate = { x: 0, z: DOUBLES.NET_Z_CPU, anim: 0, speed: 0, stroke: 'forehand' };
 
       this.phase = 'idle';
+      /** 現在サーブする「チーム」。'you' | 'cpu'。個人は servingPlayer() で解決する。 */
       this.server = 'you';
+      /**
+       * ダブルスで、各チームの2人のうちどちらが現在の担当サーバーか。
+       * 1ゲームごとに、そのチームの番が来るたびに交代する（実際のダブルスのルール）。
+       * シングルスでは参照されない。
+       */
+      this.serverPartner = { you: 'you', cpu: 'cpu' };
       this.started = false;
       /** true ならダブルス（you+youMate vs cpu+cpuMate）。既定はシングルス。 */
       this.doubles = false;
       /** true の間、ボールはトス中（重力で上下するだけ）。2回目の Space で打つまで待つ。 */
       this.tossActive = false;
+      /** true の間はサーブがまだ一度も返球されていない＝ノーバウンドで打ち返してはいけない。 */
+      this.serveInFlight = false;
       /** setTimeout ではなくゲームループで数える。ポイント間で確実に破棄できる。 */
       this.timers = [];
     }
 
     actor(who) {
       return this[who];
+    }
+
+    /** 現在サーブする個人。シングルスではチームと同じ、ダブルスでは serverPartner を見る。 */
+    servingPlayer() {
+      return this.doubles ? this.serverPartner[this.server] : this.server;
+    }
+
+    /**
+     * 現在レシーブする個人。実際のダブルスと同様、各選手が受けるコート（デュース/アド）は
+     * セットを通して固定：主力(you/cpu)は side===1 側、相方は side===-1 側で必ず受ける。
+     * @param {'you'|'cpu'} team レシーブする側のチーム
+     * @param {1|-1} side 現在のサービスサイド（match.serveSide）
+     */
+    receivingPlayer(team, side) {
+      if (!this.doubles) return team;
+      const mate = team === 'you' ? 'youMate' : 'cpuMate';
+      return side === 1 ? team : mate;
     }
 
     /* -------------------------------------------------------------- 入力 */
@@ -107,11 +133,13 @@
      * テイクバックを溜め始める。実際に打つのは chargeRelease()（離した瞬間）。
      */
     chargeStart() {
-      if (this.phase === 'serve' && this.server === 'you' && !this.tossActive) {
+      // 自分がサーブする番（＝ダブルスで味方が回ってきているときは対象外）のときだけ反応する
+      const myServe = this.phase === 'serve' && this.servingPlayer() === 'you';
+      if (myServe && !this.tossActive) {
         this.tossBall();
         return;
       }
-      if (this.phase === 'serve' && this.server === 'you' && this.tossActive) {
+      if (myServe && this.tossActive) {
         this.you.charging = true;
         this.you.chargeTime = 0;
       } else if (this.phase === 'rally') {
@@ -126,7 +154,8 @@
       this.you.charging = false;
       this.you.swingCharge = clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1);
 
-      if (this.phase === 'serve' && this.server === 'you' && this.tossActive) {
+      const myServe = this.phase === 'serve' && this.servingPlayer() === 'you';
+      if (myServe && this.tossActive) {
         this.serve('you');
       } else if (this.phase === 'rally') {
         this.you.swing = PLAYER.SWING_WINDOW;
@@ -139,8 +168,8 @@
      */
     tickCharge(dt) {
       if (!this.you.charging) return;
-      const validContext = this.phase === 'rally'
-        || (this.phase === 'serve' && this.server === 'you' && this.tossActive);
+      const myServe = this.phase === 'serve' && this.servingPlayer() === 'you';
+      const validContext = this.phase === 'rally' || (myServe && this.tossActive);
       if (!validContext) {
         this.you.charging = false;
         return;
@@ -154,6 +183,7 @@
       this.clearTimers();
       this.phase = 'serve';
       this.tossActive = false;
+      this.serveInFlight = false;
 
       const ball = this.ball;
       ball.live = false;
@@ -163,36 +193,70 @@
       this.you.charging = false;
       this.you.chargeTime = 0; // 前のポイントの溜めを持ち越さない
 
-      const side = this.match.serveSide;
-      if (this.server === 'you') {
-        this.you.x = side * SERVE.STANCE_X;
-        this.you.z = -HALF_L - 0.5;
-        this.you.vx = this.you.vz = 0; // 前のポイントの勢いを持ち越さない
+      const side = this.match.serveSide; // クロス(+1)から始まり、ポイントごとに逆クロス(-1)と交互になる
+      const serverTeam = this.server;
+      const receiverTeam = opponent(serverTeam);
+      const server = this.servingPlayer();
+      const receiver = this.receivingPlayer(receiverTeam, side);
+
+      // サーバーをサービススタンスに置く（既存のサーブ位置ロジックと同じ式をチーム単位に一般化）
+      const serverActor = this.actor(server);
+      serverActor.x = (serverTeam === 'you' ? side : -side) * SERVE.STANCE_X;
+      serverActor.z = serverTeam === 'you' ? -HALF_L - 0.5 : HALF_L + 0.5;
+      if (server === 'you') this.you.vx = this.you.vz = 0; // 前のポイントの勢いを持ち越さない
+
+      // レシーバーを、サーブが飛んでくる対角のボックス付近に置く（構える位置が見えるように）
+      const receiverActor = this.actor(receiver);
+      const targetSign = serverTeam === 'you' ? -side : side; // serve() の狙いと同じ式
+      receiverActor.x = targetSign * RETURN.STANCE_X;
+      receiverActor.z = receiverTeam === 'you' ? -HALF_L - RETURN.BACK : HALF_L + RETURN.BACK;
+      if (receiver === 'you') this.you.vx = this.you.vz = 0;
+
+      if (this.doubles) {
+        this.positionDoublesMates(server, serverActor, serverTeam, receiver, receiverActor, receiverTeam);
+      }
+
+      if (server === 'you') {
         this.hooks.call('サーブ', '←→ でコース選択 ／ Space でトス');
+      } else if (server === 'youMate') {
+        // 人間のチームだが、今回は相方の番。人間は何もしなくてよい
+        this.hooks.call('パートナーのサーブ', '');
+        this.after(TIMING.CPU_SERVE_DELAY, () => {
+          if (this.phase === 'serve') this.serve('youMate');
+        });
       } else {
-        this.cpu.x = -side * SERVE.STANCE_X;
-        this.cpu.z = HALF_L + 0.5;
         this.hooks.call('リターン', 'CPU のサーブ');
         this.after(TIMING.CPU_SERVE_DELAY, () => {
-          if (this.phase === 'serve') this.serve('cpu');
+          if (this.phase === 'serve') this.serve(server);
         });
       }
-      if (this.doubles) this.positionMates(side);
       this.placeServeBall();
     }
 
-    /** ダブルスのパートナーを、サーブのサイドに合わせてネット際の構えに置く */
-    positionMates(side) {
-      this.youMate.x = side * DOUBLES.SLOT_X * 0.6;
-      this.youMate.z = DOUBLES.NET_Z_YOU;
-      this.cpuMate.x = -side * DOUBLES.SLOT_X * 0.6;
-      this.cpuMate.z = DOUBLES.NET_Z_CPU;
+    /**
+     * ダブルスで、サーバー・レシーバー以外の2人（それぞれの相方）をネット際の構えに置く。
+     * 相方の反対サイドへ寄る（本格的なフォーメーション戦略ではない簡易版、ai.coverPosition と同じ考え方）。
+     */
+    positionDoublesMates(server, serverActor, serverTeam, receiver, receiverActor, receiverTeam) {
+      const mateOf = (individual) => (TEAM_OF[individual] === 'you'
+        ? (individual === 'you' ? 'youMate' : 'you')
+        : (individual === 'cpu' ? 'cpuMate' : 'cpu'));
+      const netZ = (team) => (team === 'you' ? DOUBLES.NET_Z_YOU : DOUBLES.NET_Z_CPU);
+
+      const serverMateActor = this.actor(mateOf(server));
+      serverMateActor.x = clamp(-serverActor.x * DOUBLES.MIRROR, -DOUBLES.SLOT_X, DOUBLES.SLOT_X);
+      serverMateActor.z = netZ(serverTeam);
+
+      const receiverMateActor = this.actor(mateOf(receiver));
+      receiverMateActor.x = clamp(-receiverActor.x * DOUBLES.MIRROR, -DOUBLES.SLOT_X, DOUBLES.SLOT_X);
+      receiverMateActor.z = netZ(receiverTeam);
     }
 
     /** サーブ待ちの間、ボールはサーバーの手元に置いておく */
     placeServeBall() {
-      const server = this.actor(this.server);
-      const front = this.server === 'you' ? 0.4 : -0.4;
+      const serverKey = this.servingPlayer();
+      const server = this.actor(serverKey);
+      const front = TEAM_OF[serverKey] === 'you' ? 0.4 : -0.4;
       const ball = this.ball;
       ball.x = ball.px = server.x;
       ball.z = ball.pz = server.z + front;
@@ -211,13 +275,14 @@
 
     serve(who) {
       const ball = this.ball;
-      const dir = who === 'you' ? 1 : -1;   // 打ち込む方向
+      const team = TEAM_OF[who];
+      const dir = team === 'you' ? 1 : -1;   // 打ち込む方向
       const side = this.match.serveSide;
       // プレイヤーはトス中の実際の高さで打つ。CPU はトス演出を挟まないので固定の打点高さを使う。
       const contactY = who === 'you' ? Math.max(ball.y, SERVE.BALL_Y) : SERVE.TOSS_Y;
       const from = { x: ball.x, y: contactY, z: ball.z };
       // サービスはコートの対角へ入れる。狙う横位置（コース）はプレイヤーのみ選べる
-      const targetSign = who === 'you' ? -side : side;
+      const targetSign = team === 'you' ? -side : side;
       const magnitude = who === 'you'
         ? this.serveAimMagnitude(targetSign)
         : rand(SERVE.AIM_X_MIN, SERVE.AIM_X_MAX);
@@ -233,9 +298,10 @@
       Object.assign(ball, solveShot(from, target, flightT, SERVE.CLEARANCE));
       ball.live = true;
       ball.bounces = 0;
-      ball.last = who;
+      ball.last = team; // スコア判定・当たり判定はチーム単位（hit() と同じ扱い）
 
       this.tossActive = false;
+      this.serveInFlight = true; // 一度も返球されていない＝ノーバウンドで打ち返してはいけない
       this.phase = 'rally';
       const server = this.actor(who);
       server.anim = PLAYER.SERVE_ANIM;
@@ -264,6 +330,7 @@
       const ball = this.ball;
       const player = this.actor(who);
       const from = { x: ball.x, y: Math.max(ball.y, 0.5), z: ball.z };
+      this.serveInFlight = false; // 一度でも打ち返されたら「ノーバウンド禁止」の制約は解除
 
       // ball.x/z はまだ打点のまま（solveShot が書き換えるのは vx/vy/vz だけ）なので、
       // ここで打点とプレイヤー位置からフォア/バックを判定できる。shot の計算より前に
@@ -339,13 +406,25 @@
 
       const result = this.match.awardPoint(winner);
       const mine = winner === 'you';
-      if (result.type !== 'point') this.server = opponent(this.server); // ゲームごとにサーブ交代
+      if (result.type !== 'point') {
+        // ダブルスは、今サーブし終えたチームの中で次に回ってくるまで担当者を交代する
+        // （実際のルール通り。次にそのチームの番が来るのは2ゲーム後）
+        if (this.doubles) {
+          const finishedTeam = this.server;
+          const mate = finishedTeam === 'you' ? 'youMate' : 'cpuMate';
+          this.serverPartner[finishedTeam] = this.serverPartner[finishedTeam] === finishedTeam
+            ? mate
+            : finishedTeam;
+        }
+        this.server = opponent(this.server); // ゲームごとにサーブ交代
+      }
 
       if (result.type === 'set') {
         this.hooks.call('ゲームセット', mine ? 'あなたの勝ち' : 'CPU の勝ち');
         this.hooks.score();
         this.after(TIMING.NEXT_MATCH, () => {
           this.match.reset();
+          this.serverPartner = { you: 'you', cpu: 'cpu' }; // 次のセットは主力からサーブし直す
           this.hooks.score();
           this.newPoint();
         });
@@ -390,7 +469,8 @@
      * へは動けないよう狭める。
      */
     youBounds() {
-      if (!(this.phase === 'serve' && this.server === 'you')) {
+      // 自分が実際にサーブする番のときだけ制限する（ダブルスで相方の番のときは対象外）
+      if (!(this.phase === 'serve' && this.servingPlayer() === 'you')) {
         return {
           xMin: -PLAYER.X_LIMIT, xMax: PLAYER.X_LIMIT,
           zMin: -HALF_L - PLAYER.Z_FAR_MARGIN, zMax: PLAYER.Z_NEAR,
@@ -546,6 +626,9 @@
 
     checkSwings() {
       const ball = this.ball;
+      // サーブはノーバウンドで返球できない（volleyしてはいけない）。1バウンドするまで待つ。
+      const mustBounceFirst = this.serveInFlight && ball.bounces < 1;
+      if (mustBounceFirst) return;
 
       // プレイヤーは Space を押した瞬間の前後だけ打てる。人間が優先（AIパートナーに横取りさせない）
       if (ball.last !== 'you' && ball.z < PLAYER.NET_MARGIN && this.you.swing > 0) {
