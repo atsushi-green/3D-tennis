@@ -193,7 +193,7 @@
       this.you.charging = false;
       this.you.chargeTime = 0; // 前のポイントの溜めを持ち越さない
 
-      const side = this.match.serveSide; // クロス(+1)から始まり、ポイントごとに逆クロス(-1)と交互になる
+      const side = this.match.serveSide; // クロス(-1)から始まり、ポイントごとに逆クロス(+1)と交互になる
       const serverTeam = this.server;
       const receiverTeam = opponent(serverTeam);
       const server = this.servingPlayer();

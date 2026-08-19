@@ -105,17 +105,19 @@ function tossAndHit(g) {
   const g = new R.Game({ input, hooks: noHooks });
   g.start();
   const side = g.match.serveSide;
-  ok(side === 1, `precondition: serveSide should be 1 for a fresh match (got ${side})`);
+  // クロス(-1)から始まる＝画面右で構える配置なので、フットフォルトの可動域は
+  // [-HALF_W, 0]（サイドラインは -x 側、センターマークは 0）になる。
+  ok(side === -1, `precondition: serveSide should be -1 (cross) for a fresh match (got ${side})`);
 
   input.moveZ = 1; input.moveX = 0;
   g.movePlayers(5);
   ok(g.you.z === -HALF_L, `foot fault: can't cross baseline, z=${g.you.z}`);
 
-  input.moveZ = 0; input.moveX = -1;
+  input.moveZ = 0; input.moveX = 1;
   g.movePlayers(5);
-  ok(g.you.x === HALF_W, `foot fault: can't cross sideline, x=${g.you.x}`);
+  ok(g.you.x === -HALF_W, `foot fault: can't cross sideline, x=${g.you.x}`);
 
-  input.moveX = 1;
+  input.moveX = -1;
   g.movePlayers(5);
   ok(g.you.x === 0, `foot fault: can't cross center mark, x=${g.you.x}`);
 
@@ -129,11 +131,11 @@ function tossAndHit(g) {
 // --- サーブはクロスサイドから始まり、ポイントごとに逆クロスサイドへ交互になる ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
-  ok(g.match.serveSide === 1, `fresh game starts on the cross side (+1), got ${g.match.serveSide}`);
+  ok(g.match.serveSide === -1, `fresh game starts on the cross side (-1), got ${g.match.serveSide}`);
   g.match.awardPoint('you');
-  ok(g.match.serveSide === -1, `next point is the reverse-cross side (-1), got ${g.match.serveSide}`);
+  ok(g.match.serveSide === 1, `next point is the reverse-cross side (+1), got ${g.match.serveSide}`);
   g.match.awardPoint('cpu');
-  ok(g.match.serveSide === 1, `back to the cross side on the 3rd point, got ${g.match.serveSide}`);
+  ok(g.match.serveSide === -1, `back to the cross side on the 3rd point, got ${g.match.serveSide}`);
 }
 
 // --- レシーバーはポイント開始時にレシーブポジションへ移動する ---
@@ -409,11 +411,14 @@ function tossAndHit(g) {
   const inRange = (v, min, max) => v >= min - STEP_SLACK && v <= max + STEP_SLACK;
 
   for (let i = 0; i < 30; i++) {
-    const wide = courseLanding(1);
+    // フレッシュな試合は side=-1（クロス）で始まるので、team='you' の targetSign は +1。
+    // ワイドは targetSign と同じ向きの入力（aim===targetSign）で出るので、
+    // aim = moveX * INPUT_X_TO_WORLD(-1) = +1 となる moveX=-1 がワイド。
+    const wide = courseLanding(-1);
     ok(inRange(Math.abs(wide.x), AIM_WIDE_MIN, AIM_WIDE_MAX), `wide course: |x|=${wide.x}`);
-    ok(wide.x < 0, `wide course lands in the correct box: x=${wide.x}`);
+    ok(wide.x > 0, `wide course lands in the correct box: x=${wide.x}`);
 
-    const t = courseLanding(-1);
+    const t = courseLanding(1);
     ok(inRange(Math.abs(t.x), AIM_T_MIN, AIM_T_MAX), `T course: |x|=${t.x}`);
 
     const body = courseLanding(0);
@@ -617,10 +622,10 @@ function tossAndHit(g) {
 
   g.server = 'cpu'; // you チームが受ける番
   g.start(true);
-  ok(g.match.serveSide === 1, 'precondition: fresh match starts on side=1');
-  // side=1 なので you が受け、youMate はネット際で構えているはず
-  ok(Math.abs(g.you.x) < HALF_W + 1 && g.you.z < -HALF_L, `you (receiver) is at the return position, x=${g.you.x} z=${g.you.z}`);
-  ok(Math.abs(g.youMate.z - DOUBLES.NET_Z_YOU) < 0.01, `youMate (not receiving) waits at the net, z=${g.youMate.z}`);
+  ok(g.match.serveSide === -1, 'precondition: fresh match starts on side=-1');
+  // side=-1 なので youMate が受け、you はネット際で構えているはず
+  ok(Math.abs(g.youMate.x) < HALF_W + 1 && g.youMate.z < -HALF_L, `youMate (receiver) is at the return position, x=${g.youMate.x} z=${g.youMate.z}`);
+  ok(Math.abs(g.you.z - DOUBLES.NET_Z_YOU) < 0.01, `you (not receiving) waits at the net, z=${g.you.z}`);
 }
 
 // --- ダブルス：フルマッチのシミュレーション（フリーズ・タイマーリークがないか） ---
