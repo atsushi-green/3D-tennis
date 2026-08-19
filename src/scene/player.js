@@ -124,10 +124,21 @@
   };
 
   /**
+   * フォアハンドの弧の角度（0=横向き、負=後方のテイクバック、正=前方のフォロースルー）を
+   * バックハンド用に鏡映しする。+π を足す（＝原点を中心に180°回す点対称）と前後の向きまで
+   * 反転してしまい、テイクバックのはずが前を向き、フォロースルーのはずが後ろを向く、という
+   * 時間順序が壊れたスイングになる。π−angle（＝左右の軸で折り返す線対称）なら前後の向きは
+   * 保ったまま左右だけ入れ替わるので、テイクバック→打点→フォロースルーの流れは崩れない。
+   */
+  function mirrorGroundAngle(angle, backhand) {
+    return backhand ? Math.PI - angle : angle;
+  }
+
+  /**
    * スイングの残り時間から腕の角度を決める。3種類のポーズを軸を分けて切り替える：
-   * - フォアハンド／バックハンド: rotation.y（横振り）。バックハンドは弧そのものを
-   *   体の反対側（+π）へ丸ごと移すので、同じ弧を逆順になぞるだけだった以前と違い
-   *   ラケットが実際に体の逆サイドで振られて見分けやすい。
+   * - フォアハンド／バックハンド: rotation.y（横振り）。mirrorGroundAngle() で左右だけを
+   *   鏡映しするので、バックハンドでもテイクバック→打点→フォロースルーが正しい前後の
+   *   向きのまま、体の逆サイドで振られる。
    * - サーブ: rotation.z（縦振り）。トス中は構え、打った瞬間から真上→前へ振り下ろす。
    * @param {THREE.Group} player
    * @param {number} anim 残り時間（秒）。0 なら構え／トスの姿勢
@@ -147,7 +158,7 @@
         arm.rotation.y = 0;
         arm.rotation.z = SWING.SERVE_READY_Z;
       } else if (prep) {
-        arm.rotation.y = (prep === 'backhand' ? Math.PI : 0) + SWING.GROUND_START;
+        arm.rotation.y = mirrorGroundAngle(SWING.GROUND_START, prep === 'backhand');
         arm.rotation.z = 0;
       } else {
         arm.rotation.y = SWING.REST_Y;
@@ -167,9 +178,7 @@
     }
 
     const backhand = stroke === 'backhand';
-    // バックハンドは弧全体を π 回して体の反対サイドへ丸ごと移す（逆順になぞるだけにしない）
-    const side = backhand ? Math.PI : 0;
-    arm.rotation.y = side + SWING.GROUND_START + progress * SWING.GROUND_SWEEP;
+    arm.rotation.y = mirrorGroundAngle(SWING.GROUND_START + progress * SWING.GROUND_SWEEP, backhand);
     arm.rotation.z = 0;
     // sin カーブでひねって戻す（構え→打点→フォロースルーで元の向きに近づく）
     torso.rotation.y = (backhand ? -1 : 1) * SWING.TORSO_TWIST * Math.sin(progress * Math.PI);
