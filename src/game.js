@@ -94,6 +94,13 @@
       this.serveInFlight = false;
       /** setTimeout ではなくゲームループで数える。ポイント間で確実に破棄できる。 */
       this.timers = [];
+      /**
+       * CPU 側の反応遅延タイマー（cpu/cpuMate/youMate）。新しい球が飛んできた瞬間に
+       * PLAYER.CPU_REACT にセットし、0になるまで移動を止める（＝逆を突かれると間に合わない）。
+       */
+      this.reactTimers = { cpu: 0, cpuMate: 0, youMate: 0 };
+      /** 直前フレームの ball.last。変化を検知して反応遅延タイマーを起動するために使う。 */
+      this.lastBallOwnerSeen = null;
     }
 
     actor(who) {
@@ -192,6 +199,13 @@
 
       this.you.charging = false;
       this.you.chargeTime = 0; // 前のポイントの溜めを持ち越さない
+
+      // 前のポイントの反応遅延を持ち越さない（moveDoublesTeams()/moveSinglesCpu() は
+      // phase==='serve' 中は動かないので実害はないが、次のラリー開始時に混乱しないよう明示的に戻す）
+      this.reactTimers.cpu = 0;
+      this.reactTimers.cpuMate = 0;
+      this.reactTimers.youMate = 0;
+      this.lastBallOwnerSeen = null;
 
       const side = this.match.serveSide; // クロス(-1)から始まり、ポイントごとに逆クロス(+1)と交互になる
       const serverTeam = this.server;
@@ -340,11 +354,14 @@
       // AI（cpu/cpuMate は人間の逆をつきつつ you 陣地(z<0)へ、youMate はダブルスで唯一の
       // AI仲間なので相手チームの主力 cpu の逆をつきつつ cpu 陣地(z>0)へ）。
       // 人間の 'you' だけ playerShot() で自分の入力を使う。
+      // AI は「打点での実速度 / CPU_CHASE」を stretch(0〜1) として使う：全力疾走のまま
+      // ぎりぎり追いついた球ほど、山なりで浅く・中央寄りの弱気な返球になる。
+      const stretch = who === 'you' ? 0 : clamp(player.speed / PLAYER.CPU_CHASE, 0, 1);
       const shot = who === 'you'
         ? this.playerShot(stroke, ball.z - player.z)
         : TEAM_OF[who] === 'cpu'
-          ? { target: shotTarget(this.you.x, -1), flight: CPU.SHOT_T }
-          : { target: shotTarget(this.cpu.x, 1), flight: CPU.SHOT_T };
+          ? { target: shotTarget(this.you.x, -1, stretch), flight: lerp(CPU.SHOT_T, CPU.STRETCH_T, stretch) }
+          : { target: shotTarget(this.cpu.x, 1, stretch), flight: lerp(CPU.SHOT_T, CPU.STRETCH_T, stretch) };
 
       // 人間の打球だけ溜め量に応じて演出を強める（AIは常に0＝通常の演出）
       const charge = who === 'you' ? this.you.swingCharge : 0;
@@ -486,6 +503,8 @@
     }
 
     movePlayers(dt) {
+      this.updateReactTimers(dt);
+
       const youBefore = { x: this.you.x, z: this.you.z };
       const cpuBefore = { x: this.cpu.x, z: this.cpu.z };
 
@@ -514,11 +533,37 @@
       else this.moveSinglesCpu(cpuBefore, dt);
     }
 
+    /**
+     * ball.last がチームをまたいで変わった瞬間（＝新しい球が飛んできた瞬間）に、
+     * 守る側の CPU の反応遅延タイマーをセットする。この間は移動を止めるので、
+     * 直前まで動いていた方向と逆を突かれると間に合わなくなる。
+     */
+    updateReactTimers(dt) {
+      this.reactTimers.cpu = Math.max(0, this.reactTimers.cpu - dt);
+      this.reactTimers.cpuMate = Math.max(0, this.reactTimers.cpuMate - dt);
+      this.reactTimers.youMate = Math.max(0, this.reactTimers.youMate - dt);
+
+      const owner = this.ball.last;
+      if (this.phase === 'rally' && owner !== this.lastBallOwnerSeen) {
+        if (owner === 'you') {
+          this.reactTimers.cpu = PLAYER.CPU_REACT;
+          this.reactTimers.cpuMate = PLAYER.CPU_REACT;
+        } else if (owner === 'cpu') {
+          this.reactTimers.youMate = PLAYER.CPU_REACT;
+        }
+      }
+      this.lastBallOwnerSeen = owner;
+    }
+
     /** シングルスの CPU 移動（従来どおり）。ダブルスでは使わない。 */
     moveSinglesCpu(cpuBefore, dt) {
-      const chasing = this.phase === 'rally' && this.ball.last === 'you';
-      const target = chasing ? chasePosition(this.ball) : homePosition();
-      this.moveTowards(this.cpu, cpuBefore, target, chasing ? PLAYER.CPU_CHASE : PLAYER.CPU_RECOVER, dt);
+      const incoming = this.phase === 'rally' && this.ball.last === 'you';
+      if (incoming && this.reactTimers.cpu > 0) {
+        this.cpu.speed = 0; // まだ反応できていない
+        return;
+      }
+      const target = incoming ? chasePosition(this.ball) : homePosition();
+      this.moveTowards(this.cpu, cpuBefore, target, incoming ? PLAYER.CPU_CHASE : PLAYER.CPU_RECOVER, dt);
     }
 
     /**
@@ -545,13 +590,22 @@
       const cpuMateBefore = { x: this.cpuMate.x, z: this.cpuMate.z };
       const youMateBefore = { x: this.youMate.x, z: this.youMate.z };
 
-      // cpu チーム：you 側の打球が向かってくる番なら、cpu/cpuMate のうち近い方が追う
+      // cpu チーム：you 側の打球が向かってくる番なら、cpu/cpuMate のうち近い方が追う。
+      // 反応遅延タイマーが残っている間は、担当側でも静止したまま（＝逆を突かれる余地）。
       const cpuTeamChasing = this.phase === 'rally' && ball.last === 'you';
       if (cpuTeamChasing && isResponder(this.cpu, this.cpuMate, ball)) {
-        this.moveTowards(this.cpu, cpuBefore, chasePosition(ball, 1), PLAYER.CPU_CHASE, dt);
+        if (this.reactTimers.cpu <= 0) {
+          this.moveTowards(this.cpu, cpuBefore, chasePosition(ball, 1), PLAYER.CPU_CHASE, dt);
+        } else {
+          this.cpu.speed = 0;
+        }
         this.moveTowards(this.cpuMate, cpuMateBefore, coverPosition(this.cpu.x, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
       } else if (cpuTeamChasing) {
-        this.moveTowards(this.cpuMate, cpuMateBefore, chasePosition(ball, 1), PLAYER.CPU_CHASE, dt);
+        if (this.reactTimers.cpuMate <= 0) {
+          this.moveTowards(this.cpuMate, cpuMateBefore, chasePosition(ball, 1), PLAYER.CPU_CHASE, dt);
+        } else {
+          this.cpuMate.speed = 0;
+        }
         this.moveTowards(this.cpu, cpuBefore, coverPosition(this.cpuMate.x, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
       } else {
         this.moveTowards(this.cpu, cpuBefore, homePosition(), PLAYER.CPU_RECOVER, dt);
@@ -562,8 +616,13 @@
       // 自陣（z<0）を追わせるため chasePosition には side=-1 を渡す。
       const mateChasing = this.phase === 'rally' && ball.last === 'cpu'
         && isResponder(this.youMate, this.you, ball);
-      const mateTarget = mateChasing ? chasePosition(ball, -1) : coverPosition(this.you.x, DOUBLES.NET_Z_YOU);
-      this.moveTowards(this.youMate, youMateBefore, mateTarget, mateChasing ? PLAYER.CPU_CHASE : PLAYER.CPU_RECOVER, dt);
+      if (mateChasing && this.reactTimers.youMate <= 0) {
+        this.moveTowards(this.youMate, youMateBefore, chasePosition(ball, -1), PLAYER.CPU_CHASE, dt);
+      } else if (mateChasing) {
+        this.youMate.speed = 0;
+      } else {
+        this.moveTowards(this.youMate, youMateBefore, coverPosition(this.you.x, DOUBLES.NET_Z_YOU), PLAYER.CPU_RECOVER, dt);
+      }
     }
 
     /** cpu/cpuMate/youMate 共通の移動：目標位置へ一定速度で寄せ、実速度も記録する（歩行アニメ用）。 */

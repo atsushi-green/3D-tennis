@@ -6,7 +6,9 @@
   'use strict';
 
   const { CPU, DOUBLES, HALF_L, HALF_W, PHYSICS } = RallyOne.config;
-  const { clamp, rand, signOr } = RallyOne.math;
+  const {
+    clamp, lerp, rand, signOr,
+  } = RallyOne.math;
   const { predictLanding } = RallyOne.physics;
 
   /**
@@ -39,14 +41,23 @@
    * @param {number} opponentX 逆をつく相手（返球を受ける側）の現在位置
    * @param {1|-1} [dir] 打ち込む方向。既定は -1（z<0側＝you陣地。cpu が you を狙う従来の向き）。
    *   you 陣地の選手（youMate）が cpu 陣地（z>0）を狙うときは +1 を渡す。
+   * @param {number} [stretch] 0〜1。ぎりぎり追いついて打った度合い（hit() が実速度から算出）。
+   *   大きいほど狙いが浅く・中央寄りになり、ミスの確率も上がる（＝弱気な返球）。
    * @returns {{x:number, y:number, z:number}} ワールド座標の目標地点
    */
-  function shotTarget(opponentX, dir = -1) {
-    let x = -signOr(opponentX, Math.random() - 0.5) * rand(CPU.AIM_X_MIN, CPU.AIM_X_MAX);
-    let z = dir * rand(CPU.AIM_Z_MIN, CPU.AIM_Z_MAX);
+  function shotTarget(opponentX, dir = -1, stretch = 0) {
+    const aimXMin = lerp(CPU.AIM_X_MIN, CPU.STRETCH_AIM_X_MIN, stretch);
+    const aimXMax = lerp(CPU.AIM_X_MAX, CPU.STRETCH_AIM_X_MAX, stretch);
+    const aimZMin = lerp(CPU.AIM_Z_MIN, CPU.STRETCH_AIM_Z_MIN, stretch);
+    const aimZMax = lerp(CPU.AIM_Z_MAX, CPU.STRETCH_AIM_Z_MAX, stretch);
+    const outLong = lerp(CPU.OUT_LONG, CPU.STRETCH_OUT_LONG, stretch);
+    const outWide = lerp(CPU.OUT_WIDE, CPU.STRETCH_OUT_WIDE, stretch);
 
-    if (Math.random() < CPU.OUT_LONG) z = dir * (HALF_L + 0.9);          // ベースラインオーバー
-    if (Math.random() < CPU.OUT_WIDE) x = Math.sign(x) * (HALF_W + 0.7); // サイドアウト
+    let x = -signOr(opponentX, Math.random() - 0.5) * rand(aimXMin, aimXMax);
+    let z = dir * rand(aimZMin, aimZMax);
+
+    if (Math.random() < outLong) z = dir * (HALF_L + 0.9);          // ベースラインオーバー
+    if (Math.random() < outWide) x = Math.sign(x) * (HALF_W + 0.7); // サイドアウト
 
     return { x, y: PHYSICS.BALL_R, z };
   }

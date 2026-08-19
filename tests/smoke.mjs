@@ -475,6 +475,72 @@ function tossAndHit(g) {
   ok(g.ball.impact > 0, `rally hit also sets ball.impact, got ${g.ball.impact}`);
 }
 
+// --- 溜めなしの打球は、フル溜めより明らかに山なり（ゆるい球）になる ---
+{
+  const { GRAVITY } = R.config.PHYSICS;
+  const { TAP_T, CHARGE_T } = R.config.SHOT;
+  const from = { x: 0, y: 1, z: -3 };
+  const target = { x: 0, y: R.config.PHYSICS.BALL_R, z: 5 };
+  const tap = R.physics.solveShot(from, target, TAP_T);
+  const charged = R.physics.solveShot(from, target, CHARGE_T);
+  const apex = (v) => from.y + (v.vy * v.vy) / (2 * Math.abs(GRAVITY));
+  ok(apex(tap) > apex(charged) * 1.5,
+    `tap shot arcs noticeably higher than a charged shot, tap apex=${apex(tap).toFixed(2)} charged apex=${apex(charged).toFixed(2)}`);
+  ok(apex(tap) > 2.2, `tap shot is a genuinely loose, lob-like arc, apex=${apex(tap).toFixed(2)}`);
+}
+
+// --- CPU: stretch(0〜1) が大きいほど、狙いが浅く・中央寄りになる（ぎりぎり追いついた弱気な返球）---
+// Math.random を固定して rand()/OUT判定を決定的にする（OUT確率は最大0.22なので0.5は下回らない）
+{
+  const { shotTarget } = R.ai;
+  const {
+    AIM_X_MIN, AIM_X_MAX, AIM_Z_MIN, AIM_Z_MAX,
+    STRETCH_AIM_X_MIN, STRETCH_AIM_X_MAX, STRETCH_AIM_Z_MIN, STRETCH_AIM_Z_MAX, STRETCH_T, SHOT_T,
+  } = R.config.CPU;
+  ok(STRETCH_T > SHOT_T, `precondition: STRETCH_T is a slower/loopier flight than SHOT_T`);
+
+  const origRandom = Math.random;
+  Math.random = () => 0.5;
+  try {
+    const comfy = shotTarget(2, -1, 0);
+    const stretched = shotTarget(2, -1, 1);
+    const mid = (a, b) => (a + b) / 2;
+    ok(Math.abs(comfy.x + mid(AIM_X_MIN, AIM_X_MAX)) < 1e-9, `stretch=0 uses the normal aim range, x=${comfy.x}`);
+    ok(Math.abs(comfy.z + mid(AIM_Z_MIN, AIM_Z_MAX)) < 1e-9, `stretch=0 uses the normal depth, z=${comfy.z}`);
+    ok(Math.abs(stretched.x + mid(STRETCH_AIM_X_MIN, STRETCH_AIM_X_MAX)) < 1e-9,
+      `stretch=1 aims more central, x=${stretched.x}`);
+    ok(Math.abs(stretched.z + mid(STRETCH_AIM_Z_MIN, STRETCH_AIM_Z_MAX)) < 1e-9,
+      `stretch=1 lands much shorter, z=${stretched.z}`);
+    ok(Math.abs(stretched.x) < Math.abs(comfy.x) && Math.abs(stretched.z) < Math.abs(comfy.z),
+      'a stretched return is safer/shallower than a comfortable one');
+  } finally {
+    Math.random = origRandom;
+  }
+}
+
+// --- CPU: 新しい球が来た瞬間は反応遅延があり、直前まで動いていた方向と逆を突かれると間に合わない ---
+{
+  const { CPU_REACT } = R.config.PLAYER;
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.phase = 'rally';
+  g.cpu.x = 0; g.cpu.z = R.config.CPU.HOME_Z;
+  g.ball.last = 'cpu';
+  g.movePlayers(1 / 60); // lastBallOwnerSeen を 'cpu' にしておく（you 側の反応タイマーが立つのは想定内）
+
+  g.ball.x = -3; g.ball.z = 3; g.ball.last = 'you'; // you が打ち返した＝cpu 陣営に新しい球が来た
+  const before = { x: g.cpu.x, z: g.cpu.z };
+  g.movePlayers(1 / 60);
+  ok(g.reactTimers.cpu > 0, `precondition: reaction timer starts counting down, got ${g.reactTimers.cpu}`);
+  ok(g.cpu.x === before.x && g.cpu.z === before.z,
+    `cpu does not move during the reaction window, x=${g.cpu.x} z=${g.cpu.z}`);
+  ok(g.cpu.speed === 0, 'cpu speed reads 0 while still reacting (idle, not sprinting)');
+
+  for (let i = 0; i < Math.ceil(CPU_REACT / (1 / 60)) + 2; i++) g.movePlayers(1 / 60);
+  ok(g.reactTimers.cpu === 0, 'reaction timer has fully counted down');
+  ok(g.cpu.x !== before.x || g.cpu.z !== before.z, 'cpu starts chasing once it has reacted');
+}
+
 // --- full match simulation（フリーズ・タイマーリーク・スコア破綻がないか） ---
 {
   const events = [];
