@@ -33,6 +33,8 @@
     },
     onChargeStart: () => game.chargeStart(),
     onChargeRelease: () => game.chargeRelease(),
+    onFormationNet: () => game.setYouMateFormation('net'),
+    onFormationBack: () => game.setYouMateFormation('back'),
   });
 
   hud.renderScore(game.match, game.server);

@@ -94,6 +94,8 @@
       this.started = false;
       /** true ならダブルス（you+youMate vs cpu+cpuMate）。既定はシングルス。 */
       this.doubles = false;
+      /** ダブルスの AI パートナー(youMate)に指示する定位置。'net'（前へ）か 'back'（下がれ）。 */
+      this.youMateFormation = 'net';
       /** true の間、ボールはトス中（重力で上下するだけ）。2回目の Space で打つまで待つ。 */
       this.tossActive = false;
       /** true の間はサーブがまだ一度も返球されていない＝ノーバウンドで打ち返してはいけない。 */
@@ -138,6 +140,19 @@
       this.started = true;
       this.doubles = !!doubles;
       this.newPoint();
+    }
+
+    /**
+     * ダブルスのAIパートナー(youMate)に定位置を指示する。'net'＝前へ詰める、'back'＝
+     * ベースライン付近まで下がる。ラリー中に構えていない側（isResponder でない側）の
+     * 定位置と、次のポイント開始時の立ち位置（positionDoublesMates）の両方に反映される。
+     * @param {'net'|'back'} formation
+     */
+    setYouMateFormation(formation) {
+      if (!this.doubles || this.youMateFormation === formation) return;
+      this.youMateFormation = formation;
+      this.hooks.call('パートナー', formation === 'net' ? '前へ' : '下がれ');
+      this.after(0.8, () => this.hooks.clearCall());
     }
 
     /**
@@ -261,7 +276,10 @@
       const mateOf = (individual) => (TEAM_OF[individual] === 'you'
         ? (individual === 'you' ? 'youMate' : 'you')
         : (individual === 'cpu' ? 'cpuMate' : 'cpu'));
-      const netZ = (team) => (team === 'you' ? DOUBLES.NET_Z_YOU : DOUBLES.NET_Z_CPU);
+      // you 側だけ、指示されたフォーメーション（前へ／下がれ）を定位置に反映する
+      const netZ = (team) => (team === 'you'
+        ? (this.youMateFormation === 'back' ? DOUBLES.BACK_Z_YOU : DOUBLES.NET_Z_YOU)
+        : DOUBLES.NET_Z_CPU);
 
       const serverMateActor = this.actor(mateOf(server));
       serverMateActor.x = clamp(-serverActor.x * DOUBLES.MIRROR, -DOUBLES.SLOT_X, DOUBLES.SLOT_X);
@@ -675,7 +693,8 @@
       } else if (mateChasing) {
         this.youMate.speed = 0;
       } else {
-        this.moveTowards(this.youMate, youMateBefore, coverPosition(this.you.x, DOUBLES.NET_Z_YOU), PLAYER.CPU_RECOVER, dt);
+        const youMateZ = this.youMateFormation === 'back' ? DOUBLES.BACK_Z_YOU : DOUBLES.NET_Z_YOU;
+        this.moveTowards(this.youMate, youMateBefore, coverPosition(this.you.x, youMateZ), PLAYER.CPU_RECOVER, dt);
       }
     }
 
@@ -766,8 +785,11 @@
         }
       }
 
-      // ダブルスの youMate：人間が届かなかった／振らなかった球を、CPUと同様に自動で拾う
-      if (this.doubles && ball.last !== 'you' && ball.z < PLAYER.NET_MARGIN) {
+      // ダブルスの youMate：人間が届かなかった／振らなかった球を、CPUと同様に自動で拾う。
+      // ただし自分が担当（isResponder、＝moveDoublesTeams() の追う/構える判定と同じ基準）の
+      // ときだけ。そうしないと、人間が取るべき（＝人間の方が近い）球まで先に振ってしまう。
+      if (this.doubles && ball.last !== 'you' && ball.z < PLAYER.NET_MARGIN
+        && isResponder(this.youMate, this.you, ball)) {
         const inRange = ball.y < PLAYER.CPU_REACH_Y && ball.y > PLAYER.CPU_REACH_Y_MIN;
         if (reaches(ball, this.youMate, PLAYER.CPU_REACH) && inRange) this.hit('youMate');
       }

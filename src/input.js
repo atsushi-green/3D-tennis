@@ -12,6 +12,9 @@
   const MOVE_DOWN = ['ArrowDown', 'KeyS'];
   const LOB = ['ShiftLeft', 'ShiftRight'];
   const SWING = ['Space'];
+  /** ダブルスのAIパートナーへの指示。Q＝ネットへ前へ、E＝ベースラインまで下がれ */
+  const FORMATION_NET = ['KeyQ'];
+  const FORMATION_BACK = ['KeyE'];
   /** ブラウザのスクロールを止めたいキー */
   const SWALLOW = MOVE_LEFT.concat(MOVE_RIGHT, MOVE_UP, MOVE_DOWN, SWING);
 
@@ -22,7 +25,8 @@
 
     /**
      * @param {{onStart:Function, onStartDoubles:Function, onChargeStart:Function,
-     *   onChargeRelease:Function, isStarted:Function}} handlers
+     *   onChargeRelease:Function, onFormationNet:Function, onFormationBack:Function,
+     *   isStarted:Function}} handlers
      */
     attach(handlers) {
       addEventListener('keydown', (e) => {
@@ -34,6 +38,10 @@
           else handlers.onStart();
         } else if (SWING.indexOf(e.code) !== -1) {
           handlers.onChargeStart();
+        } else if (FORMATION_NET.indexOf(e.code) !== -1) {
+          handlers.onFormationNet();
+        } else if (FORMATION_BACK.indexOf(e.code) !== -1) {
+          handlers.onFormationBack();
         }
       });
 
