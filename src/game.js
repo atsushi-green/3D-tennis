@@ -524,8 +524,22 @@
     /**
      * ダブルスの4人の移動。各ペアは、落下点に近い方（＝ isResponder ）が返球に向かい、
      * もう一方は相方の反対サイドのネット際で構える（本格的なフォーメーション戦略ではない簡易版）。
+     *
+     * サーブ待ち中（phase==='serve'）は4人とも動かさない。newPoint() が既にサーバー・
+     * レシーバー・両者の相方を正しいスタンスへ置いているので、ここで通常のラリー用の
+     * 追う/構えるロジックを適用すると、サーバーはサービススタンスからネット際の構え位置へ
+     * 毎フレーム寄っていってフットフォルトに見えるし、レシーバー側もまだ来ていない
+     * サーブへの構えを崩されてしまう（＝レシーブできない一因）。ボールが実際に
+     * 生きる（phase==='rally'）まではみな静止させる。
      */
     moveDoublesTeams(dt) {
+      if (this.phase === 'serve') {
+        this.cpu.speed = 0;
+        this.cpuMate.speed = 0;
+        this.youMate.speed = 0;
+        return;
+      }
+
       const ball = this.ball;
       const cpuBefore = { x: this.cpu.x, z: this.cpu.z };
       const cpuMateBefore = { x: this.cpuMate.x, z: this.cpuMate.z };
@@ -534,20 +548,21 @@
       // cpu チーム：you 側の打球が向かってくる番なら、cpu/cpuMate のうち近い方が追う
       const cpuTeamChasing = this.phase === 'rally' && ball.last === 'you';
       if (cpuTeamChasing && isResponder(this.cpu, this.cpuMate, ball)) {
-        this.moveTowards(this.cpu, cpuBefore, chasePosition(ball), PLAYER.CPU_CHASE, dt);
+        this.moveTowards(this.cpu, cpuBefore, chasePosition(ball, 1), PLAYER.CPU_CHASE, dt);
         this.moveTowards(this.cpuMate, cpuMateBefore, coverPosition(this.cpu.x, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
       } else if (cpuTeamChasing) {
-        this.moveTowards(this.cpuMate, cpuMateBefore, chasePosition(ball), PLAYER.CPU_CHASE, dt);
+        this.moveTowards(this.cpuMate, cpuMateBefore, chasePosition(ball, 1), PLAYER.CPU_CHASE, dt);
         this.moveTowards(this.cpu, cpuBefore, coverPosition(this.cpuMate.x, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
       } else {
         this.moveTowards(this.cpu, cpuBefore, homePosition(), PLAYER.CPU_RECOVER, dt);
         this.moveTowards(this.cpuMate, cpuMateBefore, coverPosition(0, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
       }
 
-      // youMate：人間（you）の打球が向かってくる番で、自分の方が you より近ければ追う
+      // youMate：人間（you）の打球が向かってくる番で、自分の方が you より近ければ追う。
+      // 自陣（z<0）を追わせるため chasePosition には side=-1 を渡す。
       const mateChasing = this.phase === 'rally' && ball.last === 'cpu'
         && isResponder(this.youMate, this.you, ball);
-      const mateTarget = mateChasing ? chasePosition(ball) : coverPosition(this.you.x, DOUBLES.NET_Z_YOU);
+      const mateTarget = mateChasing ? chasePosition(ball, -1) : coverPosition(this.you.x, DOUBLES.NET_Z_YOU);
       this.moveTowards(this.youMate, youMateBefore, mateTarget, mateChasing ? PLAYER.CPU_CHASE : PLAYER.CPU_RECOVER, dt);
     }
 

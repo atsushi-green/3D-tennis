@@ -507,6 +507,24 @@ function tossAndHit(g) {
   ok(cover.x < 0, `coverPosition mirrors away from the responder's side, x=${cover.x}`);
 }
 
+// --- ダブルス：chasePosition(ball, side) は side=-1 のとき自陣(z<0)側に鏡映しになる ---
+// (退行テスト: side を渡さないと常に cpu 陣地(z>0)基準の値を返していたため、
+//  youMate が you 陣地の落下点を追うときにネットの向こう側へ寄ってしまうバグがあった)
+{
+  const { chasePosition } = R.ai;
+  const deepCpuBall = { x: 1, y: 1, z: 9, vx: 0, vy: 1, vz: 0 };
+  const deepYouBall = { x: 1, y: 1, z: -9, vx: 0, vy: 1, vz: 0 }; // 鏡映しの入力
+  const cpuSide = chasePosition(deepCpuBall, 1);
+  const youSide = chasePosition(deepYouBall, -1);
+  ok(cpuSide.z > 0, `default/side=1 stays on the cpu side for a deep cpu-side ball, z=${cpuSide.z}`);
+  ok(youSide.z < 0, `side=-1 stays on the you side for the mirrored deep you-side ball, z=${youSide.z}`);
+  ok(Math.abs(youSide.z) === Math.abs(cpuSide.z), 'side=-1 mirrors the magnitude of side=1 for mirrored inputs');
+
+  const shallowYouBall = { x: 0, y: 1, z: -0.5, vx: 0, vy: 1, vz: 0 };
+  const youShallow = chasePosition(shallowYouBall, -1);
+  ok(youShallow.z < 0, `even a shallow you-side landing keeps the chase target on the you side, z=${youShallow.z}`);
+}
+
 // --- ダブルス：hit() は個人ごとの演出を持ちつつ、ball.last はチーム単位のまま ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
@@ -628,15 +646,71 @@ function tossAndHit(g) {
   ok(Math.abs(g.you.z - DOUBLES.NET_Z_YOU) < 0.01, `you (not receiving) waits at the net, z=${g.you.z}`);
 }
 
+// --- ダブルス：サーブ待ち中は、実際にサーブする本人をコース取りロジックで動かさない ---
+// (退行テスト: moveDoublesTeams() が phase='serve' 中も毎フレーム通常のラリー用ロジック
+//  （追う/構える）を動かしていたため、サーバーはサービススタンスからネット側へ歩いて
+//  出てしまいフットフォルトに見え、レシーブ側の2人もまだ来ていないサーブへの構えを
+//  くずされて（＝レシーブできない一因になって）いた)
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(true);
+  // team you の担当を youMate に回して、youMate がサーブする番を作る
+  g.server = 'you';
+  g.serverPartner.you = 'youMate';
+  g.newPoint();
+  ok(g.servingPlayer() === 'youMate', `precondition: youMate is serving, got ${g.servingPlayer()}`);
+  const stance = {
+    youMate: { x: g.youMate.x, z: g.youMate.z },
+    you: { x: g.you.x, z: g.you.z },
+    cpu: { x: g.cpu.x, z: g.cpu.z },
+    cpuMate: { x: g.cpuMate.x, z: g.cpuMate.z },
+  };
+  ok(stance.youMate.z < -HALF_L, `precondition: youMate starts behind the baseline, z=${stance.youMate.z}`);
+
+  // CPU_SERVE_DELAY (0.9s) が過ぎる前の複数フレームぶん進める。まだ serve() は呼ばれていない。
+  for (let i = 0; i < 30; i++) { g.movePlayers(1 / 60); }
+  ok(g.phase === 'serve', 'precondition: still waiting to serve');
+  ok(Math.abs(g.youMate.x - stance.youMate.x) < 1e-6 && Math.abs(g.youMate.z - stance.youMate.z) < 1e-6,
+    `server (youMate) stays at the serve stance while waiting to serve, got x=${g.youMate.x} z=${g.youMate.z}`);
+  ok(Math.abs(g.cpu.x - stance.cpu.x) < 1e-6 && Math.abs(g.cpu.z - stance.cpu.z) < 1e-6,
+    `receiving team (cpu) is not dragged out of its stance before the serve, got x=${g.cpu.x} z=${g.cpu.z}`);
+  ok(Math.abs(g.cpuMate.x - stance.cpuMate.x) < 1e-6 && Math.abs(g.cpuMate.z - stance.cpuMate.z) < 1e-6,
+    `receiving team (cpuMate) is not dragged out of its stance before the serve, got x=${g.cpuMate.x} z=${g.cpuMate.z}`);
+
+  // cpu チームのサーブでも同様（cpu/cpuMate どちらでも本人だけは動かさない、youMate 側の受け手も崩れない）
+  const g2 = new R.Game({ input: fakeInput, hooks: noHooks });
+  g2.start(true);
+  g2.server = 'cpu';
+  g2.serverPartner.cpu = 'cpuMate';
+  g2.newPoint();
+  ok(g2.servingPlayer() === 'cpuMate', `precondition: cpuMate is serving, got ${g2.servingPlayer()}`);
+  const stance2 = {
+    cpuMate: { x: g2.cpuMate.x, z: g2.cpuMate.z },
+    youMate: { x: g2.youMate.x, z: g2.youMate.z },
+  };
+  for (let i = 0; i < 30; i++) { g2.movePlayers(1 / 60); }
+  ok(Math.abs(g2.cpuMate.x - stance2.cpuMate.x) < 1e-6 && Math.abs(g2.cpuMate.z - stance2.cpuMate.z) < 1e-6,
+    `server (cpuMate) stays at the serve stance while waiting to serve, got x=${g2.cpuMate.x} z=${g2.cpuMate.z}`);
+  ok(Math.abs(g2.youMate.x - stance2.youMate.x) < 1e-6 && Math.abs(g2.youMate.z - stance2.youMate.z) < 1e-6,
+    `receiving team (youMate) is not dragged out of its stance before the serve, got x=${g2.youMate.x} z=${g2.youMate.z}`);
+}
+
 // --- ダブルス：フルマッチのシミュレーション（フリーズ・タイマーリークがないか） ---
 {
   const events = [];
+  // youMate の受け返しが直ったことで cpu チームと you チームの双方が「壁」のように
+  // 拾い続けられるようになった。moveX/moveZ が常に0の静止した you だと、双方が
+  // 完璧な守備をし続けて点が一切決まらない（60分回しても終わらない）退行があったため、
+  // 実際のプレイに近い「動き続ける人間」を模してテストする。
+  const input = { moveX: 0, moveZ: 0, lob: false };
   const g = new R.Game({
-    input: fakeInput,
+    input,
     hooks: { ...noHooks, call: (big, sub) => events.push(`${big}|${sub}`) },
   });
   g.start(true);
   for (let i = 0; i < 60 * 600; i++) {
+    input.moveX = Math.sin(i / 37) > 0 ? 1 : -1;
+    input.moveZ = Math.sin(i / 53) > 0 ? 1 : -1;
     if (g.phase === 'serve' && g.server === 'you') tap(g);
     if (g.phase === 'rally' && i % 6 === 0) tap(g);
     g.update(1 / 60);

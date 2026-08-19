@@ -11,17 +11,21 @@
 
   /**
    * ボールを追うときに立ちたい位置。
+   * CPU.CHASE_Z_* はもともと cpu 陣地（z>0）基準の値なので、you 陣地（z<0）の
+   * youMate が使うときは side=-1 を渡して z 方向を鏡映しにする（自陣を追わせるため）。
+   * @param {1|-1} [side] 追う選手がいる陣地。既定は 1（cpu 陣地）。
    * @returns {{x:number, z:number}}
    */
-  function chasePosition(ball) {
+  function chasePosition(ball, side = 1) {
     const landing = predictLanding(ball);
+    const behindZ = side > 0
+      ? Math.max(landing.z, CPU.CHASE_Z_MIN) + CPU.CHASE_BEHIND
+      : Math.min(landing.z, -CPU.CHASE_Z_MIN) - CPU.CHASE_BEHIND;
+    const zMin = side > 0 ? CPU.CHASE_Z_MIN : -CPU.CHASE_Z_MAX;
+    const zMax = side > 0 ? CPU.CHASE_Z_MAX : -CPU.CHASE_Z_MIN;
     return {
       x: clamp(landing.x, -CPU.CHASE_X_LIMIT, CPU.CHASE_X_LIMIT),
-      z: clamp(
-        Math.max(landing.z, CPU.CHASE_Z_MIN) + CPU.CHASE_BEHIND,
-        CPU.CHASE_Z_MIN,
-        CPU.CHASE_Z_MAX,
-      ),
+      z: clamp(behindZ, zMin, zMax),
     };
   }
 
