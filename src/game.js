@@ -23,6 +23,18 @@
   const opponent = (who) => (who === 'you' ? 'cpu' : 'you');
 
   /**
+   * サーブが狙う対角の符号（targetSign）と、打ち込む方向（dir、+1＝you→cpu向き）。
+   * serve()・beginServe()・inServiceBox() の3箇所で同じ式が必要になるので一箇所にまとめる。
+   * @param {'you'|'cpu'} serverTeam
+   * @param {1|-1} side match.serveSide（クロス/逆クロス）
+   */
+  function serveAim(serverTeam, side) {
+    const dir = serverTeam === 'you' ? 1 : -1;
+    const targetSign = serverTeam === 'you' ? -side : side;
+    return { dir, targetSign };
+  }
+
+  /**
    * カメラはベースライン後方（-z）から +z を向いているので、world の +x は画面の左に映る。
    * 入力は画面基準（右キー = +1）なので、world の x へ渡すときに反転させる。
    */
@@ -131,6 +143,8 @@
       this.recoverTimers = { cpu: 0, cpuMate: 0, youMate: 0 };
       /** 直前フレームの ball.last。変化を検知して反応遅延タイマーを起動するために使う。 */
       this.lastBallOwnerSeen = null;
+      /** 今のポイントのサーブが1本目(1)か、1本目がフォールトした後のセカンドサーブ(2)か。 */
+      this.serveNumber = 1;
     }
 
     actor(who) {
@@ -296,6 +310,26 @@
     /* ------------------------------------------------------ ポイント進行 */
 
     newPoint() {
+      this.serveNumber = 1;
+      this.beginServe();
+    }
+
+    /**
+     * フォールト（ネット／アウト）になった1本目のサーブに続けて、セカンドサーブとして
+     * トスからやり直させる。失点にはしない（サーバー・レシーバーは変わらない）。
+     * @param {string} reason 'ネット'|'アウト'（HUDのコールに使う）
+     */
+    retryServe(reason) {
+      this.beginServe(reason);
+    }
+
+    /**
+     * サーブ待ちの状態を作る共通処理。newPoint()（1本目）と retryServe()（フォールト後の
+     * セカンドサーブ）の両方から呼ぶ。タイマー・ボール・溜めをリセットし、サーバー／
+     * レシーバー（ダブルスは両者の相方も）をスタンスへ置いてから案内を出す。
+     * @param {string} [faultReason] セカンドサーブのときだけ渡す（'ネット'|'アウト'）
+     */
+    beginServe(faultReason) {
       this.clearTimers();
       this.phase = 'serve';
       this.tossActive = false;
@@ -307,10 +341,10 @@
       ball.vx = ball.vy = ball.vz = 0;
 
       this.you.charging = false;
-      this.you.chargeTime = 0; // 前のポイントの溜めを持ち越さない
+      this.you.chargeTime = 0; // 前のサーブの溜めを持ち越さない
       this.you.chargeStroke = null;
 
-      // 前のポイントの反応遅延・打球後硬直を持ち越さない（moveDoublesTeams()/moveSinglesCpu() は
+      // 前のサーブの反応遅延・打球後硬直を持ち越さない（moveDoublesTeams()/moveSinglesCpu() は
       // phase==='serve' 中は動かないので実害はないが、次のラリー開始時に混乱しないよう明示的に戻す）
       this.reactTimers.cpu = 0;
       this.reactTimers.cpuMate = 0;
@@ -325,16 +359,17 @@
       const receiverTeam = opponent(serverTeam);
       const server = this.servingPlayer();
       const receiver = this.receivingPlayer(receiverTeam, side);
+      const { targetSign } = serveAim(serverTeam, side); // serve()/inServiceBox() と同じ式
 
-      // サーバーをサービススタンスに置く（既存のサーブ位置ロジックと同じ式をチーム単位に一般化）
+      // サーバーをサービススタンスに置く（既存のサーブ位置ロジックと同じ式をチーム単位に一般化。
+      // サーバーの立ち位置は、狙う対角(targetSign)の反対サイドになる）
       const serverActor = this.actor(server);
-      serverActor.x = (serverTeam === 'you' ? side : -side) * SERVE.STANCE_X;
+      serverActor.x = -targetSign * SERVE.STANCE_X;
       serverActor.z = serverTeam === 'you' ? -HALF_L - 0.5 : HALF_L + 0.5;
-      if (server === 'you') this.you.vx = this.you.vz = 0; // 前のポイントの勢いを持ち越さない
+      if (server === 'you') this.you.vx = this.you.vz = 0; // 前のサーブの勢いを持ち越さない
 
       // レシーバーを、サーブが飛んでくる対角のボックス付近に置く（構える位置が見えるように）
       const receiverActor = this.actor(receiver);
-      const targetSign = serverTeam === 'you' ? -side : side; // serve() の狙いと同じ式
       receiverActor.x = targetSign * RETURN.STANCE_X;
       receiverActor.z = receiverTeam === 'you' ? -HALF_L - RETURN.BACK : HALF_L + RETURN.BACK;
       if (receiver === 'you') this.you.vx = this.you.vz = 0;
@@ -344,15 +379,18 @@
       }
 
       if (server === 'you') {
-        this.hooks.call('サーブ', '←→ でコース選択 ／ Space 押しっぱなしで打つ');
+        this.hooks.call(
+          faultReason ? 'セカンドサーブ' : 'サーブ',
+          faultReason ? `${faultReason} — もう一度` : '←→ でコース選択 ／ Space 押しっぱなしで打つ',
+        );
       } else if (server === 'youMate') {
         // 人間のチームだが、今回は相方の番。人間は何もしなくてよい
-        this.hooks.call('パートナーのサーブ', '');
+        this.hooks.call(faultReason ? 'パートナーのセカンドサーブ' : 'パートナーのサーブ', faultReason || '');
         this.after(TIMING.CPU_SERVE_DELAY, () => {
           if (this.phase === 'serve') this.serve('youMate');
         });
       } else {
-        this.hooks.call('リターン', 'CPU のサーブ');
+        this.hooks.call(faultReason ? 'セカンドサーブ' : 'リターン', faultReason ? `${faultReason}／CPU` : 'CPU のサーブ');
         this.after(TIMING.CPU_SERVE_DELAY, () => {
           if (this.phase === 'serve') this.serve(server);
         });
@@ -406,13 +444,12 @@
     serve(who) {
       const ball = this.ball;
       const team = TEAM_OF[who];
-      const dir = team === 'you' ? 1 : -1;   // 打ち込む方向
       const side = this.match.serveSide;
+      const { dir, targetSign } = serveAim(team, side);
       // プレイヤーはトス中の実際の高さで打つ。CPU はトス演出を挟まないので固定の打点高さを使う。
       const contactY = who === 'you' ? Math.max(ball.y, SERVE.BALL_Y) : SERVE.TOSS_Y;
       const from = { x: ball.x, y: contactY, z: ball.z };
       // サービスはコートの対角へ入れる。狙う横位置（コース）はプレイヤーのみ選べる
-      const targetSign = team === 'you' ? -side : side;
       const magnitude = who === 'you'
         ? this.serveAimMagnitude(targetSign)
         : rand(SERVE.AIM_X_MIN, SERVE.AIM_X_MAX);
@@ -896,7 +933,8 @@
         ball.vz *= -0.18;
         ball.vx *= 0.3;
         ball.vy *= 0.3;
-        this.endPoint(opponent(ball.last), 'ネット');
+        if (this.serveInFlight) this.serveFault('ネット');
+        else this.endPoint(opponent(ball.last), 'ネット');
         return;
       }
 
@@ -920,10 +958,18 @@
       this.hooks.sound('bounce');
 
       if (ball.bounces === 1) {
+        // サーブがまだ一度も返されていない間の1バウンド目は、通常のラリーの着地判定
+        // （コート全体）ではなく、サービスボックスに入ったかどうかで判定する。
+        if (this.serveInFlight) {
+          if (this.inServiceBox(ball)) return false;
+          this.serveFault('アウト');
+          return true;
+        }
         const ownSide = (ball.last === 'you' && ball.z < 0) || (ball.last === 'cpu' && ball.z > 0);
         // ダブルスはコート幅がダブルスサイドラインまで広がる（サービスボックスの幅は変えない）
         const rallyHalfWidth = this.doubles ? COURT.DW / 2 : HALF_W;
-        const inCourt = Math.abs(ball.x) <= rallyHalfWidth + 0.03 && Math.abs(ball.z) <= HALF_L + 0.03;
+        const inCourt = Math.abs(ball.x) <= rallyHalfWidth + COURT.LINE_SLACK
+          && Math.abs(ball.z) <= HALF_L + COURT.LINE_SLACK;
         if (ownSide || !inCourt) {
           this.endPoint(opponent(ball.last), ownSide ? '相手コートに届かず' : 'アウト');
           return true;
@@ -934,6 +980,37 @@
       // 2バウンド＝返せなかった
       this.endPoint(ball.last, 'ツーバウンド');
       return true;
+    }
+
+    /**
+     * このバウンド位置が、今のサーブが入るべきサービスボックス（ネット〜サービスライン、
+     * センターサービスラインより狙った側）に収まっているか。ダブルスでもシングルスと
+     * 同じ幅を使う（実際のルール通り、サービスボックスの幅はダブルスでも広がらない）。
+     */
+    inServiceBox(ball) {
+      const { dir, targetSign } = serveAim(this.server, this.match.serveSide);
+      const zOk = dir > 0
+        ? ball.z > 0 && ball.z <= COURT.SERVICE + COURT.LINE_SLACK
+        : ball.z < 0 && ball.z >= -(COURT.SERVICE + COURT.LINE_SLACK);
+      const xOk = targetSign > 0
+        ? ball.x >= -COURT.LINE_SLACK && ball.x <= HALF_W + COURT.LINE_SLACK
+        : ball.x <= COURT.LINE_SLACK && ball.x >= -(HALF_W + COURT.LINE_SLACK);
+      return zOk && xOk;
+    }
+
+    /**
+     * サーブがフォールト（ネット／アウト）になったとき。1本目ならセカンドサーブとして
+     * トスからやり直させ（失点にしない）、2本目（既にセカンドサーブだった）ならダブル
+     * フォルトとして相手に得点を与える。
+     * @param {string} reason 'ネット'|'アウト'
+     */
+    serveFault(reason) {
+      if (this.serveNumber === 1) {
+        this.serveNumber = 2;
+        this.retryServe(reason);
+      } else {
+        this.endPoint(opponent(this.server), 'ダブルフォルト');
+      }
     }
 
     checkSwings() {

@@ -202,6 +202,71 @@ function tossAndHit(g, holdFrames = 0) {
   ok(g.serveInFlight === false, 'returning the serve clears serveInFlight');
 }
 
+// --- inServiceBox(): サービスボックス（ネット〜サービスライン、狙った側）の内外判定 ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(); // server='you', serveSide=-1 なので targetSign=+1 側のボックスを狙う
+
+  ok(g.inServiceBox({ x: 1.0, z: 3.0 }) === true, 'inside the box (you serving) is in');
+  ok(g.inServiceBox({ x: 1.0, z: COURT.SERVICE + 1 }) === false,
+    'past the service line (you serving) is out, even though it is well inside the full court');
+  ok(g.inServiceBox({ x: HALF_W + 1, z: 3.0 }) === false, 'past the sideline (you serving) is out');
+  ok(g.inServiceBox({ x: -1.0, z: 3.0 }) === false, 'wrong half (crossing the center line) is out');
+  ok(g.inServiceBox({ x: 1.0, z: -3.0 }) === false, "didn't clear the net (own side) is out");
+
+  g.server = 'cpu'; // 反対チームのサーブでも符号が正しく反転すること（cpu狙いは targetSign=side）
+  const cpuTargetSign = g.match.serveSide; // -1 のまま（フレッシュな試合）
+  ok(g.inServiceBox({ x: cpuTargetSign * 1.0, z: -3.0 }) === true, 'inside the box (cpu serving) is in');
+  ok(g.inServiceBox({ x: cpuTargetSign * 1.0, z: 3.0 }) === false, "didn't clear the net (cpu's own side) is out");
+}
+
+// --- サーブがフォールト（ネット／アウト）になっても即失点にはせず、1本目はセカンドサーブでやり直せる ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  ok(g.serveNumber === 1, 'precondition: first serve');
+
+  g.serve('you');
+  ok(g.phase === 'rally' && g.serveInFlight === true, 'precondition: serve is in flight');
+
+  // コート全体には入っているが、サービスラインより深く着地＝サービスボックスの外（アウト）
+  g.ball.bounces = 0;
+  g.ball.x = 1.0; g.ball.y = 0; g.ball.vy = -1; g.ball.z = COURT.SERVICE + 1;
+  const ended = g.bounce();
+  ok(ended === true, 'a serve landing past the service line ends this attempt (fault)');
+  ok(g.serveNumber === 2, 'first fault moves to the second serve');
+  ok(g.phase === 'serve', 'does not end the point, goes back to waiting to serve');
+  ok(g.ball.live === false, 'ball is reset, not mid-flight');
+  ok(g.server === 'you', 'server stays the same after a fault');
+  ok(g.match.points.you === 0 && g.match.points.cpu === 0, 'no point is awarded on a single fault');
+
+  // セカンドサーブがネットに掛かる（2本目のフォールト）＝ダブルフォルトで相手の得点
+  g.serve('you');
+  ok(g.serveInFlight === true, 'precondition: second serve is in flight');
+  g.ball.x = 1; g.ball.z = -0.01; g.ball.y = 0.3; g.ball.vx = 0; g.ball.vy = 0; g.ball.vz = 5;
+  g.stepBall(0.05);
+  ok(g.phase === 'over', 'a fault on the second serve ends the point (double fault)');
+  ok(g.match.points.cpu === 1, 'double fault awards the point to the receiver');
+  ok(g.match.points.you === 0, "the server doesn't score on a double fault");
+}
+
+// --- 1本目がフォールトしても、2本目が入れば普通にラリーへ進む ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.serve('you');
+  g.ball.bounces = 0;
+  g.ball.x = 1.0; g.ball.y = 0; g.ball.vy = -1; g.ball.z = COURT.SERVICE + 1; // 1本目アウト
+  g.bounce();
+  ok(g.serveNumber === 2, 'precondition: on the second serve');
+
+  tossAndHit(g); // セカンドサーブを普通に打つ
+  ok(g.phase === 'rally', 'a valid second serve starts the rally as normal');
+  const L = R.physics.predictLanding(g.ball);
+  ok(!L.net && Math.abs(L.x) <= HALF_W && L.z > 0 && L.z <= COURT.SERVICE,
+    'the second serve itself lands in the service box like a first serve would');
+}
+
 // --- 移動は加速度ベース：急に最高速にならず、離しても急停止しない（滑るような自然さ） ---
 {
   const input = { moveX: 0, moveZ: 1, lob: false };
