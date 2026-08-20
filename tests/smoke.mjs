@@ -71,6 +71,33 @@ function tossAndHit(g, holdFrames = 0) {
   ok(inBox === 200, `serves in the service box: ${inBox}/200`);
 }
 
+// --- ワイド×フル溜めのサーブは、フォールトにならずサイドラインまで十分な余白を残す ---
+// (外方向に強いサーブを打つとフォールトになりやすい問題の調整。物理ステップの粒度上、
+// 着地判定はステップ後の位置をそのまま使うため速い球ほど着地点が数cm外側にずれうる。
+// AIM_WIDE_MAX と CLEARANCE を調整し、ワイド×フル溜めでも安定してサイドラインから
+// 余白を残して入ることを検証する)
+{
+  const SWEET_FRAMES = Math.round(SERVE.CHARGE_SWEET_T * 60);
+  const SIDELINE_SAFETY_MARGIN = 0.15; // これ未満だと「ぎりぎり」とみなす
+  const input = { moveX: -1, moveZ: 0, lob: false }; // aim===targetSign(+1) でワイド狙い
+  let faults = 0;
+  let minMargin = Infinity;
+  const N = 300;
+  for (let i = 0; i < N; i++) {
+    const g = new R.Game({ input, hooks: noHooks });
+    g.started = true;
+    g.newPoint();
+    tossAndHit(g, SWEET_FRAMES);
+    ok(g.you.swingCharge > 0.85, `precondition: released at the sweet spot for full power, got ${g.you.swingCharge}`);
+    const L = R.physics.predictLanding(g.ball);
+    if (L.net || Math.abs(L.x) > HALF_W || L.z <= 0 || L.z > COURT.SERVICE) faults++;
+    minMargin = Math.min(minMargin, HALF_W - Math.abs(L.x));
+  }
+  ok(faults === 0, `wide full-power serves don't fault: ${faults}/${N}`);
+  ok(minMargin >= SIDELINE_SAFETY_MARGIN,
+    `wide full-power serves keep at least ${SIDELINE_SAFETY_MARGIN}m from the sideline, min observed=${minMargin.toFixed(3)}`);
+}
+
 // --- サーブは Space を押しっぱなしにする1ジェスチャー（押した瞬間にトス、離した瞬間に打つ） ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
