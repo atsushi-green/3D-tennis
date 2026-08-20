@@ -71,6 +71,7 @@
         swing: 0, anim: 0, speed: 0, stroke: 'forehand', prep: null,
         charging: false, chargeTime: 0, swingCharge: 0, // Space 押しっぱなしのテイクバック
         chargeFrac: 0, // 溜めている間だけ 0〜1 で増える、テイクバックの深さ用（chargeTime のポーズ表示版）
+        chargeStroke: null, // chargeStart() の瞬間に固定するフォア/バック。溜めている間は変えない
       };
       this.cpu = {
         x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, stroke: 'forehand', prep: null,
@@ -174,6 +175,10 @@
       } else if (this.phase === 'rally') {
         this.you.charging = true;
         this.you.chargeTime = 0;
+        // フォア/バックはテイクバックを始めた瞬間（＝今)のボールとの位置関係で決め、
+        // 溜めている間ボールや自分が動いても変えない。毎フレーム判定し直すと、溜めている
+        // 最中に左右が入れ替わってテイクバックの向きが急に反転して見えることがあった。
+        this.you.chargeStroke = classifyStroke('you', this.ball, this.you);
       }
     }
 
@@ -221,6 +226,7 @@
 
       this.you.charging = false;
       this.you.chargeTime = 0; // 前のポイントの溜めを持ち越さない
+      this.you.chargeStroke = null;
 
       // 前のポイントの反応遅延を持ち越さない（moveDoublesTeams()/moveSinglesCpu() は
       // phase==='serve' 中は動かないので実害はないが、次のラリー開始時に混乱しないよう明示的に戻す）
@@ -374,7 +380,10 @@
       // ball.x/z はまだ打点のまま（solveShot が書き換えるのは vx/vy/vz だけ）なので、
       // ここで打点とプレイヤー位置からフォア/バックを判定できる。shot の計算より前に
       // 必要（playerShot() がタイミングのずれを出すのに使う）。
-      const stroke = classifyStroke(who, ball, player);
+      // 人間はテイクバックを始めた瞬間に chargeStart() が固定した向きをそのまま使う。
+      // ここで改めて判定すると、溜めている間にボールと自分の位置関係が変わった場合、
+      // テイクバックで見せていた向きと実際に振る向きがずれてしまう。
+      const stroke = (who === 'you' && this.you.chargeStroke) || classifyStroke(who, ball, player);
 
       // AI（cpu/cpuMate は人間の逆をつきつつ you 陣地(z<0)へ、youMate はダブルスで唯一の
       // AI仲間なので相手チームの主力 cpu の逆をつきつつ cpu 陣地(z>0)へ）。
@@ -540,8 +549,9 @@
         this.cpuMate.prep = null;
         return;
       }
+      // 溜めている間は chargeStart() で固定した向きを使い続ける（毎フレーム判定し直さない）
       this.you.prep = this.you.charging
-        ? classifyStroke('you', this.ball, this.you)
+        ? this.you.chargeStroke
         : this.computePrep('you', PLAYER.PREP_REACH);
       this.cpu.prep = this.computePrep('cpu', PLAYER.CPU_PREP_REACH);
       this.youMate.prep = this.doubles ? this.computePrep('youMate', PLAYER.CPU_PREP_REACH) : null;
