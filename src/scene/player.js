@@ -146,10 +146,16 @@
    * @param {boolean} [tossing] トス中（打つ前）かどうか。サーブの構えを出す
    * @param {'forehand'|'backhand'|null} [prep] 打つ前のテイクバック。まだ振っていない
    *   （anim<=0）間、ボールがどちらの打点に来そうかに応じてラケットを引いておく。
-   *   スイング開始時の角度（GROUND_START）と同じ角度なので、実際に振り始めても
-   *   ポーズが飛ばずに繋がる。
+   * @param {number} [chargeFrac] Space を溜めている間だけ 0〜1 で伸びる値。溜めるほど
+   *   GROUND_START からさらに CHARGE_PULL だけ深くテイクバックし、離した瞬間との
+   *   落差で「今しっかり溜めている」ことが分かるようにする。
+   * @param {number} [swingCharge] 振り始めた瞬間に固定される溜め量(0〜1)。スイング中
+   *   （anim>0）は、テイクバックが実際にどこまで深く入っていたか（＝chargeFrac の最終値）
+   *   から弧を始めるのに使う。ここを chargeFrac にすると振っている間に charging が
+   *   false に戻って 0 に落ち、テイクバック位置に飛んで見えてしまうため、release() の
+   *   瞬間に固定される swingCharge を使い続ける。
    */
-  scene3d.setSwingPose = function setSwingPose(player, anim, stroke, tossing, prep) {
+  scene3d.setSwingPose = function setSwingPose(player, anim, stroke, tossing, prep, chargeFrac, swingCharge) {
     const arm = player.userData.arm;
     const torso = player.userData.gait.torso;
 
@@ -158,7 +164,8 @@
         arm.rotation.y = 0;
         arm.rotation.z = SWING.SERVE_READY_Z;
       } else if (prep) {
-        arm.rotation.y = mirrorGroundAngle(SWING.GROUND_START, prep === 'backhand');
+        const pullBack = SWING.GROUND_START - (chargeFrac || 0) * SWING.CHARGE_PULL;
+        arm.rotation.y = mirrorGroundAngle(pullBack, prep === 'backhand');
         arm.rotation.z = 0;
       } else {
         arm.rotation.y = SWING.REST_Y;
@@ -178,7 +185,11 @@
     }
 
     const backhand = stroke === 'backhand';
-    arm.rotation.y = mirrorGroundAngle(SWING.GROUND_START + progress * SWING.GROUND_SWEEP, backhand);
+    // テイクバックが溜め量ぶん深く入っていた分だけ、始点をそこに合わせて弧を広げる
+    // （終点＝フォロースルーは GROUND_START+GROUND_SWEEP のまま揃える）。
+    const start = SWING.GROUND_START - (swingCharge || 0) * SWING.CHARGE_PULL;
+    const sweep = SWING.GROUND_SWEEP + (swingCharge || 0) * SWING.CHARGE_PULL;
+    arm.rotation.y = mirrorGroundAngle(start + progress * sweep, backhand);
     arm.rotation.z = 0;
     // sin カーブでひねって戻す（構え→打点→フォロースルーで元の向きに近づく）
     torso.rotation.y = (backhand ? -1 : 1) * SWING.TORSO_TWIST * Math.sin(progress * Math.PI);

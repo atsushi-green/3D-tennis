@@ -70,6 +70,7 @@
         x: 0, z: -HALF_L - 0.6, vx: 0, vz: 0, // vx/vz は実速度（加速度で目標速度に近づける）
         swing: 0, anim: 0, speed: 0, stroke: 'forehand', prep: null,
         charging: false, chargeTime: 0, swingCharge: 0, // Space 押しっぱなしのテイクバック
+        chargeFrac: 0, // 溜めている間だけ 0〜1 で増える、テイクバックの深さ用（chargeTime のポーズ表示版）
       };
       this.cpu = {
         x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, stroke: 'forehand', prep: null,
@@ -527,6 +528,11 @@
      * （＝打つ意思がすでに明確なため）。
      */
     updatePrep() {
+      // Space を溜めている間だけ 0〜1 で伸びる、テイクバックの深さ表示用の値。
+      // 打つ・トスするなど他の文脈に移ったら（charging が false に戻ったら）即座に引っ込める。
+      this.you.chargeFrac = this.you.charging
+        ? clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1)
+        : 0;
       if (this.phase !== 'rally') {
         this.you.prep = null;
         this.cpu.prep = null;
