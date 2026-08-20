@@ -41,20 +41,23 @@ const { HALF_W, HALF_L, COURT, PLAYER, SERVE } = R.config;
 const fakeInput = { moveX: 0, moveZ: 0, lob: false };
 const noHooks = { sound() {}, call() {}, clearCall() {}, score() {} };
 
-/** 旧 g.swing() 相当：即座に離す（溜め時間0）タップ。1回の Space 押下を表す。 */
+/** 即座に離す（溜め時間0）タップ。1回の Space 押下＋即離しを表す。 */
 function tap(g) {
   g.chargeStart();
   g.chargeRelease();
 }
 
-/** 1回目 Space でトス、しばらく待って2回目 Space で打つ、を模した実際のフロー */
-function tossAndHit(g) {
-  tap(g);
-  for (let f = 0; f < 12; f++) g.update(1 / 60);
-  tap(g);
+/**
+ * Space を押しっぱなしにしてサーブする、を模した実際のフロー。
+ * 押下と同時にトス＋テイクバックの溜めが始まり、holdFrames ぶん待ってから離す＝打つ。
+ */
+function tossAndHit(g, holdFrames = 0) {
+  g.chargeStart(); // トスとチャージを同時に開始
+  for (let f = 0; f < holdFrames; f++) g.update(1 / 60);
+  g.chargeRelease(); // 離した瞬間に打つ
 }
 
-// --- serve lands in the service box（実際の「トス→打つ」の2段階を通す） ---
+// --- serve lands in the service box（Space を押しっぱなしにして離す、を通す） ---
 {
   let inBox = 0;
   for (let i = 0; i < 200; i++) {
@@ -68,35 +71,38 @@ function tossAndHit(g) {
   ok(inBox === 200, `serves in the service box: ${inBox}/200`);
 }
 
-// --- サーブは2段階（1回目 Space でトス、2回目で打つ） ---
+// --- サーブは Space を押しっぱなしにする1ジェスチャー（押した瞬間にトス、離した瞬間に打つ） ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start();
   ok(!g.tossActive && !g.ball.live, 'precondition: not tossed yet');
 
-  tap(g);
-  ok(g.tossActive === true, '1st Space starts the toss');
+  g.chargeStart();
+  ok(g.tossActive === true, 'pressing Space starts the toss');
+  ok(g.you.charging === true, 'the same press also starts charging the takeback');
   ok(g.ball.live === false, 'ball is not live during the toss (no rally physics)');
   ok(g.ball.vy > 0, 'toss ball moves upward');
   ok(g.phase === 'serve', 'still in serve phase during the toss');
 
-  tap(g);
-  ok(g.tossActive === false, '2nd Space ends the toss');
-  ok(g.ball.live === true, 'ball becomes live after the hit');
-  ok(g.phase === 'rally', 'phase moves to rally after the hit');
+  g.chargeRelease();
+  ok(g.tossActive === false, 'releasing Space ends the toss');
+  ok(g.ball.live === true, 'ball becomes live after releasing');
+  ok(g.phase === 'rally', 'phase moves to rally after releasing');
 }
 
-// --- トスを打たずに待つと自動でリセットされる（フォルト扱いにはしない） ---
+// --- Space を離さずに待ちすぎると、トスが落ちてきて自動でリセットされる（フォルト扱いにはしない） ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start();
-  tap(g);
+  g.chargeStart(); // トス＆チャージ開始。まだ離さない
   ok(g.tossActive === true, 'tossed');
+  ok(g.you.charging === true, 'precondition: still holding Space');
   for (let i = 0; i < 180 && g.tossActive; i++) g.update(1 / 60); // 3秒＝落ちてくるまで十分待つ
-  ok(g.tossActive === false, 'toss auto-resets after falling without a hit');
+  ok(g.tossActive === false, 'toss auto-resets after falling without releasing');
   ok(g.ball.live === false, 'ball is not live after an unfulfilled toss');
   ok(g.phase === 'serve', 'still serve phase, can retry');
   ok(Math.abs(g.ball.y - SERVE.BALL_Y) < 0.01, `ball returns to hand height, y=${g.ball.y}`);
+  ok(g.you.charging === false, 'holding through the auto-reset cancels the charge');
 }
 
 // --- 自分のサーブ中はフットフォルトになる位置へ動けない ---
@@ -133,7 +139,7 @@ function tossAndHit(g) {
   const input = { moveX: 0, moveZ: 0, lob: false };
   const g = new R.Game({ input, hooks: noHooks });
   g.start();
-  tap(g); // トス
+  g.chargeStart(); // Space 押しっぱなし開始＝トス（まだ離さない）
   ok(g.tossActive === true, 'precondition: tossing');
   const before = { x: g.you.x, z: g.you.z };
 
@@ -146,8 +152,8 @@ function tossAndHit(g) {
   for (let i = 0; i < 20; i++) g.movePlayers(1 / 60);
   ok(g.you.x === before.x && g.you.z === before.z, 'still frozen after several frames of held input');
 
-  // 打った瞬間から通常どおり動ける
-  tap(g); // 2回目の Space で打つ
+  // 離した瞬間から通常どおり動ける
+  g.chargeRelease();
   ok(g.tossActive === false, 'precondition: served');
   g.movePlayers(1 / 60);
   ok(g.you.x !== before.x || g.you.z !== before.z, 'player can move again once the toss has been hit');
@@ -177,8 +183,7 @@ function tossAndHit(g) {
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start();
-  tap(g); // トス
-  tap(g); // 打つ（サーブ）
+  tap(g); // Space 押して即離す＝トスして打つ
   ok(g.serveInFlight === true, 'serve sets serveInFlight');
   ok(g.ball.last === 'you', 'precondition: served by team you');
 
@@ -382,19 +387,15 @@ function tossAndHit(g) {
   const tapLanding = () => {
     const g = new R.Game({ input: fakeInput, hooks: noHooks });
     g.start();
-    tap(g); // トス
-    tap(g); // 即リリースで打つ（溜め0）
+    tap(g); // Space 押して即離す＝トスして0溜めで打つ
     return g.ball;
   };
   const chargedLanding = () => {
     const g = new R.Game({ input: fakeInput, hooks: noHooks });
     g.start();
-    tap(g); // トス
-    g.chargeStart();
-    // MAX_TIME ぶんだけ溜める（トスの滞空時間 ~0.77s より短いので、トスを逃さず打てる）
+    // MAX_TIME ぶんだけ押しっぱなしにしてから離す（トスの滞空時間 ~0.77s より短いので、トスを逃さず打てる）
     const frames = Math.round(R.config.CHARGE.MAX_TIME * 60);
-    for (let i = 0; i < frames; i++) g.update(1 / 60);
-    g.chargeRelease();
+    tossAndHit(g, frames);
     return g.ball;
   };
   const tapBall = tapLanding();
@@ -410,8 +411,7 @@ function tossAndHit(g) {
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start();
-  tap(g); // トス
-  g.chargeStart();
+  g.chargeStart(); // トス＆チャージ開始。まだ離さない
   for (let i = 0; i < 10; i++) g.update(1 / 60);
   ok(g.you.charging === true, 'precondition: charging mid-toss');
 
@@ -508,7 +508,9 @@ function tossAndHit(g) {
 
   tossAndHit(g);
   ok(g.ball.impact > 0 && g.ball.impact <= FX.IMPACT_DURATION, `serve sets ball.impact, got ${g.ball.impact}`);
-  for (let i = 0; i < 60; i++) g.update(1 / 60); // 1秒待てば必ず減衰しきる
+  // 減衰しきるのに十分だが、サーブが相手コートに届いて CPU が打ち返す（＝新しい impact が
+  // 発火する）よりは短い時間だけ待つ（SERVE.T=0.72s より確実に短い20フレーム=0.33秒）。
+  for (let i = 0; i < 20; i++) g.update(1 / 60);
   ok(g.ball.impact === 0, `ball.impact decays back to 0, got ${g.ball.impact}`);
 
   g.ball.x = 1.5; g.ball.y = 1; g.ball.z = -2;

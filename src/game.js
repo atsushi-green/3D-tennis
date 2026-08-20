@@ -112,7 +112,7 @@
       this.doubles = false;
       /** ダブルスの AI パートナー(youMate)に指示する定位置。'net'（前へ）か 'back'（下がれ）。 */
       this.youMateFormation = 'net';
-      /** true の間、ボールはトス中（重力で上下するだけ）。2回目の Space で打つまで待つ。 */
+      /** true の間、ボールはトス中（重力で上下するだけ）。Space を離して打つまで待つ。 */
       this.tossActive = false;
       /** true の間はサーブがまだ一度も返球されていない＝ノーバウンドで打ち返してはいけない。 */
       this.serveInFlight = false;
@@ -194,27 +194,29 @@
 
     /**
      * Space / クリックを押した瞬間。
-     * サーブの1回目（トス前）は即トス。それ以外（トス中の2回目、ラリー中）は
-     * テイクバックを溜め始める。実際に打つのは chargeRelease()（離した瞬間）。
+     * サーブは Space を押しっぱなしにする間トスが上がり続け、離した瞬間に打つ
+     * （＝トス開始とテイクバックの溜め開始は同じ1回の押下）。ラリー中はテイクバックを
+     * 溜め始める。実際に打つのは chargeRelease()（離した瞬間）。
      */
     chargeStart() {
       // 自分がサーブする番（＝ダブルスで味方が回ってきているときは対象外）のときだけ反応する
       const myServe = this.phase === 'serve' && this.servingPlayer() === 'you';
       if (myServe && !this.tossActive) {
         this.tossBall();
+        this.you.charging = true;
+        this.you.chargeTime = 0;
         return;
       }
-      if (myServe && this.tossActive) {
+      if ((myServe && this.tossActive) || this.phase === 'rally') {
         this.you.charging = true;
         this.you.chargeTime = 0;
-      } else if (this.phase === 'rally') {
-        this.you.charging = true;
-        this.you.chargeTime = 0;
-        // フォア/バックはテイクバックを始めた瞬間、ボールの仮想延長線（今の速度のまま
-        // 届いたときの左右関係）と自分の位置関係で決め、溜めている間は変えない。
-        // 毎フレーム判定し直すと、溜めている最中に左右が入れ替わってテイクバックの
-        // 向きが急に反転して見えることがあった。
-        this.you.chargeStroke = classifyStroke('you', this.ball, this.you);
+        if (this.phase === 'rally') {
+          // フォア/バックはテイクバックを始めた瞬間、ボールの仮想延長線（今の速度のまま
+          // 届いたときの左右関係）と自分の位置関係で決め、溜めている間は変えない。
+          // 毎フレーム判定し直すと、溜めている最中に左右が入れ替わってテイクバックの
+          // 向きが急に反転して見えることがあった。
+          this.you.chargeStroke = classifyStroke('you', this.ball, this.you);
+        }
       }
     }
 
@@ -310,7 +312,7 @@
       }
 
       if (server === 'you') {
-        this.hooks.call('サーブ', '←→ でコース選択 ／ Space でトス');
+        this.hooks.call('サーブ', '←→ でコース選択 ／ Space 押しっぱなしで打つ');
       } else if (server === 'youMate') {
         // 人間のチームだが、今回は相方の番。人間は何もしなくてよい
         this.hooks.call('パートナーのサーブ', '');
@@ -366,7 +368,7 @@
       ball.vz = 0;
       ball.vy = Math.sqrt(2 * Math.abs(PHYSICS.GRAVITY) * (SERVE.TOSS_PEAK - SERVE.BALL_Y));
       this.tossActive = true;
-      this.hooks.call('トス', 'Space で打つ！');
+      this.hooks.call('トス', 'いいタイミングで Space を離す！');
     }
 
     serve(who) {
@@ -811,7 +813,7 @@
           // 打たずに落ちてきた。トスをやり直せるようにリセットする（フォルトにはしない）
           this.tossActive = false;
           this.placeServeBall();
-          this.hooks.call('サーブ', '←→ でコース選択 ／ Space でトス');
+          this.hooks.call('サーブ', '←→ でコース選択 ／ Space 押しっぱなしで打つ');
         }
         return;
       }
