@@ -7,7 +7,7 @@
 
   const {
     BOUNDS, CHARGE, COURT, CPU, DOUBLES, FX, HALF_L, HALF_W, PHYSICS, PLAYER, RETURN, SERVE, SHOT,
-    TIMING, TIMING_AIM,
+    TIMING, TIMING_AIM, VOLLEY,
   } = RallyOne.config;
   const {
     approach, approach2D, clamp, lerp, rand, signOr,
@@ -478,7 +478,11 @@
       // 高くて緩いボール(SMASH_MIN_Y以上)を、しっかり溜めてから(SMASH_MIN_CHARGE以上)離すと
       // スマッシュになる。フォア/バックの区別はなく、専用の振り下ろしモーション＋強打になる。
       const isSmash = who === 'you' && ball.y >= PLAYER.SMASH_MIN_Y && charge >= PLAYER.SMASH_MIN_CHARGE;
-      const stroke = isSmash ? 'smash' : baseStroke;
+      // サービスラインより前（ネット寄り）で、ノーバウンドの球を返すときはボレー。
+      // フォア/バックの区別はテイクバックのモーションにだけ使い、実際の威力・角度は
+      // 溜めではなくボールとの左右距離で決まる（playerShot() 側で計算する）。
+      const isVolley = who === 'you' && !isSmash && ball.bounces === 0 && player.z > -COURT.SERVICE;
+      const stroke = isSmash ? 'smash' : isVolley ? `volley-${baseStroke}` : baseStroke;
 
       // AI（cpu/cpuMate は人間の逆をつきつつ you 陣地(z<0)へ、youMate はダブルスで唯一の
       // AI仲間なので相手チームの主力 cpu の逆をつきつつ cpu 陣地(z>0)へ）。
@@ -512,7 +516,9 @@
      * 引きつけて近くで打つほど「流れる」。フォアとバックでは体を横切る向きが逆なので、
      * 引っ張る方向も逆になる（pullDir で吸収する）。ロブは対象外。
      * スマッシュはフォア/バックの区別も打点タイミングのずれもなく、←→ でだけ狙う。
-     * @param {'forehand'|'backhand'|'smash'} [stroke]
+     * ボレー（'volley-forehand'|'volley-backhand'）も溜めの影響は受けず、代わりに
+     * ボールとプレイヤーの左右距離（サービスラインより前で拾った場合のみ）で威力・角度が決まる。
+     * @param {'forehand'|'backhand'|'smash'|'volley-forehand'|'volley-backhand'} [stroke]
      * @param {number} [contactDz] 打点の z - プレイヤーの z（前にあるほど大きい）
      */
     playerShot(stroke = 'forehand', contactDz = TIMING_AIM.NEUTRAL_DZ) {
@@ -525,6 +531,22 @@
         return {
           target: { x: baseX, y: BALL_R, z: rand(SHOT.SMASH_Z, SHOT.SMASH_Z + SHOT.DRIVE_Z_SPREAD) },
           flight: SHOT.SMASH_T,
+        };
+      }
+
+      if (stroke === 'volley-forehand' || stroke === 'volley-backhand') {
+        // 真正面（距離0）や伸びきり（距離が離れすぎ）は普通のブロック、フォア/バック側に
+        // 程よく離れているときだけ鋭く角度をつけた決め球になる（左右どちら側でも対称）。
+        const sideDist = Math.abs(this.ball.x - this.you.x);
+        const sharpness = clamp(1 - Math.abs(sideDist - VOLLEY.SWEET_DIST) / VOLLEY.WINDOW, 0, 1);
+        const dir = aim !== 0 ? Math.sign(aim) : -signOr(this.you.x, 1);
+        return {
+          target: {
+            x: dir * lerp(VOLLEY.BLOCK_X, VOLLEY.ANGLE_X, sharpness),
+            y: BALL_R,
+            z: lerp(VOLLEY.BLOCK_Z, VOLLEY.ANGLE_Z, sharpness) + rand(0, SHOT.DRIVE_Z_SPREAD),
+          },
+          flight: lerp(VOLLEY.BLOCK_T, VOLLEY.ANGLE_T, sharpness),
         };
       }
 

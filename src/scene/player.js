@@ -136,16 +136,17 @@
   }
 
   /**
-   * スイングの残り時間から腕の角度を決める。4種類のポーズを軸を分けて切り替える：
+   * スイングの残り時間から腕の角度を決める。5種類のポーズを軸を分けて切り替える：
    * - フォアハンド／バックハンド: rotation.y（横振り）。mirrorGroundAngle() で左右だけを
    *   鏡映しするので、バックハンドでもテイクバック→打点→フォロースルーが正しい前後の
    *   向きのまま、体の逆サイドで振られる。
    * - サーブ: rotation.z（縦振り）。トス中は構え、打った瞬間から真上→前へ振り下ろす。
    * - スマッシュ: サーブと同じ rotation.z だが、トスの構えを経ずに振りかぶった位置から
    *   鋭く振り下ろす（フォア/バックの区別はない）。
+   * - ボレー: フォア/バックと同じ rotation.y だが、テイクバックがほとんどない短いパンチ。
    * @param {THREE.Group} player
    * @param {number} anim 残り時間（秒）。0 なら構え／トスの姿勢
-   * @param {'forehand'|'backhand'|'serve'|'smash'} [stroke]
+   * @param {'forehand'|'backhand'|'serve'|'smash'|'volley-forehand'|'volley-backhand'} [stroke]
    * @param {boolean} [tossing] トス中（打つ前）かどうか。サーブの構えを出す
    * @param {'forehand'|'backhand'|null} [prep] 打つ前のテイクバック。まだ振っていない
    *   （anim<=0）間、ボールがどちらの打点に来そうかに応じてラケットを引いておく。
@@ -193,6 +194,19 @@
       arm.rotation.y = 0;
       arm.rotation.z = SWING.SMASH_START_Z + progress * (SWING.SMASH_FOLLOW_Z - SWING.SMASH_START_Z);
       torso.rotation.y = 0;
+      return;
+    }
+
+    if (stroke === 'volley-forehand' || stroke === 'volley-backhand') {
+      // グラウンドストロークと同じ横振り(rotation.y)の系統だが、テイクバックをほとんど
+      // 取らない短いパンチ（VOLLEY_START/SWEEP は GROUND_START/SWEEP よりずっと小さい）。
+      const backhandVolley = stroke === 'volley-backhand';
+      arm.rotation.y = mirrorGroundAngle(
+        SWING.VOLLEY_START + progress * SWING.VOLLEY_SWEEP, backhandVolley,
+      );
+      arm.rotation.z = 0;
+      // 通常のグラウンドストロークより体幹のひねりも控えめ（コンパクトな動作のため）
+      torso.rotation.y = (backhandVolley ? -1 : 1) * SWING.TORSO_TWIST * 0.5 * Math.sin(progress * Math.PI);
       return;
     }
 

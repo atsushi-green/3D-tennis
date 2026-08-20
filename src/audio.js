@@ -47,7 +47,7 @@
      */
     hit: (who, stroke, charge = 0) => {
       const base = who === 'you' ? 520 : 430;
-      const backhand = stroke === 'backhand';
+      const backhand = stroke.includes('backhand'); // 'backhand' と 'volley-backhand' の両方を拾う
       const freq = (backhand ? base * 0.84 : base) * (1 + charge * 0.3);
       tone(freq, (backhand ? 0.1 : 0.08) + charge * 0.05, 0.20 + charge * 0.16);
     },

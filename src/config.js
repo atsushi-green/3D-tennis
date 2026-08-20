@@ -94,6 +94,23 @@
     DEFAULT_X: 1.4,      // 無入力時はクロス気味に返す
   };
 
+  /**
+   * ボレー（サービスラインより前で、ノーバウンドの球を打ち返すとき）。
+   * 溜め時間ではなく、ボールとプレイヤーの左右距離で威力・角度が決まる：真正面（距離0）や
+   * 伸びきり（距離が SWEET_DIST+WINDOW を超える）は普通のブロック返球に、フォア/バック側に
+   * SWEET_DIST くらい程よく離れているときだけ鋭く角度をつけた決め球になる。
+   */
+  const VOLLEY = {
+    SWEET_DIST: 0.55, // 鋭さが最大になる左右距離(m)。PLAYER.REACH(1.55)より十分小さい
+    WINDOW: 0.55,      // そこから離れたとき鋭さが落ちる幅(m)
+    BLOCK_X: 1.3,      // 鋭さ0：中央寄りの安全なブロック
+    ANGLE_X: HALF_W - 0.5, // 鋭さ1：サイドライン際への鋭角
+    BLOCK_Z: 5.5,      // 鋭さ0：無難な深さ
+    ANGLE_Z: 2.2,      // 鋭さ1：ネット際に短く落とす決め球
+    BLOCK_T: 0.5,
+    ANGLE_T: 0.28,
+  };
+
   /** サーブ */
   const SERVE = {
     BALL_Y: 1.45,     // 構えているときのボールの高さ
@@ -265,6 +282,10 @@
     // 打点はより高く後ろに振りかぶった位置から始まり、サーブより短く鋭く振り下ろす。
     SMASH_START_Z: 0.9,
     SMASH_FOLLOW_Z: 2.9,
+    // ボレー：グラウンドストロークと同じ横振り(rotation.y)の系統だが、テイクバックを
+    // ほとんど取らない短いパンチ動作（GROUND_START/SWEEP よりずっと小さい振り幅）。
+    VOLLEY_START: 0.3,
+    VOLLEY_SWEEP: -0.6, // 終点は VOLLEY_START+VOLLEY_SWEEP=-0.3
   };
 
   /** 打点の視覚フィードバック（当たった瞬間の演出） */
@@ -316,6 +337,6 @@
 
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
-    BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN,
+    BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY,
   };
 })(window.RallyOne = window.RallyOne || {});

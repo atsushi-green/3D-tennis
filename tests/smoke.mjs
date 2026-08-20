@@ -296,6 +296,7 @@ function tossAndHit(g, holdFrames = 0) {
     g.phase = 'rally';
     g.you.x = 0; g.you.z = -5;
     g.ball.x = 0.3; g.ball.y = 1.0; g.ball.z = -5;
+    g.ball.bounces = 1; // 既にバウンド済みの通常のグラウンドストローク（ボレー扱いにしない）
     g.you.swingCharge = charge;
     g.hit('you');
     return {
@@ -375,6 +376,7 @@ function tossAndHit(g, holdFrames = 0) {
     gg.phase = 'rally';
     gg.you.x = 0; gg.you.z = -5;
     gg.ball.x = 0.3; gg.ball.y = 1.0; gg.ball.z = -5 + (0.9 + Math.random() * 0.6); // 実測レンジ内
+    gg.ball.bounces = 1; // 既にバウンド済みの通常のグラウンドストローク（ボレー扱いにしない）
     gg.hit('you');
     if (R.physics.predictLanding(gg.ball).z > HALF_L) out++;
   }
@@ -561,15 +563,19 @@ function tossAndHit(g, holdFrames = 0) {
   }
 
   // 高いが溜めが足りない -> 通常のフォア/バックのまま（スマッシュにならない）
+  // bounces=1 で「既にバウンド済み」にしておき、ボレー判定（bounces===0が条件）にも
+  // かからないようにして、純粋にスマッシュのゲーティングだけを検証する。
   {
     const g = new R.Game({ input: fakeInput, hooks: noHooks });
     g.start();
     g.phase = 'rally';
     g.you.x = 0; g.you.z = -5;
     g.ball.x = 0.3; g.ball.y = SMASH_MIN_Y + 0.2; g.ball.z = -5;
+    g.ball.bounces = 1;
     g.you.swingCharge = SMASH_MIN_CHARGE - 0.1;
     g.hit('you');
-    ok(g.you.stroke !== 'smash', `not enough charge -> no smash even though the ball is high, got ${g.you.stroke}`);
+    ok(g.you.stroke === 'forehand' || g.you.stroke === 'backhand',
+      `not enough charge -> falls back to a plain forehand/backhand, got ${g.you.stroke}`);
   }
 
   // 十分溜めたが低いボール -> 通常のフォア/バックのまま（スマッシュにならない）
@@ -579,9 +585,11 @@ function tossAndHit(g, holdFrames = 0) {
     g.phase = 'rally';
     g.you.x = 0; g.you.z = -5;
     g.ball.x = 0.3; g.ball.y = SMASH_MIN_Y - 0.5; g.ball.z = -5;
+    g.ball.bounces = 1;
     g.you.swingCharge = 1;
     g.hit('you');
-    ok(g.you.stroke !== 'smash', `low ball -> no smash even at full charge, got ${g.you.stroke}`);
+    ok(g.you.stroke === 'forehand' || g.you.stroke === 'backhand',
+      `low ball -> falls back to a plain forehand/backhand even at full charge, got ${g.you.stroke}`);
   }
 
   // スマッシュはサーブと同等以上に速い（決め球らしい威力）
@@ -600,6 +608,7 @@ function tossAndHit(g, holdFrames = 0) {
     g2.phase = 'rally';
     g2.you.x = 0; g2.you.z = -5;
     g2.ball.x = 0.3; g2.ball.y = 1; g2.ball.z = -5;
+    g2.ball.bounces = 1; // 既にバウンド済みの通常のグラウンドストローク（ボレー扱いにしない）
     g2.you.swingCharge = 1; // フル溜めの通常打（スマッシュ対象外の高さ）
     g2.hit('you');
     const fullDriveSpeed = Math.hypot(g2.ball.vx, g2.ball.vy, g2.ball.vz);
@@ -607,6 +616,81 @@ function tossAndHit(g, holdFrames = 0) {
     ok(smashSpeed > fullDriveSpeed,
       `smash is faster than even a full-charge normal drive: smash=${smashSpeed.toFixed(2)} drive=${fullDriveSpeed.toFixed(2)}`);
     ok(SMASH_T < R.config.SHOT.CHARGE_T, 'precondition: SMASH_T is shorter (faster) than CHARGE_T');
+  }
+}
+
+// --- サービスラインより前でノーバウンドの球を返すとボレーになる（溜めではなく距離で鋭さが決まる） ---
+{
+  const { SERVICE } = COURT;
+  const { SWEET_DIST, BLOCK_Z, ANGLE_Z, BLOCK_T, ANGLE_T } = R.config.VOLLEY;
+
+  const volleyHit = (playerZ, ballXOffset, bounces = 0) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.you.x = 0; g.you.z = playerZ;
+    g.ball.x = ballXOffset; g.ball.y = 1.0; g.ball.z = playerZ; g.ball.bounces = bounces;
+    g.you.swingCharge = 0; // ボレーは溜めなしでも成立するはず（溜めに依存しない）
+    g.hit('you');
+    return g;
+  };
+
+  // サービスラインより前 + ノーバウンド -> ボレー
+  {
+    const g = volleyHit(-SERVICE + 1, SWEET_DIST);
+    ok(g.you.stroke === 'volley-forehand' || g.you.stroke === 'volley-backhand',
+      `in front of the service line with no bounce -> volley, got ${g.you.stroke}`);
+  }
+
+  // サービスラインより後ろ（ベースライン寄り）ならノーバウンドでもボレーにならない
+  {
+    const g = volleyHit(-SERVICE - 1, SWEET_DIST);
+    ok(g.you.stroke === 'forehand' || g.you.stroke === 'backhand',
+      `behind the service line -> plain forehand/backhand even with no bounce, got ${g.you.stroke}`);
+  }
+
+  // サービスラインより前でも、既にバウンドしていればボレーにならない
+  {
+    const g = volleyHit(-SERVICE + 1, SWEET_DIST, 1);
+    ok(g.you.stroke === 'forehand' || g.you.stroke === 'backhand',
+      `already bounced -> plain forehand/backhand even in front of the service line, got ${g.you.stroke}`);
+  }
+
+  // 真正面（距離0）は普通のブロック、程よい距離（SWEET_DIST）は鋭い角度になる（対称）。
+  // playerShot() を直接呼び、DRIVE_Z_SPREAD の乱数を Math.random 固定で潰して決定的に比較する。
+  {
+    const origRandom = Math.random;
+    Math.random = () => 0;
+    try {
+      const shotAt = (ballXOffset, charge) => {
+        const g = new R.Game({ input: fakeInput, hooks: noHooks });
+        g.you.x = 0;
+        g.ball.x = ballXOffset;
+        g.you.swingCharge = charge;
+        return g.playerShot('volley-forehand');
+      };
+
+      const straight = shotAt(0, 0);
+      const sharpPlus = shotAt(SWEET_DIST, 0);
+      const sharpMinus = shotAt(-SWEET_DIST, 0);
+      const overstretched = shotAt(SWEET_DIST + 1.0, 0);
+      const sharpFullCharge = shotAt(SWEET_DIST, 1); // 溜めを変えても結果は同じはず
+
+      ok(Math.abs(straight.target.z - BLOCK_Z) < 1e-9,
+        `dead center (distance 0) lands at the safe BLOCK_Z depth, got z=${straight.target.z}`);
+      ok(Math.abs(sharpPlus.target.z - ANGLE_Z) < 1e-9,
+        `sweet-spot distance lands at the sharp ANGLE_Z depth, got z=${sharpPlus.target.z}`);
+      ok(Math.abs(sharpPlus.target.z - sharpMinus.target.z) < 1e-9,
+        'sweet-spot distance is symmetric on either side of the player (same depth/flight)');
+      ok(Math.abs(overstretched.target.z - BLOCK_Z) < 1e-9,
+        `overstretched distance falls back to the safe BLOCK_Z depth, got z=${overstretched.target.z}`);
+      ok(sharpPlus.target.z === sharpFullCharge.target.z && sharpPlus.flight === sharpFullCharge.flight,
+        'volley result is unaffected by how much Space was charged');
+      ok(straight.flight === BLOCK_T && sharpPlus.flight === ANGLE_T,
+        `flight time also follows the sharpness curve, straight=${straight.flight} sharp=${sharpPlus.flight}`);
+    } finally {
+      Math.random = origRandom;
+    }
   }
 }
 
