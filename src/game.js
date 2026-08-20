@@ -134,6 +134,21 @@
       return side === 1 ? team : mate;
     }
 
+    /**
+     * ダブルスで、今の球にチームのどちらが応答するか。
+     * サーブがまだ一度も返されていない間（serveInFlight）は、実際のダブルスと同じく
+     * レシーバーが固定：落下点に近くても、レシーブ側でない相方（ネット際で構えている方）は
+     * 手を出さない。一度でも返球された後は通常のラリーとして、落下点に近い方が応答する。
+     * @param {'you'|'cpu'} team 応答する側のチーム
+     * @returns {'you'|'youMate'|'cpu'|'cpuMate'}
+     */
+    doublesResponder(team) {
+      if (this.serveInFlight) return this.receivingPlayer(team, this.match.serveSide);
+      const primaryKey = team === 'you' ? 'you' : 'cpu';
+      const mateKey = team === 'you' ? 'youMate' : 'cpuMate';
+      return isResponder(this[primaryKey], this[mateKey], this.ball) ? primaryKey : mateKey;
+    }
+
     /* -------------------------------------------------------------- 入力 */
 
     /** @param {boolean} [doubles] true ならダブルス（you+youMate vs cpu+cpuMate）で開始 */
@@ -678,10 +693,11 @@
       const cpuMateBefore = { x: this.cpuMate.x, z: this.cpuMate.z };
       const youMateBefore = { x: this.youMate.x, z: this.youMate.z };
 
-      // cpu チーム：you 側の打球が向かってくる番なら、cpu/cpuMate のうち近い方が追う。
+      // cpu チーム：you 側の打球が向かってくる番なら、cpu/cpuMate のうち応答すべき方が追う
+      // （doublesResponder：サーブリターン中はレシーバー固定、それ以外は近い方）。
       // 反応遅延タイマーが残っている間は、担当側でも静止したまま（＝逆を突かれる余地）。
       const cpuTeamChasing = this.phase === 'rally' && ball.last === 'you';
-      if (cpuTeamChasing && isResponder(this.cpu, this.cpuMate, ball)) {
+      if (cpuTeamChasing && this.doublesResponder('cpu') === 'cpu') {
         if (this.reactTimers.cpu <= 0) {
           this.moveTowards(this.cpu, cpuBefore, chasePosition(ball, 1), PLAYER.CPU_CHASE, dt);
         } else {
@@ -700,10 +716,11 @@
         this.moveTowards(this.cpuMate, cpuMateBefore, coverPosition(0, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
       }
 
-      // youMate：人間（you）の打球が向かってくる番で、自分の方が you より近ければ追う。
+      // youMate：人間（you）の打球が向かってくる番で、自分が応答すべき側なら追う
+      // （doublesResponder：サーブリターン中はレシーバー固定、それ以外は近い方）。
       // 自陣（z<0）を追わせるため chasePosition には side=-1 を渡す。
       const mateChasing = this.phase === 'rally' && ball.last === 'cpu'
-        && isResponder(this.youMate, this.you, ball);
+        && this.doublesResponder('you') === 'youMate';
       if (mateChasing && this.reactTimers.youMate <= 0) {
         this.moveTowards(this.youMate, youMateBefore, chasePosition(ball, -1), PLAYER.CPU_CHASE, dt);
       } else if (mateChasing) {
@@ -802,20 +819,29 @@
       }
 
       // ダブルスの youMate：人間が届かなかった／振らなかった球を、CPUと同様に自動で拾う。
-      // ただし自分が担当（isResponder、＝moveDoublesTeams() の追う/構える判定と同じ基準）の
-      // ときだけ。そうしないと、人間が取るべき（＝人間の方が近い）球まで先に振ってしまう。
+      // ただし自分が応答すべき側（doublesResponder：サーブリターン中はレシーバー固定、それ
+      // 以外は近い方）のときだけ。そうしないと、人間が取るべき球やレシーブの権利がない球まで
+      // 先に振ってしまう。ノーバウンドで返す（ボレー）のはネット際（VOLLEY_Z 以内）にいるときだけ。
+      // それより後ろにいるなら、前に詰めていない＝1バウンド待ってグラウンドストロークで返す。
       if (this.doubles && ball.last !== 'you' && ball.z < PLAYER.NET_MARGIN
-        && isResponder(this.youMate, this.you, ball)) {
+        && this.doublesResponder('you') === 'youMate') {
         const inRange = ball.y < PLAYER.CPU_REACH_Y && ball.y > PLAYER.CPU_REACH_Y_MIN;
-        if (reaches(ball, this.youMate, PLAYER.CPU_REACH) && inRange) this.hit('youMate');
+        const canReturn = ball.bounces >= 1 || Math.abs(this.youMate.z) <= PLAYER.VOLLEY_Z;
+        if (canReturn && reaches(ball, this.youMate, PLAYER.CPU_REACH) && inRange) this.hit('youMate');
       }
 
-      // CPU は届く範囲なら自動で振る
+      // CPU は届く範囲なら自動で振る。ダブルスでは応答すべき側（doublesResponder）だけが
+      // 手を出す。youMate と同様、前に出ていなければ1バウンド待つ。
       if (ball.last !== 'cpu' && ball.z > PLAYER.NET_MARGIN) {
         const inRange = ball.y < PLAYER.CPU_REACH_Y && ball.y > PLAYER.CPU_REACH_Y_MIN;
-        if (reaches(ball, this.cpu, PLAYER.CPU_REACH) && inRange) {
+        const responder = this.doubles ? this.doublesResponder('cpu') : 'cpu';
+        const cpuCanReturn = responder === 'cpu'
+          && (ball.bounces >= 1 || Math.abs(this.cpu.z) <= PLAYER.VOLLEY_Z);
+        const cpuMateCanReturn = this.doubles && responder === 'cpuMate'
+          && (ball.bounces >= 1 || Math.abs(this.cpuMate.z) <= PLAYER.VOLLEY_Z);
+        if (cpuCanReturn && reaches(ball, this.cpu, PLAYER.CPU_REACH) && inRange) {
           this.hit('cpu');
-        } else if (this.doubles && reaches(ball, this.cpuMate, PLAYER.CPU_REACH) && inRange) {
+        } else if (cpuMateCanReturn && reaches(ball, this.cpuMate, PLAYER.CPU_REACH) && inRange) {
           this.hit('cpuMate');
         }
       }
