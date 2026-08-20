@@ -381,30 +381,71 @@ function tossAndHit(g, holdFrames = 0) {
   ok(out === 0, `normal-timing shots should still land in: ${out}/100 went long`);
 }
 
-// --- Space を溜めるほど強いサーブになる ---
+// --- サーブは「長く溜めるほど強い」のではなく、ちょうど良いタイミングで離すと最強、
+//     早すぎても遅すぎても弱くなる（三角形のカーブ） ---
 {
   const { T, CHARGE_T } = R.config.SERVE;
-  const tapLanding = () => {
+  const { CHARGE_SWEET_T, CHARGE_WINDOW } = R.config.SERVE;
+
+  // 純粋関数としてのカーブ形状
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    ok(g.serveTimingPower(CHARGE_SWEET_T) === 1, 'releasing exactly at the sweet spot is max power');
+    ok(g.serveTimingPower(0) < g.serveTimingPower(CHARGE_SWEET_T),
+      'releasing immediately (too early) is weaker than the sweet spot');
+    ok(g.serveTimingPower(CHARGE_SWEET_T + CHARGE_WINDOW * 2) === 0,
+      'holding well past the sweet spot (too late) bottoms out at 0, not increasing further');
+    const early = g.serveTimingPower(CHARGE_SWEET_T - CHARGE_WINDOW / 2);
+    const late = g.serveTimingPower(CHARGE_SWEET_T + CHARGE_WINDOW / 2);
+    ok(Math.abs(early - late) < 1e-9, `equally early/late from the sweet spot weaken it the same amount: early=${early} late=${late}`);
+  }
+
+  // 実際のトス→保持→リリースを通した結果（球速で確認）
+  const landingFor = (holdFrames) => {
     const g = new R.Game({ input: fakeInput, hooks: noHooks });
     g.start();
-    tap(g); // Space 押して即離す＝トスして0溜めで打つ
+    tossAndHit(g, holdFrames);
     return g.ball;
   };
-  const chargedLanding = () => {
-    const g = new R.Game({ input: fakeInput, hooks: noHooks });
-    g.start();
-    // MAX_TIME ぶんだけ押しっぱなしにしてから離す（トスの滞空時間 ~0.77s より短いので、トスを逃さず打てる）
-    const frames = Math.round(R.config.CHARGE.MAX_TIME * 60);
-    tossAndHit(g, frames);
-    return g.ball;
-  };
-  const tapBall = tapLanding();
-  const chargedBall = chargedLanding();
-  const tapSpeed = Math.hypot(tapBall.vx, tapBall.vy, tapBall.vz);
-  const chargedSpeed = Math.hypot(chargedBall.vx, chargedBall.vy, chargedBall.vz);
-  ok(chargedSpeed > tapSpeed,
-    `charged serve is faster than a tap serve: charged=${chargedSpeed.toFixed(2)} tap=${tapSpeed.toFixed(2)}`);
+  const speedOf = (ball) => Math.hypot(ball.vx, ball.vy, ball.vz);
+
+  // 「長すぎ」はトスの自動リセット（約0.79秒）より確実に手前で、かつ CHARGE_WINDOW の
+  // 下り坂の途中（威力が0まで落ちきる少し手前）になるタイミングを選ぶ。
+  const tapSpeed = speedOf(landingFor(0)); // 即リリース＝早すぎ
+  const sweetSpeed = speedOf(landingFor(Math.round(CHARGE_SWEET_T * 60))); // ちょうど良いタイミング
+  const tooLongSpeed = speedOf(landingFor(Math.round((CHARGE_SWEET_T + CHARGE_WINDOW * 0.9) * 60))); // 長すぎ
+
+  ok(sweetSpeed > tapSpeed,
+    `sweet-spot serve is faster than releasing immediately: sweet=${sweetSpeed.toFixed(2)} tap=${tapSpeed.toFixed(2)}`);
+  ok(sweetSpeed > tooLongSpeed,
+    `sweet-spot serve is faster than holding too long: sweet=${sweetSpeed.toFixed(2)} tooLong=${tooLongSpeed.toFixed(2)}`);
   ok(T > CHARGE_T, `precondition: SERVE.CHARGE_T should be shorter (faster) than SERVE.T`);
+}
+
+// --- chargeMeter()（HUDゲージ用の先読み）はサーブ中はタイミングのカーブを、
+//     ラリー中は溜め時間の割合を返す ---
+{
+  const { CHARGE_SWEET_T } = R.config.SERVE;
+  const { MAX_TIME } = R.config.CHARGE;
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  ok(g.chargeMeter() === 0, 'no meter while not charging');
+
+  g.start();
+  g.chargeStart(); // サーブのトス＆チャージ開始
+  const sweetFrames = Math.round(CHARGE_SWEET_T * 60);
+  for (let i = 0; i < sweetFrames; i++) g.update(1 / 60);
+  ok(Math.abs(g.chargeMeter() - 1) < 0.05, `serve meter peaks near the sweet spot, got ${g.chargeMeter()}`);
+  for (let i = 0; i < sweetFrames; i++) g.update(1 / 60); // さらに同じだけ長く保持し続ける
+  ok(g.chargeMeter() < 0.2, `serve meter falls back down when held well past the sweet spot, got ${g.chargeMeter()}`);
+  g.chargeRelease();
+
+  const g2 = new R.Game({ input: fakeInput, hooks: noHooks });
+  g2.start();
+  g2.phase = 'rally';
+  g2.chargeStart();
+  for (let i = 0; i < Math.round(MAX_TIME * 30); i++) g2.update(1 / 60); // 半分だけ溜める
+  const midMeter = g2.chargeMeter();
+  ok(midMeter > 0 && midMeter < 1, `rally meter tracks the plain hold fraction, got ${midMeter}`);
 }
 
 // --- 溜め中にポイントが切り替わる/トスが流れると、溜めはキャンセルされる ---

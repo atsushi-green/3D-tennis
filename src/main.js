@@ -2,7 +2,7 @@
 (function (RallyOne) {
   'use strict';
 
-  const { CHARGE, PHYSICS } = RallyOne.config;
+  const { PHYSICS } = RallyOne.config;
   const { sfx, unlock } = RallyOne.audio;
 
   const input = new RallyOne.Input();
@@ -53,7 +53,7 @@
     if (game.started) {
       game.update(dt);
       world.sync(game, dt);
-      hud.setCharge(game.you.charging ? game.you.chargeTime / CHARGE.MAX_TIME : 0);
+      hud.setCharge(game.chargeMeter());
     }
     world.render();
   }

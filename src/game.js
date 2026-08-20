@@ -220,18 +220,43 @@
       }
     }
 
-    /** Space / クリックを離した瞬間。溜めた量に応じた威力で打つ。 */
+    /** Space / クリックを離した瞬間。溜めた量（サーブはタイミング）に応じた威力で打つ。 */
     chargeRelease() {
       if (!this.you.charging) return;
       this.you.charging = false;
-      this.you.swingCharge = clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1);
-
       const myServe = this.phase === 'serve' && this.servingPlayer() === 'you';
+      this.you.swingCharge = myServe
+        ? this.serveTimingPower(this.you.chargeTime)
+        : clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1);
+
       if (myServe && this.tossActive) {
         this.serve('you');
       } else if (this.phase === 'rally') {
         this.you.swing = PLAYER.SWING_WINDOW;
       }
+    }
+
+    /**
+     * サーブの威力(0〜1)。長く溜めるほど強いのではなく、SERVE.CHARGE_SWEET_T にちょうど
+     * 近いタイミングで離したときに最大になり、早すぎても遅すぎても CHARGE_WINDOW の幅で
+     * 弱くなる（三角形のカーブ）。
+     * @param {number} heldTime Space を押してから離すまでの実経過時間(秒)
+     */
+    serveTimingPower(heldTime) {
+      const { CHARGE_SWEET_T, CHARGE_WINDOW } = SERVE;
+      return clamp(1 - Math.abs(heldTime - CHARGE_SWEET_T) / CHARGE_WINDOW, 0, 1);
+    }
+
+    /**
+     * HUD のゲージ表示用。「今この瞬間に離したら」どれくらいの威力になるかを 0〜1 で返す
+     * （サーブはタイミングのカーブ、ラリーは溜め時間の割合）。溜めていなければ0。
+     */
+    chargeMeter() {
+      if (!this.you.charging) return 0;
+      const myServe = this.phase === 'serve' && this.servingPlayer() === 'you';
+      return myServe
+        ? this.serveTimingPower(this.you.chargeTime)
+        : clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1);
     }
 
     /**
@@ -244,6 +269,13 @@
       const validContext = this.phase === 'rally' || (myServe && this.tossActive);
       if (!validContext) {
         this.you.charging = false;
+        return;
+      }
+      if (myServe) {
+        // サーブ中はトス中ずっと（item2 により）静止しているので、移動によるキャップは
+        // 掛けない。タイミングのカーブ自体が「早すぎ／遅すぎ」を弱くするので、実経過
+        // 時間をそのまま溜め時間として使う（MAX_TIME で頭打ちにしない）。
+        this.you.chargeTime += dt;
         return;
       }
       const capTime = CHARGE.MAX_TIME * this.chargeSpeedCap(this.you.speed);
