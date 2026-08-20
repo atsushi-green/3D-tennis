@@ -109,6 +109,12 @@
        * PLAYER.CPU_REACT にセットし、0になるまで移動を止める（＝逆を突かれると間に合わない）。
        */
       this.reactTimers = { cpu: 0, cpuMate: 0, youMate: 0 };
+      /**
+       * CPU 側の打球後の硬直タイマー（cpu/cpuMate/youMate）。振り抜いた瞬間に
+       * PLAYER.CPU_RECOVER_DELAY にセットし、0になるまで定位置への回復移動を止める
+       * （＝打った直後は棒立ちで、すぐにミドルへ戻れるわけではない）。
+       */
+      this.recoverTimers = { cpu: 0, cpuMate: 0, youMate: 0 };
       /** 直前フレームの ball.last。変化を検知して反応遅延タイマーを起動するために使う。 */
       this.lastBallOwnerSeen = null;
     }
@@ -243,11 +249,14 @@
       this.you.chargeTime = 0; // 前のポイントの溜めを持ち越さない
       this.you.chargeStroke = null;
 
-      // 前のポイントの反応遅延を持ち越さない（moveDoublesTeams()/moveSinglesCpu() は
+      // 前のポイントの反応遅延・打球後硬直を持ち越さない（moveDoublesTeams()/moveSinglesCpu() は
       // phase==='serve' 中は動かないので実害はないが、次のラリー開始時に混乱しないよう明示的に戻す）
       this.reactTimers.cpu = 0;
       this.reactTimers.cpuMate = 0;
       this.reactTimers.youMate = 0;
+      this.recoverTimers.cpu = 0;
+      this.recoverTimers.cpuMate = 0;
+      this.recoverTimers.youMate = 0;
       this.lastBallOwnerSeen = null;
 
       const side = this.match.serveSide; // クロス(-1)から始まり、ポイントごとに逆クロス(+1)と交互になる
@@ -391,6 +400,9 @@
       const player = this.actor(who);
       const from = { x: ball.x, y: Math.max(ball.y, 0.5), z: ball.z };
       this.serveInFlight = false; // 一度でも打ち返されたら「ノーバウンド禁止」の制約は解除
+
+      // CPU/AI は打った直後すぐには動けない（＝すぐにミドルへ戻れるほど強くない）。
+      if (who !== 'you') this.recoverTimers[who] = PLAYER.CPU_RECOVER_DELAY;
 
       // ball.x/z はまだ打点のまま（solveShot が書き換えるのは vx/vy/vz だけ）なので、
       // ここで打点とプレイヤー位置からフォア/バックを判定できる。shot の計算より前に
@@ -645,6 +657,9 @@
       this.reactTimers.cpu = Math.max(0, this.reactTimers.cpu - dt);
       this.reactTimers.cpuMate = Math.max(0, this.reactTimers.cpuMate - dt);
       this.reactTimers.youMate = Math.max(0, this.reactTimers.youMate - dt);
+      this.recoverTimers.cpu = Math.max(0, this.recoverTimers.cpu - dt);
+      this.recoverTimers.cpuMate = Math.max(0, this.recoverTimers.cpuMate - dt);
+      this.recoverTimers.youMate = Math.max(0, this.recoverTimers.youMate - dt);
 
       const owner = this.ball.last;
       if (this.phase === 'rally' && owner !== this.lastBallOwnerSeen) {
@@ -666,7 +681,7 @@
         return;
       }
       const target = incoming ? chasePosition(this.ball) : homePosition();
-      this.moveTowards(this.cpu, cpuBefore, target, incoming ? PLAYER.CPU_CHASE : PLAYER.CPU_RECOVER, dt);
+      this.moveIfRecovered('cpu', this.cpu, cpuBefore, target, incoming ? PLAYER.CPU_CHASE : PLAYER.CPU_RECOVER, dt);
     }
 
     /**
@@ -699,21 +714,21 @@
       const cpuTeamChasing = this.phase === 'rally' && ball.last === 'you';
       if (cpuTeamChasing && this.doublesResponder('cpu') === 'cpu') {
         if (this.reactTimers.cpu <= 0) {
-          this.moveTowards(this.cpu, cpuBefore, chasePosition(ball, 1), PLAYER.CPU_CHASE, dt);
+          this.moveIfRecovered('cpu', this.cpu, cpuBefore, chasePosition(ball, 1), PLAYER.CPU_CHASE, dt);
         } else {
           this.cpu.speed = 0;
         }
-        this.moveTowards(this.cpuMate, cpuMateBefore, coverPosition(this.cpu.x, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
+        this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore, coverPosition(this.cpu.x, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
       } else if (cpuTeamChasing) {
         if (this.reactTimers.cpuMate <= 0) {
-          this.moveTowards(this.cpuMate, cpuMateBefore, chasePosition(ball, 1), PLAYER.CPU_CHASE, dt);
+          this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore, chasePosition(ball, 1), PLAYER.CPU_CHASE, dt);
         } else {
           this.cpuMate.speed = 0;
         }
-        this.moveTowards(this.cpu, cpuBefore, coverPosition(this.cpuMate.x, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
+        this.moveIfRecovered('cpu', this.cpu, cpuBefore, coverPosition(this.cpuMate.x, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
       } else {
-        this.moveTowards(this.cpu, cpuBefore, homePosition(), PLAYER.CPU_RECOVER, dt);
-        this.moveTowards(this.cpuMate, cpuMateBefore, coverPosition(0, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
+        this.moveIfRecovered('cpu', this.cpu, cpuBefore, homePosition(), PLAYER.CPU_RECOVER, dt);
+        this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore, coverPosition(0, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
       }
 
       // youMate：人間（you）の打球が向かってくる番で、自分が応答すべき側なら追う
@@ -722,13 +737,25 @@
       const mateChasing = this.phase === 'rally' && ball.last === 'cpu'
         && this.doublesResponder('you') === 'youMate';
       if (mateChasing && this.reactTimers.youMate <= 0) {
-        this.moveTowards(this.youMate, youMateBefore, chasePosition(ball, -1), PLAYER.CPU_CHASE, dt);
+        this.moveIfRecovered('youMate', this.youMate, youMateBefore, chasePosition(ball, -1), PLAYER.CPU_CHASE, dt);
       } else if (mateChasing) {
         this.youMate.speed = 0;
       } else {
         const youMateZ = this.youMateFormation === 'back' ? DOUBLES.BACK_Z_YOU : DOUBLES.NET_Z_YOU;
-        this.moveTowards(this.youMate, youMateBefore, coverPosition(this.you.x, youMateZ), PLAYER.CPU_RECOVER, dt);
+        this.moveIfRecovered('youMate', this.youMate, youMateBefore, coverPosition(this.you.x, youMateZ), PLAYER.CPU_RECOVER, dt);
       }
+    }
+
+    /**
+     * cpu/cpuMate/youMate 用。打った直後の硬直中（recoverTimers）はまだ動けないので棒立ちにし、
+     * そうでなければ通常どおり moveTowards で目標へ寄せる。
+     */
+    moveIfRecovered(recoverKey, actor, before, target, speed, dt) {
+      if (this.recoverTimers[recoverKey] > 0) {
+        actor.speed = 0;
+        return;
+      }
+      this.moveTowards(actor, before, target, speed, dt);
     }
 
     /** cpu/cpuMate/youMate 共通の移動：目標位置へ一定速度で寄せ、実速度も記録する（歩行アニメ用）。 */
