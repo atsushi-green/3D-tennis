@@ -124,11 +124,12 @@
   };
 
   /**
-   * フォアハンドの弧の角度（0=横向き、負=後方のテイクバック、正=前方のフォロースルー）を
-   * バックハンド用に鏡映しする。+π を足す（＝原点を中心に180°回す点対称）と前後の向きまで
-   * 反転してしまい、テイクバックのはずが前を向き、フォロースルーのはずが後ろを向く、という
-   * 時間順序が壊れたスイングになる。π−angle（＝左右の軸で折り返す線対称）なら前後の向きは
-   * 保ったまま左右だけ入れ替わるので、テイクバック→打点→フォロースルーの流れは崩れない。
+   * フォアハンドの弧の角度（0=横向き、正=プレイヤー視点で後ろ＝テイクバック、
+   * 負=プレイヤー視点で前＝フォロースルー）をバックハンド用に鏡映しする。+π を足す
+   * （＝原点を中心に180°回す点対称）と前後の向きまで反転してしまい、テイクバックの
+   * はずが前を向き、フォロースルーのはずが後ろを向く、という時間順序が壊れたスイングに
+   * なる。π−angle（＝左右の軸で折り返す線対称）なら前後の向きは保ったまま左右だけ
+   * 入れ替わるので、テイクバック→打点→フォロースルーの流れは崩れない。
    */
   function mirrorGroundAngle(angle, backhand) {
     return backhand ? Math.PI - angle : angle;
@@ -164,7 +165,7 @@
         arm.rotation.y = 0;
         arm.rotation.z = SWING.SERVE_READY_Z;
       } else if (prep) {
-        const pullBack = SWING.GROUND_START - (chargeFrac || 0) * SWING.CHARGE_PULL;
+        const pullBack = SWING.GROUND_START + (chargeFrac || 0) * SWING.CHARGE_PULL;
         arm.rotation.y = mirrorGroundAngle(pullBack, prep === 'backhand');
         arm.rotation.z = 0;
       } else {
@@ -187,8 +188,8 @@
     const backhand = stroke === 'backhand';
     // テイクバックが溜め量ぶん深く入っていた分だけ、始点をそこに合わせて弧を広げる
     // （終点＝フォロースルーは GROUND_START+GROUND_SWEEP のまま揃える）。
-    const start = SWING.GROUND_START - (swingCharge || 0) * SWING.CHARGE_PULL;
-    const sweep = SWING.GROUND_SWEEP + (swingCharge || 0) * SWING.CHARGE_PULL;
+    const start = SWING.GROUND_START + (swingCharge || 0) * SWING.CHARGE_PULL;
+    const sweep = SWING.GROUND_SWEEP - (swingCharge || 0) * SWING.CHARGE_PULL;
     arm.rotation.y = mirrorGroundAngle(start + progress * sweep, backhand);
     arm.rotation.z = 0;
     // sin カーブでひねって戻す（構え→打点→フォロースルーで元の向きに近づく）
