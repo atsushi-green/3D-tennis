@@ -37,6 +37,65 @@ ok(pointLabel(3, 3) === '40' && pointLabel(4, 3) === 'Ad' && pointLabel(3, 4) ==
   ok(m.awardPoint('you').type === 'set', 'set at 6');
 }
 
+// --- タイブレーク：6-6でゲーム数が並んだら、通常ゲームの代わりにタイブレークに入る ---
+{
+  const m = new Match();
+  for (let g = 0; g < 5; g++) for (let p = 0; p < 4; p++) m.awardPoint('you'); // you 5ゲーム
+  for (let g = 0; g < 5; g++) for (let p = 0; p < 4; p++) m.awardPoint('cpu'); // cpu 5ゲーム
+  ok(m.games.you === 5 && m.games.cpu === 5, `precondition: 5-5, got ${m.games.you}-${m.games.cpu}`);
+
+  let r;
+  for (let p = 0; p < 4; p++) r = m.awardPoint('you'); // 6-5
+  ok(r.type === 'game' && !r.tiebreak, `6-5 is a normal game (no tiebreak yet), got type=${r.type} tiebreak=${r.tiebreak}`);
+  ok(!m.tiebreak, 'not in tiebreak at 6-5');
+
+  for (let p = 0; p < 4; p++) r = m.awardPoint('cpu'); // 6-6
+  ok(r.type === 'game' && r.tiebreak === true, `6-6 enters a tiebreak, got type=${r.type} tiebreak=${r.tiebreak}`);
+  ok(m.tiebreak === true && m.games.you === 6 && m.games.cpu === 6,
+    `match is in a tiebreak at 6-6, got tiebreak=${m.tiebreak} games=${m.games.you}-${m.games.cpu}`);
+
+  for (let i = 0; i < 3; i++) {
+    r = m.awardPoint('you');
+    ok(r.type === 'point' && r.tiebreak === true, `tiebreak point ${i + 1}: type=${r.type} tiebreak=${r.tiebreak}`);
+  }
+  ok(m.tiebreakPoints.you === 3 && m.tiebreakPoints.cpu === 0,
+    `tiebreak points are 3-0, got ${m.tiebreakPoints.you}-${m.tiebreakPoints.cpu}`);
+
+  for (let i = 0; i < 3; i++) r = m.awardPoint('you'); // 6-0
+  ok(r.type === 'point', `6 tiebreak points isn't enough yet (needs 7 and a 2-point margin), got type=${r.type}`);
+  r = m.awardPoint('you'); // 7-0
+  ok(r.type === 'set' && r.winner === 'you', `winning the tiebreak 7-0 awards the set, got type=${r.type} winner=${r.winner}`);
+  ok(m.games.you === 7 && m.games.cpu === 6, `tiebreak win makes the score 7-6, got ${m.games.you}-${m.games.cpu}`);
+  ok(m.tiebreak === false, 'tiebreak flag clears once the set is decided');
+  ok(m.tiebreakPoints.you === 0 && m.tiebreakPoints.cpu === 0, 'tiebreak points reset after the set');
+}
+
+// --- タイブレーク：6点先取では終わらず、2点差がつくまで続く ---
+{
+  const m = new Match();
+  m.games = { you: 6, cpu: 6 };
+  m.tiebreak = true;
+  // 1点ずつ交互に与えて 7-7 まで積む（先に片方だけ7点与えると2点差で decisive になってしまうため）
+  for (let i = 0; i < 7; i++) { m.awardPoint('you'); m.awardPoint('cpu'); } // 7-7
+  ok(m.tiebreak === true, 'still in the tiebreak at 7-7 (no 2-point margin yet)');
+  let r = m.awardPoint('you'); // 8-7
+  ok(r.type === 'point' && m.tiebreak === true, `8-7 isn't enough (needs a 2-point margin), got type=${r.type}`);
+  r = m.awardPoint('you'); // 9-7
+  ok(r.type === 'set' && r.winner === 'you', `9-7 (2-point margin) wins the tiebreak and the set, got type=${r.type}`);
+}
+
+// --- タイブレーク中はサーブサイド（クロス/逆クロス）がタイブレークの合計ポイント数で交互になる ---
+{
+  const m = new Match();
+  m.games = { you: 6, cpu: 6 };
+  m.tiebreak = true;
+  ok(m.serveSide === -1, `tiebreak starts on the cross side, got ${m.serveSide}`);
+  m.awardPoint('you');
+  ok(m.serveSide === 1, `after 1 tiebreak point, the serve side flips, got ${m.serveSide}`);
+  m.awardPoint('cpu');
+  ok(m.serveSide === -1, `after 2 tiebreak points, the serve side flips back, got ${m.serveSide}`);
+}
+
 const { HALF_W, HALF_L, COURT, PLAYER, SERVE } = R.config;
 const fakeInput = { moveX: 0, moveZ: 0, lob: false };
 const noHooks = { sound() {}, call() {}, clearCall() {}, score() {} };
@@ -931,6 +990,43 @@ function tossAndHit(g, holdFrames = 0) {
   for (let i = 0; i < Math.ceil(CPU_REACT / (1 / 60)) + 2; i++) g.movePlayers(1 / 60);
   ok(g.reactTimers.cpu === 0, 'reaction timer has fully counted down');
   ok(g.cpu.x !== before.x || g.cpu.z !== before.z, 'cpu starts chasing once it has reacted');
+}
+
+// --- タイブレーク：Game#endPoint() 経由でも、1本目はサーバーそのまま・以降は2ポイントごとに交代する ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(false);
+  g.match.games = { you: 6, cpu: 6 };
+  g.match.tiebreak = true;
+  g.server = 'you'; // タイブレーク1本目を打つ人
+
+  g.phase = 'rally';
+  g.endPoint('you', 'test'); // 1本目
+  ok(g.server === 'cpu', `server switches right after the 1st tiebreak point, got ${g.server}`);
+
+  g.phase = 'rally';
+  g.endPoint('cpu', 'test'); // 2本目
+  ok(g.server === 'cpu', `server stays the same after the 2nd point, got ${g.server}`);
+
+  g.phase = 'rally';
+  g.endPoint('you', 'test'); // 3本目
+  ok(g.server === 'you', `server switches after the 3rd point, got ${g.server}`);
+
+  g.phase = 'rally';
+  g.endPoint('you', 'test'); // 4本目
+  ok(g.server === 'you', `server stays the same after the 4th point, got ${g.server}`);
+}
+
+// --- タイブレーク：Game#endPoint() を通しても、取った側がそのままセットを取る ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(false);
+  g.match.games = { you: 6, cpu: 6 };
+  g.match.tiebreak = true;
+  for (let i = 0; i < 7; i++) { g.phase = 'rally'; g.endPoint('you', 'test'); }
+  ok(g.match.games.you === 7 && g.match.games.cpu === 6,
+    `winning the tiebreak makes it 7-6, got ${g.match.games.you}-${g.match.games.cpu}`);
+  ok(g.match.tiebreak === false, 'tiebreak flag clears once the set is decided');
 }
 
 // --- full match simulation（フリーズ・タイマーリーク・スコア破綻がないか） ---

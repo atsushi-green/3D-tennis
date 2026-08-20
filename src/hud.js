@@ -28,9 +28,17 @@
      * @param {{you:{aces:number,doubleFaults:number}, cpu:{aces:number,doubleFaults:number}}} stats RallyOne.Game#stats
      */
     renderScore(match, server, stats) {
-      const { points, games } = match;
-      this.el.points.you.textContent = pointLabel(points.you, points.cpu);
-      this.el.points.cpu.textContent = pointLabel(points.cpu, points.you);
+      const {
+        points, games, tiebreak, tiebreakPoints,
+      } = match;
+      if (tiebreak) {
+        // タイブレーク中は 0/15/30/40 ではなく素点（1点刻み）で表示する
+        this.el.points.you.textContent = tiebreakPoints.you;
+        this.el.points.cpu.textContent = tiebreakPoints.cpu;
+      } else {
+        this.el.points.you.textContent = pointLabel(points.you, points.cpu);
+        this.el.points.cpu.textContent = pointLabel(points.cpu, points.you);
+      }
       this.el.games.you.textContent = games.you;
       this.el.games.cpu.textContent = games.cpu;
       this.el.names.you.className = 'nm' + (server === 'you' ? ' srv' : '');

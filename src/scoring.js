@@ -33,25 +33,47 @@
     reset() {
       this.points = { you: 0, cpu: 0 };
       this.games = { you: 0, cpu: 0 };
+      this.tiebreak = false;
+      this.tiebreakPoints = { you: 0, cpu: 0 };
     }
 
     /**
-     * サーブのサイド（クロス/逆クロス）は、そのゲームの累計ポイント数で決まる。
-     * 偶数(0-0, 15-15, ...)は -1＝クロス、奇数は +1＝逆クロス。
+     * サーブのサイド（クロス/逆クロス）は、そのゲーム（タイブレーク中はタイブレーク）の
+     * 累計ポイント数で決まる。偶数(0-0, 15-15, ...)は -1＝クロス、奇数は +1＝逆クロス。
      * この符号は game.js の描画（world +x が画面左に映るカメラ配置）に合わせてあるので、
      * 変えるときは game.js 側の見え方も必ず確認すること。
      */
     get serveSide() {
-      return (this.points.you + this.points.cpu) % 2 ? 1 : -1;
+      const total = this.tiebreak
+        ? this.tiebreakPoints.you + this.tiebreakPoints.cpu
+        : this.points.you + this.points.cpu;
+      return total % 2 ? 1 : -1;
     }
 
     /**
-     * 1ポイント加算し、ゲーム・セットの成立まで判定する。
+     * 1ポイント加算し、ゲーム・セットの成立まで判定する。6-6でゲーム数が並んだら、
+     * 以降は通常のゲームの代わりにタイブレーク（7点先取・2点差、RULES.MARGIN共用）を行い、
+     * 取った方がそのままセットを取る。
      * @param {'you'|'cpu'} winner
-     * @returns {{type:'point'|'game'|'set', winner:'you'|'cpu'}}
+     * @returns {{type:'point'|'game'|'set', winner:'you'|'cpu', tiebreak?:boolean}}
+     *   tiebreak:true は「このポイントがタイブレーク中だった」（type:'point'）か
+     *   「このゲームでタイブレークに入った」（type:'game'）ことを示す。
      */
     awardPoint(winner) {
       const loser = winner === 'you' ? 'cpu' : 'you';
+
+      if (this.tiebreak) {
+        this.tiebreakPoints[winner]++;
+        if (!won(this.tiebreakPoints[winner], this.tiebreakPoints[loser], RULES.TIEBREAK_POINTS)) {
+          return { type: 'point', winner, tiebreak: true };
+        }
+        this.games[winner]++;
+        this.tiebreak = false;
+        this.points.you = this.points.cpu = 0;
+        this.tiebreakPoints.you = this.tiebreakPoints.cpu = 0;
+        return { type: 'set', winner }; // タイブレークを取った側が必ずセットも取る
+      }
+
       this.points[winner]++;
 
       if (!won(this.points[winner], this.points[loser], RULES.GAME_POINTS)) {
@@ -61,6 +83,10 @@
       this.games[winner]++;
       this.points.you = this.points.cpu = 0;
 
+      if (this.games.you === RULES.SET_GAMES && this.games.cpu === RULES.SET_GAMES) {
+        this.tiebreak = true;
+        return { type: 'game', winner, tiebreak: true };
+      }
       if (won(this.games[winner], this.games[loser], RULES.SET_GAMES)) {
         return { type: 'set', winner };
       }

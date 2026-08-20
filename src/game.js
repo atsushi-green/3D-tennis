@@ -629,7 +629,12 @@
 
       const result = this.match.awardPoint(winner);
       const mine = winner === 'you';
-      if (result.type !== 'point') {
+      if (result.tiebreak && result.type === 'point') {
+        // タイブレーク中は1本目だけ今のサーバーのまま、以降は2ポイントごとに交代
+        // （ダブルスのチーム内の個人ローテーションはここでは変えない簡略化。詳細は roadmap-done.md）。
+        const total = this.match.tiebreakPoints.you + this.match.tiebreakPoints.cpu;
+        if (total % 2 === 1) this.server = opponent(this.server);
+      } else if (result.type !== 'point') {
         // ダブルスは、今サーブし終えたチームの中で次に回ってくるまで担当者を交代する
         // （実際のルール通り。次にそのチームの番が来るのは2ゲーム後）
         if (this.doubles) {
@@ -654,7 +659,9 @@
         return;
       }
 
-      const sub = result.type === 'game' ? `ゲーム — ${mine ? 'YOU' : 'CPU'}` : reason;
+      const sub = result.type === 'game'
+        ? `ゲーム — ${mine ? 'YOU' : 'CPU'}${result.tiebreak ? '（6-6 タイブレーク！）' : ''}`
+        : reason;
       this.hooks.call(mine ? 'ポイント' : '失点', sub);
       this.hooks.score();
       this.after(TIMING.NEXT_POINT, () => this.newPoint());

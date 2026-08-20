@@ -207,6 +207,7 @@
     GAME_POINTS: 4, // 40 の次でゲーム
     SET_GAMES: 6,
     MARGIN: 2,      // ゲーム／セットとも2差が必要
+    TIEBREAK_POINTS: 7, // 6-6 のタイブレークは7点先取（MARGIN=2は共用）
   };
 
   /**
