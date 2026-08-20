@@ -647,29 +647,38 @@
     movePlayers(dt) {
       this.updateReactTimers(dt);
 
-      const youBefore = { x: this.you.x, z: this.you.z };
       const cpuBefore = { x: this.cpu.x, z: this.cpu.z };
 
-      const mx = this.input.moveX * INPUT_X_TO_WORLD;
-      const mz = this.input.moveZ;
-      const len = Math.hypot(mx, mz) || 1; // 斜め移動が速くならないように正規化
-      const bounds = this.youBounds();
+      // トス中（自分のサーブで、まだ打っていない間）は、打点がトスした位置からずれてしまう
+      // ので入力があっても一切動かさない（＝ボールはプレイヤーの手元ではなく静止したトス
+      // 位置から放たれる、という見た目のずれをなくす）。
+      if (!this.tossActive) {
+        const youBefore = { x: this.you.x, z: this.you.z };
+        const mx = this.input.moveX * INPUT_X_TO_WORLD;
+        const mz = this.input.moveZ;
+        const len = Math.hypot(mx, mz) || 1; // 斜め移動が速くならないように正規化
+        const bounds = this.youBounds();
 
-      // 目標速度（入力なしなら0）へ、加速度で少しずつ近づける。
-      // 急停止・瞬間方向転換にならないので、コート上で滑るような自然さが出る。
-      const hasInput = mx !== 0 || mz !== 0;
-      const desiredVx = hasInput ? (mx / len) * PLAYER.SPEED : 0;
-      const desiredVz = hasInput ? (mz / len) * PLAYER.SPEED : 0;
-      const rate = (hasInput ? PLAYER.ACCEL : PLAYER.DECEL) * dt;
-      const v = approach2D(this.you.vx, this.you.vz, desiredVx, desiredVz, rate);
-      this.you.vx = v.x;
-      this.you.vz = v.z;
+        // 目標速度（入力なしなら0）へ、加速度で少しずつ近づける。
+        // 急停止・瞬間方向転換にならないので、コート上で滑るような自然さが出る。
+        const hasInput = mx !== 0 || mz !== 0;
+        const desiredVx = hasInput ? (mx / len) * PLAYER.SPEED : 0;
+        const desiredVz = hasInput ? (mz / len) * PLAYER.SPEED : 0;
+        const rate = (hasInput ? PLAYER.ACCEL : PLAYER.DECEL) * dt;
+        const v = approach2D(this.you.vx, this.you.vz, desiredVx, desiredVz, rate);
+        this.you.vx = v.x;
+        this.you.vz = v.z;
 
-      this.you.x = clamp(this.you.x + this.you.vx * dt, bounds.xMin, bounds.xMax);
-      this.you.z = clamp(this.you.z + this.you.vz * dt, bounds.zMin, bounds.zMax);
-      // 歩行/走行アニメーションが参照する実速度。壁際でクランプされた分は含めない
-      // （実際に動いていないのに走って見えるのを防ぐ）。
-      this.you.speed = Math.hypot(this.you.x - youBefore.x, this.you.z - youBefore.z) / dt;
+        this.you.x = clamp(this.you.x + this.you.vx * dt, bounds.xMin, bounds.xMax);
+        this.you.z = clamp(this.you.z + this.you.vz * dt, bounds.zMin, bounds.zMax);
+        // 歩行/走行アニメーションが参照する実速度。壁際でクランプされた分は含めない
+        // （実際に動いていないのに走って見えるのを防ぐ）。
+        this.you.speed = Math.hypot(this.you.x - youBefore.x, this.you.z - youBefore.z) / dt;
+      } else {
+        this.you.vx = 0;
+        this.you.vz = 0;
+        this.you.speed = 0;
+      }
 
       if (this.doubles) this.moveDoublesTeams(dt);
       else this.moveSinglesCpu(cpuBefore, dt);

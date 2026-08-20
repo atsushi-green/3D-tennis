@@ -128,6 +128,31 @@ function tossAndHit(g) {
   ok(g.you.z === PLAYER.Z_NEAR, `after contact: normal bounds apply, z=${g.you.z}`);
 }
 
+// --- トス中は左右キーを入力しても一切動かない（打点がトス位置からずれない） ---
+{
+  const input = { moveX: 0, moveZ: 0, lob: false };
+  const g = new R.Game({ input, hooks: noHooks });
+  g.start();
+  tap(g); // トス
+  ok(g.tossActive === true, 'precondition: tossing');
+  const before = { x: g.you.x, z: g.you.z };
+
+  input.moveX = 1; input.moveZ = 1;
+  g.movePlayers(1 / 60);
+  ok(g.you.x === before.x && g.you.z === before.z, `player does not move during the toss, x=${g.you.x} z=${g.you.z}`);
+  ok(g.you.vx === 0 && g.you.vz === 0, 'velocity is held at 0 during the toss');
+  ok(g.you.speed === 0, 'speed reads 0 during the toss (no walk animation)');
+
+  for (let i = 0; i < 20; i++) g.movePlayers(1 / 60);
+  ok(g.you.x === before.x && g.you.z === before.z, 'still frozen after several frames of held input');
+
+  // 打った瞬間から通常どおり動ける
+  tap(g); // 2回目の Space で打つ
+  ok(g.tossActive === false, 'precondition: served');
+  g.movePlayers(1 / 60);
+  ok(g.you.x !== before.x || g.you.z !== before.z, 'player can move again once the toss has been hit');
+}
+
 // --- サーブはクロスサイドから始まり、ポイントごとに逆クロスサイドへ交互になる ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
