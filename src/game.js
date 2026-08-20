@@ -471,7 +471,14 @@
       // 人間はテイクバックを始めた瞬間に chargeStart() が固定した向きをそのまま使う。
       // ここで改めて判定すると、溜めている間にボールと自分の位置関係が変わった場合、
       // テイクバックで見せていた向きと実際に振る向きがずれてしまう。
-      const stroke = (who === 'you' && this.you.chargeStroke) || classifyStroke(who, ball, player);
+      const baseStroke = (who === 'you' && this.you.chargeStroke) || classifyStroke(who, ball, player);
+
+      // 人間の打球だけ溜め量に応じて演出を強める（AIは常に0＝通常の演出）
+      const charge = who === 'you' ? this.you.swingCharge : 0;
+      // 高くて緩いボール(SMASH_MIN_Y以上)を、しっかり溜めてから(SMASH_MIN_CHARGE以上)離すと
+      // スマッシュになる。フォア/バックの区別はなく、専用の振り下ろしモーション＋強打になる。
+      const isSmash = who === 'you' && ball.y >= PLAYER.SMASH_MIN_Y && charge >= PLAYER.SMASH_MIN_CHARGE;
+      const stroke = isSmash ? 'smash' : baseStroke;
 
       // AI（cpu/cpuMate は人間の逆をつきつつ you 陣地(z<0)へ、youMate はダブルスで唯一の
       // AI仲間なので相手チームの主力 cpu の逆をつきつつ cpu 陣地(z>0)へ）。
@@ -484,9 +491,6 @@
         : TEAM_OF[who] === 'cpu'
           ? { target: shotTarget(this.you.x, -1, stretch), flight: lerp(CPU.SHOT_T, CPU.STRETCH_T, stretch) }
           : { target: shotTarget(this.cpu.x, 1, stretch), flight: lerp(CPU.SHOT_T, CPU.STRETCH_T, stretch) };
-
-      // 人間の打球だけ溜め量に応じて演出を強める（AIは常に0＝通常の演出）
-      const charge = who === 'you' ? this.you.swingCharge : 0;
 
       Object.assign(ball, solveShot(from, shot.target, shot.flight));
       ball.last = TEAM_OF[who]; // スコア判定はチーム単位。誰が打ったかは player.stroke 側で個別に持つ
@@ -507,18 +511,27 @@
      * 打点のタイミングでもコースがずれる：ボールを前（遠く）で捉えるほど「引っ張り」、
      * 引きつけて近くで打つほど「流れる」。フォアとバックでは体を横切る向きが逆なので、
      * 引っ張る方向も逆になる（pullDir で吸収する）。ロブは対象外。
-     * @param {'forehand'|'backhand'} [stroke]
+     * スマッシュはフォア/バックの区別も打点タイミングのずれもなく、←→ でだけ狙う。
+     * @param {'forehand'|'backhand'|'smash'} [stroke]
      * @param {number} [contactDz] 打点の z - プレイヤーの z（前にあるほど大きい）
      */
     playerShot(stroke = 'forehand', contactDz = TIMING_AIM.NEUTRAL_DZ) {
       const lob = this.input.lob;
       const aim = this.input.moveX * INPUT_X_TO_WORLD;
       const charge = this.you.swingCharge;
+      const baseX = aim !== 0 ? aim * SHOT.AIM_X : -signOr(this.you.x, 1) * SHOT.DEFAULT_X;
+
+      if (stroke === 'smash') {
+        return {
+          target: { x: baseX, y: BALL_R, z: rand(SHOT.SMASH_Z, SHOT.SMASH_Z + SHOT.DRIVE_Z_SPREAD) },
+          flight: SHOT.SMASH_T,
+        };
+      }
+
       const flight = lob ? SHOT.LOB_T : lerp(SHOT.TAP_T, SHOT.CHARGE_T, charge);
       // 溜めるほど深く。速さと深さの両方が変わるので「強い球を打った」感が出る。
       const depth = lerp(SHOT.TAP_Z, SHOT.CHARGE_Z, charge);
 
-      const baseX = aim !== 0 ? aim * SHOT.AIM_X : -signOr(this.you.x, 1) * SHOT.DEFAULT_X;
       let x = baseX;
       if (!lob) {
         const timing = clamp((contactDz - TIMING_AIM.NEUTRAL_DZ) / TIMING_AIM.HALF_BAND, -1, 1);

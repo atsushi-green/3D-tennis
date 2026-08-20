@@ -540,6 +540,76 @@ function tossAndHit(g, holdFrames = 0) {
   ok(g.you.stroke === 'serve', `serve sets stroke='serve', got ${g.you.stroke}`);
 }
 
+// --- 高くて緩いボールを、しっかり溜めてから離すとスマッシュになる ---
+{
+  const { SMASH_MIN_Y, SMASH_MIN_CHARGE } = PLAYER;
+  const { SMASH_T, SMASH_Z, DRIVE_Z_SPREAD } = R.config.SHOT;
+
+  // 高い(SMASH_MIN_Y以上) かつ 十分溜めた(SMASH_MIN_CHARGE以上) -> スマッシュ
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.you.x = 0; g.you.z = -5;
+    g.ball.x = 0.3; g.ball.y = SMASH_MIN_Y + 0.2; g.ball.z = -5;
+    g.you.swingCharge = SMASH_MIN_CHARGE + 0.1;
+    g.hit('you');
+    ok(g.you.stroke === 'smash', `high + charged ball becomes a smash, got ${g.you.stroke}`);
+    const landing = R.physics.predictLanding(g.ball);
+    ok(landing.z >= SMASH_Z - 0.5 && landing.z <= SMASH_Z + DRIVE_Z_SPREAD + 0.5,
+      `smash aims for the smash depth, got z=${landing.z}`);
+  }
+
+  // 高いが溜めが足りない -> 通常のフォア/バックのまま（スマッシュにならない）
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.you.x = 0; g.you.z = -5;
+    g.ball.x = 0.3; g.ball.y = SMASH_MIN_Y + 0.2; g.ball.z = -5;
+    g.you.swingCharge = SMASH_MIN_CHARGE - 0.1;
+    g.hit('you');
+    ok(g.you.stroke !== 'smash', `not enough charge -> no smash even though the ball is high, got ${g.you.stroke}`);
+  }
+
+  // 十分溜めたが低いボール -> 通常のフォア/バックのまま（スマッシュにならない）
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.you.x = 0; g.you.z = -5;
+    g.ball.x = 0.3; g.ball.y = SMASH_MIN_Y - 0.5; g.ball.z = -5;
+    g.you.swingCharge = 1;
+    g.hit('you');
+    ok(g.you.stroke !== 'smash', `low ball -> no smash even at full charge, got ${g.you.stroke}`);
+  }
+
+  // スマッシュはサーブと同等以上に速い（決め球らしい威力）
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.you.x = 0; g.you.z = -5;
+    g.ball.x = 0.3; g.ball.y = SMASH_MIN_Y + 0.2; g.ball.z = -5;
+    g.you.swingCharge = 1;
+    g.hit('you');
+    const smashSpeed = Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz);
+
+    const g2 = new R.Game({ input: fakeInput, hooks: noHooks });
+    g2.start();
+    g2.phase = 'rally';
+    g2.you.x = 0; g2.you.z = -5;
+    g2.ball.x = 0.3; g2.ball.y = 1; g2.ball.z = -5;
+    g2.you.swingCharge = 1; // フル溜めの通常打（スマッシュ対象外の高さ）
+    g2.hit('you');
+    const fullDriveSpeed = Math.hypot(g2.ball.vx, g2.ball.vy, g2.ball.vz);
+
+    ok(smashSpeed > fullDriveSpeed,
+      `smash is faster than even a full-charge normal drive: smash=${smashSpeed.toFixed(2)} drive=${fullDriveSpeed.toFixed(2)}`);
+    ok(SMASH_T < R.config.SHOT.CHARGE_T, 'precondition: SMASH_T is shorter (faster) than CHARGE_T');
+  }
+}
+
 // --- 打点でインパクト演出（ball.impact）が発火し、時間とともに減衰する ---
 {
   const { FX } = R.config;

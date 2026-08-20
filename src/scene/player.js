@@ -136,14 +136,16 @@
   }
 
   /**
-   * スイングの残り時間から腕の角度を決める。3種類のポーズを軸を分けて切り替える：
+   * スイングの残り時間から腕の角度を決める。4種類のポーズを軸を分けて切り替える：
    * - フォアハンド／バックハンド: rotation.y（横振り）。mirrorGroundAngle() で左右だけを
    *   鏡映しするので、バックハンドでもテイクバック→打点→フォロースルーが正しい前後の
    *   向きのまま、体の逆サイドで振られる。
    * - サーブ: rotation.z（縦振り）。トス中は構え、打った瞬間から真上→前へ振り下ろす。
+   * - スマッシュ: サーブと同じ rotation.z だが、トスの構えを経ずに振りかぶった位置から
+   *   鋭く振り下ろす（フォア/バックの区別はない）。
    * @param {THREE.Group} player
    * @param {number} anim 残り時間（秒）。0 なら構え／トスの姿勢
-   * @param {'forehand'|'backhand'|'serve'} [stroke]
+   * @param {'forehand'|'backhand'|'serve'|'smash'} [stroke]
    * @param {boolean} [tossing] トス中（打つ前）かどうか。サーブの構えを出す
    * @param {'forehand'|'backhand'|null} [prep] 打つ前のテイクバック。まだ振っていない
    *   （anim<=0）間、ボールがどちらの打点に来そうかに応じてラケットを引いておく。
@@ -181,6 +183,15 @@
     if (stroke === 'serve') {
       arm.rotation.y = 0;
       arm.rotation.z = SWING.SERVE_START_Z + progress * (SWING.SERVE_FOLLOW_Z - SWING.SERVE_START_Z);
+      torso.rotation.y = 0;
+      return;
+    }
+
+    if (stroke === 'smash') {
+      // サーブと同じ縦振り(rotation.z)の系統。トスの構えを経ない分、振りかぶった位置から
+      // 始まり、フォア/バックの区別なく体の正面へ鋭く振り下ろす。
+      arm.rotation.y = 0;
+      arm.rotation.z = SWING.SMASH_START_Z + progress * (SWING.SMASH_FOLLOW_Z - SWING.SMASH_START_Z);
       torso.rotation.y = 0;
       return;
     }
