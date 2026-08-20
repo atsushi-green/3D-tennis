@@ -10,6 +10,11 @@
 - テスト: <tests/smoke.mjs の結果>
 ```
 
+## 2026-08-21 効果音のバリエーションを増やす
+- ブランチ: evolve/audio-variation
+- 実施内容: `src/audio.js` の `tone(freq, dur, vol)` が毎回まったく同じ音（固定 `triangle` 波形・固定周波数・固定エンベロープ）を鳴らしていたのを、呼び出しごとに軽くランダムな揺らぎを持たせるように変更。`config.js` に新設した `AUDIO`（`PITCH_JITTER=0.035`、`DUR_JITTER=0.12`、`VOL_JITTER=0.08`、`WAVES=['triangle','sine']`）を使い、`tone()` 内で波形を毎回ランダムに選び、周波数・長さ・音量を `RallyOne.math.rand(1±jitter)` で軽く揺らす。既存の意図的な音程差（溜め量による強打の高音化、フォア/バックの音色差、勝者による点入り音の高低）を覆い隠さない程度の幅に抑えた。`sfx.*`（serve/hit/bounce/point）の呼び出し側は無変更。
+- テスト: `node tests/smoke.mjs` — ALL PASS（audio.js に依存する既存テストはないため回帰なし）。ブラウザ（ローカル `python3 -m http.server` 経由、file:// はこの環境の claude-in-chrome から直接開けなかったため）で `AudioContext.prototype.createOscillator` をフックして `hit`/`bounce` を連続呼び出しし、波形が `triangle`/`sine` の間でランダムに変わること、周波数が基準値の±5%前後で揺らぐことを実測で確認。コンソールエラーなし（調査中に見つけた `Cannot set properties of null (setting 'textContent')` はポート8934での古いブラウザキャッシュが原因で、ポートを変えて再読み込みしたら再現しなかった＝実装への回帰ではないことを確認済み）。
+
 ## 2026-08-21 エース／フォールト／ダブルフォルトのスタッツをHUDに表示する
 - ブランチ: evolve/stats-hud
 - 実施内容: `game.js` の `Game` に `this.stats = { you:{aces,doubleFaults}, cpu:{aces,doubleFaults} }` を追加（マッチ全体を通して積算、ポイントごとにはリセットしない）。`endPoint(winner, reason)` の先頭で、`reason==='ダブルフォルト'` なら `this.stats[this.server].doubleFaults++`、`reason==='ツーバウンド' && this.serveInFlight`（＝サーブが一度もリターン側に触れられないまま2バウンドで決着＝エース）なら `this.stats[winner].aces++` を行うだけのシンプルな判定にした（サービスウィナーとエースは区別せず同一視）。DOM に触るのは既存方針どおり `hud.js` のみ：`renderScore(match, server, stats)` に第3引数を追加し、新設した `#ace1`/`#ace2`/`#df1`/`#df2` の `textContent` を更新する。呼び出し元 `main.js` は `hud.renderScore(game.match, game.server, game.stats)` に統一（初期描画・`hooks.score()` の両方）。表示は `index.html` のスコアボード（`#bug`）の下に新設した控えめな `#stats`（「A 1–0 · DF 0–0」形式、you–cpu順）で、既存の `#bug` を `#scorewrap` でラップして絶対配置を親に移し、`#stats` はその下に通常フローで積むだけにした（CSSの位置ハードコードを増やさないため）。

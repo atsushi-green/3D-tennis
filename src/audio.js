@@ -5,6 +5,9 @@
 (function (RallyOne) {
   'use strict';
 
+  const { AUDIO } = RallyOne.config;
+  const { rand } = RallyOne.math;
+
   let ctx = null;
 
   function context() {
@@ -20,19 +23,25 @@
     if (ac && ac.state === 'suspended') ac.resume();
   }
 
+  /**
+   * 呼び出しごとに周波数・長さ・音量を軽くランダムに揺らし、波形も数種から選ぶ。
+   * 毎回全く同じ音にならないようにするための味付け（AUDIO.*_JITTER）。
+   */
   function tone(freq, dur, vol) {
     const ac = context();
     if (!ac) return;
     try {
       const osc = ac.createOscillator();
       const gain = ac.createGain();
-      osc.type = 'triangle';
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(vol, ac.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + dur);
+      osc.type = AUDIO.WAVES[Math.floor(Math.random() * AUDIO.WAVES.length)];
+      osc.frequency.value = freq * rand(1 - AUDIO.PITCH_JITTER, 1 + AUDIO.PITCH_JITTER);
+      const jitteredDur = dur * rand(1 - AUDIO.DUR_JITTER, 1 + AUDIO.DUR_JITTER);
+      const jitteredVol = vol * rand(1 - AUDIO.VOL_JITTER, 1 + AUDIO.VOL_JITTER);
+      gain.gain.setValueAtTime(jitteredVol, ac.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + jitteredDur);
       osc.connect(gain).connect(ac.destination);
       osc.start();
-      osc.stop(ac.currentTime + dur);
+      osc.stop(ac.currentTime + jitteredDur);
     } catch (e) {
       /* 音が出ないだけなのでゲームは続行 */
     }

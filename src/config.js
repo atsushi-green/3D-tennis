@@ -209,6 +209,18 @@
     MARGIN: 2,      // ゲーム／セットとも2差が必要
   };
 
+  /**
+   * 効果音の揺らぎ。毎回全く同じ音だと単調に聞こえるので、鳴らすたびに
+   * 周波数・長さ・音量を軽くランダムに振り、波形も数種から選ぶ。
+   * 溜め量やフォア/バックなど既存の意図的な音程差を覆い隠さない程度の幅に留める。
+   */
+  const AUDIO = {
+    PITCH_JITTER: 0.035, // 周波数を ±3.5% ランダムに揺らす
+    DUR_JITTER: 0.12,    // 長さを ±12% ランダムに揺らす
+    VOL_JITTER: 0.08,    // 音量を ±8% ランダムに揺らす
+    WAVES: ['triangle', 'sine'], // 毎回どちらかをランダムに選ぶ（どちらも柔らかい音色なので違和感が出にくい）
+  };
+
   /** 演出の間（秒）。setTimeout ではなくゲームループで数える */
   const TIMING = {
     CPU_SERVE_DELAY: 0.9,
@@ -344,6 +356,6 @@
 
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
-    BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY,
+    BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO,
   };
 })(window.RallyOne = window.RallyOne || {});
