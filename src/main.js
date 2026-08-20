@@ -15,7 +15,7 @@
       sound: (name, ...args) => sfx[name](...args),
       call: (big, sub) => hud.showCall(big, sub),
       clearCall: () => hud.hideCall(),
-      score: () => hud.renderScore(game.match, game.server),
+      score: () => hud.renderScore(game.match, game.server, game.stats),
     },
   });
 
@@ -37,7 +37,7 @@
     onFormationBack: () => game.setYouMateFormation('back'),
   });
 
-  hud.renderScore(game.match, game.server);
+  hud.renderScore(game.match, game.server, game.stats);
   world.sync(game, 0); // スタート画面の後ろにも正しい配置で映しておく
 
   // 開発用：コンソールから RallyOne.game で状態を覗ける

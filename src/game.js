@@ -145,6 +145,11 @@
       this.lastBallOwnerSeen = null;
       /** 今のポイントのサーブが1本目(1)か、1本目がフォールトした後のセカンドサーブ(2)か。 */
       this.serveNumber = 1;
+      /** チームごとの通算スタッツ（HUD表示用）。マッチ全体（1セット）を通して積算し、リセットしない。 */
+      this.stats = {
+        you: { aces: 0, doubleFaults: 0 },
+        cpu: { aces: 0, doubleFaults: 0 },
+      };
     }
 
     actor(who) {
@@ -611,6 +616,13 @@
 
     endPoint(winner, reason) {
       if (this.phase === 'over') return;
+      // ダブルフォルト＝サーバー側の失点。エース＝サーブがリターンに一度も触れられずに
+      // (serveInFlight のまま)2バウンドで決まった場合（＝サーバー側の得点）。
+      if (reason === 'ダブルフォルト') {
+        this.stats[this.server].doubleFaults++;
+      } else if (reason === 'ツーバウンド' && this.serveInFlight) {
+        this.stats[winner].aces++;
+      }
       this.phase = 'over';
       this.ball.live = false;
       this.hooks.sound('point', winner);

@@ -294,6 +294,68 @@ function tossAndHit(g, holdFrames = 0) {
     'the second serve itself lands in the service box like a first serve would');
 }
 
+// --- スタッツ：ダブルフォルトはサーバー側のカウントに積む ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  ok(g.stats.you.doubleFaults === 0 && g.stats.cpu.doubleFaults === 0, 'precondition: no stats yet');
+
+  g.serve('you');
+  g.ball.bounces = 0;
+  g.ball.x = 1.0; g.ball.y = 0; g.ball.vy = -1; g.ball.z = COURT.SERVICE + 1; // 1本目アウト
+  g.bounce();
+  ok(g.serveNumber === 2, 'precondition: on the second serve');
+
+  g.serve('you');
+  g.ball.x = 1; g.ball.z = -0.01; g.ball.y = 0.3; g.ball.vx = 0; g.ball.vy = 0; g.ball.vz = 5;
+  g.stepBall(0.05); // 2本目もネットにかかる＝ダブルフォルト
+  ok(g.phase === 'over', 'precondition: double fault ends the point');
+  ok(g.stats.you.doubleFaults === 1, 'double fault counts against the server (you)');
+  ok(g.stats.cpu.doubleFaults === 0, "double fault doesn't count against the receiver");
+}
+
+// --- スタッツ：エースはサーブが一度も返球されずに2バウンドで決まったときだけ積む ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.serve('you');
+  ok(g.serveInFlight === true, 'precondition: serve in flight');
+  // サービスボックス内に着地（フォールトではない）
+  g.ball.bounces = 0;
+  g.ball.x = 1.0; g.ball.y = 0; g.ball.vy = -1; g.ball.z = 3;
+  const decided1 = g.bounce();
+  ok(decided1 === false, 'precondition: lands in the box, point continues');
+  ok(g.serveInFlight === true, 'precondition: still not returned');
+
+  // 誰も触れないまま2バウンド目＝エース
+  g.ball.bounces = 1;
+  g.ball.y = 0; g.ball.vy = -1;
+  const decided2 = g.bounce();
+  ok(decided2 === true, 'second bounce without a return ends the point');
+  ok(g.phase === 'over' && g.match.points.you === 1, 'precondition: server wins the point');
+  ok(g.stats.you.aces === 1, 'an untouched serve that bounces twice counts as an ace');
+  ok(g.stats.cpu.aces === 0, 'the receiver gets no ace credit');
+}
+
+// --- スタッツ：返球されたラリーがツーバウンドで決まっても、エースにはカウントしない ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.serve('you');
+  g.ball.bounces = 0;
+  g.ball.x = 1.0; g.ball.y = 0; g.ball.vy = -1; g.ball.z = 3;
+  g.bounce(); // サービスボックスに着地
+  g.hit('cpu'); // リターンされる＝serveInFlight が解除される
+  ok(g.serveInFlight === false, 'precondition: the serve has been returned');
+
+  g.ball.bounces = 1;
+  g.ball.y = 0; g.ball.vy = -1;
+  g.bounce(); // 相手が拾えず2バウンド
+  ok(g.phase === 'over', 'precondition: point ends on the second bounce');
+  ok(g.stats.you.aces === 0,
+    'a rally point (serve already returned) is not an ace, even if it ends on a double bounce');
+}
+
 // --- 移動は加速度ベース：急に最高速にならず、離しても急停止しない（滑るような自然さ） ---
 {
   const input = { moveX: 0, moveZ: 1, lob: false };

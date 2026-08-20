@@ -11,6 +11,8 @@
         names: { you: $('n1'), cpu: $('n2') },
         games: { you: $('g1'), cpu: $('g2') },
         points: { you: $('p1'), cpu: $('p2') },
+        aces: { you: $('ace1'), cpu: $('ace2') },
+        doubleFaults: { you: $('df1'), cpu: $('df2') },
         call: $('call'),
         callBig: $('callBig'),
         callSub: $('callSub'),
@@ -23,8 +25,9 @@
     /**
      * @param {object} match RallyOne.scoring.Match
      * @param {'you'|'cpu'} server
+     * @param {{you:{aces:number,doubleFaults:number}, cpu:{aces:number,doubleFaults:number}}} stats RallyOne.Game#stats
      */
-    renderScore(match, server) {
+    renderScore(match, server, stats) {
       const { points, games } = match;
       this.el.points.you.textContent = pointLabel(points.you, points.cpu);
       this.el.points.cpu.textContent = pointLabel(points.cpu, points.you);
@@ -32,6 +35,10 @@
       this.el.games.cpu.textContent = games.cpu;
       this.el.names.you.className = 'nm' + (server === 'you' ? ' srv' : '');
       this.el.names.cpu.className = 'nm' + (server === 'cpu' ? ' srv' : '');
+      this.el.aces.you.textContent = stats.you.aces;
+      this.el.aces.cpu.textContent = stats.cpu.aces;
+      this.el.doubleFaults.you.textContent = stats.you.doubleFaults;
+      this.el.doubleFaults.cpu.textContent = stats.cpu.doubleFaults;
     }
 
     showCall(big, sub) {

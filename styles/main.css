@@ -12,9 +12,10 @@ canvas{display:block}
 
 #hud{position:fixed;inset:0;pointer-events:none}
 
+#scorewrap{position:absolute;top:14px;left:14px}
+
 /* broadcast-style scorebug */
 #bug{
-  position:absolute;top:14px;left:14px;
   display:grid;grid-template-columns:auto 46px 56px;
   background:rgba(9,20,34,.82);
   border-left:4px solid var(--ball);
@@ -30,6 +31,14 @@ canvas{display:block}
 #bug .row2{display:contents}
 #bug .row2 div{border-top:1px solid rgba(232,238,245,.12)}
 #bug .srv::after{content:"●";color:var(--ball);font-size:9px;margin-left:6px;vertical-align:2px}
+
+/* エース／ダブルフォルトの通算（you–cpu）。スコアボードの邪魔をしない控えめな表示 */
+#stats{
+  margin-top:6px;padding:4px 10px;
+  background:rgba(9,20,34,.6);border-radius:2px;
+  font-size:11px;letter-spacing:.04em;color:var(--dim);
+  font-variant-numeric:tabular-nums;
+}
 
 #head{
   position:absolute;top:14px;right:14px;text-align:right;

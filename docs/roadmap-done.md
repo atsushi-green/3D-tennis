@@ -10,6 +10,12 @@
 - テスト: <tests/smoke.mjs の結果>
 ```
 
+## 2026-08-21 エース／フォールト／ダブルフォルトのスタッツをHUDに表示する
+- ブランチ: evolve/stats-hud
+- 実施内容: `game.js` の `Game` に `this.stats = { you:{aces,doubleFaults}, cpu:{aces,doubleFaults} }` を追加（マッチ全体を通して積算、ポイントごとにはリセットしない）。`endPoint(winner, reason)` の先頭で、`reason==='ダブルフォルト'` なら `this.stats[this.server].doubleFaults++`、`reason==='ツーバウンド' && this.serveInFlight`（＝サーブが一度もリターン側に触れられないまま2バウンドで決着＝エース）なら `this.stats[winner].aces++` を行うだけのシンプルな判定にした（サービスウィナーとエースは区別せず同一視）。DOM に触るのは既存方針どおり `hud.js` のみ：`renderScore(match, server, stats)` に第3引数を追加し、新設した `#ace1`/`#ace2`/`#df1`/`#df2` の `textContent` を更新する。呼び出し元 `main.js` は `hud.renderScore(game.match, game.server, game.stats)` に統一（初期描画・`hooks.score()` の両方）。表示は `index.html` のスコアボード（`#bug`）の下に新設した控えめな `#stats`（「A 1–0 · DF 0–0」形式、you–cpu順）で、既存の `#bug` を `#scorewrap` でラップして絶対配置を親に移し、`#stats` はその下に通常フローで積むだけにした（CSSの位置ハードコードを増やさないため）。
+- テスト: `node tests/smoke.mjs` — ALL PASS。新規テスト3件：ダブルフォルトがサーバー側の `doubleFaults` にのみ加算されること、未返球のまま2バウンドした場合に `winner` 側の `aces` にのみ加算されること（サービスボックス内着地→2バウンド目の流れを直接検証）、既に返球された（`serveInFlight` が解除された）ラリーが2バウンドで決まってもエースにはカウントされないこと。ローカル `http.server` 経由（`file://` は claude-in-chrome 拡張が非対応だったため）でブラウザ目視確認も実施：コンソールから同じシナリオを再現し、`#stats` が実際に「A 1–0 · DF 0–0」→「A 1–0 · DF 1–0」と更新されることをスクリーンショットで確認（初回ロード時に `src/hud.js` がブラウザキャッシュに残り旧バージョンのまま実行されるという事象に遭遇したが、ハードリロードで解消。アプリ本体の問題ではない）。`code-review` skill（medium effort）でのセルフレビューも指摘0件。
+- 副次的な記録: README.md の操作表・構成説明は変更不要と判断（新しい入力やファイルが増えたわけではないため）。
+
 ## 2026-08-21 外方向に強いサーブを打つとフォールトになりやすい問題を調整する
 - ブランチ: evolve/serve-wide-power-balance
 - 実施内容: まず定量的な再現調査を行った。`node --experimental-vm-modules` 相当の手法（tests/smoke.mjs と同じ vm サンドボックス）で、ワイド（`AIM_WIDE`）×フル溜め（`SERVE.CHARGE_SWEET_T` ちょうど）のサーブを実際の `Game#update()` を通してタイミングを1〜60フレーム全域・保持時間のジッター（スイートスポット±0.1秒）・20,000試行で網羅的にシミュレーションしたが、フォールト（ネット／サービスボックス外）は一度も再現しなかった（0/20,000）。一方で、着地位置を「1フレーム(1/60s)ごとに外部から観測」する形で比較すると見かけ上サイドラインの外まで出るケースがあったため、`bounce()` がステップ後の位置をそのまま着地点として使っている点（`hitsNet()` の `netCrossing()` のような線形補間をしていない）を疑い、`groundCrossing()` を追加して `bounce()` の着地位置を補正する修正を試みたが、`tests/smoke.mjs` の手動でボール位置を直接セットしてフォールト判定だけを検証している既存テスト（フォールト実装サイクルで追加されたもの）が軒並み壊れた（`ball.px/py/pz` が実際の軌道と整合しない状態で `bounce()`/`stepBall()` を直接呼ぶ前提のテストのため）。この修正はテスト側の前提まで作り直す必要がありスコープが本タスクを超えるため撤回し、代わりに `config.js` の数値調整で安全マージンを広げる方針に切り替えた（`git checkout -- src/game.js src/physics.js` で修正前に戻した）。
