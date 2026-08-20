@@ -229,7 +229,19 @@
         this.you.charging = false;
         return;
       }
-      this.you.chargeTime = Math.min(this.you.chargeTime + dt, CHARGE.MAX_TIME);
+      const capTime = CHARGE.MAX_TIME * this.chargeSpeedCap(this.you.speed);
+      // 速度キャップを超えて増やさないが、既に到達した溜め量は（移動でキャップが下がっても）減らさない
+      this.you.chargeTime = Math.min(this.you.chargeTime + dt, Math.max(capTime, this.you.chargeTime));
+    }
+
+    /** 移動速度から溜め上限（0〜1、MAX_TIMEに対する割合）を求める。動くほど溜めにくくなる。 */
+    chargeSpeedCap(speed) {
+      const { MOVE_CAP_SPEED_START, MOVE_CAP_SPEED_FULL, MOVE_CAP_FLOOR } = CHARGE;
+      if (speed <= MOVE_CAP_SPEED_START) return 1;
+      const t = clamp(
+        (speed - MOVE_CAP_SPEED_START) / (MOVE_CAP_SPEED_FULL - MOVE_CAP_SPEED_START), 0, 1,
+      );
+      return 1 - t * (1 - MOVE_CAP_FLOOR);
     }
 
     /* ------------------------------------------------------ ポイント進行 */

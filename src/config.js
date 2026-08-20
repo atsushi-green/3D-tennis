@@ -264,6 +264,9 @@
    */
   const CHARGE = {
     MAX_TIME: 0.55, // これ以上溜めても威力は増えない(秒)
+    MOVE_CAP_FLOOR: 0.35,       // 最高速で動いている間、溜められる上限（MAX_TIMEに対する割合）
+    MOVE_CAP_SPEED_START: 0.5,  // これ以下の速度ならキャップなし（フル溜め可能）
+    MOVE_CAP_SPEED_FULL: PLAYER.SPEED, // この速度以上でキャップがMOVE_CAP_FLOORまで下がりきる
   };
 
   /**
