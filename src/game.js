@@ -41,9 +41,23 @@
   /** 個々の選手が、チームとしてはどちら側か（ダブルスの味方はチームメイトと同じチーム） */
   const TEAM_OF = { you: 'you', youMate: 'you', cpu: 'cpu', cpuMate: 'cpu' };
 
-  /** 打点でのボールの位置が、ラケット側か逆側（体の反対側に手を伸ばす＝バックハンド）か */
+  /**
+   * ボールが今の速度のまま直進した場合、プレイヤーの奥行き(z)まで届く瞬間の x 座標（仮想延長線）。
+   * バウンドは vx/vz を同じ係数で減速させるだけで比（＝軌道の向き）は変えないので、
+   * バウンドをまたいでもこの直線予測はそのまま成立する。まだボールが遠いうちに判定しても、
+   * 「今のボールの位置」ではなく「届く頃にどちら側へ来るか」で見積もれる。
+   */
+  function virtualBallX(ball, player) {
+    if (Math.abs(ball.vz) < 1e-6) return ball.x;
+    const t = (player.z - ball.z) / ball.vz;
+    if (!(t > 0)) return ball.x; // 既に通り過ぎた/向かっていない場合は現在位置で代用
+    return ball.x + ball.vx * t;
+  }
+
+  /** ボールの仮想延長線が、ラケット側か逆側（体の反対側に手を伸ばす＝バックハンド）か */
   function classifyStroke(who, ball, player) {
-    return RACKET_SIDE[who] * (ball.x - player.x) >= 0 ? 'forehand' : 'backhand';
+    const x = virtualBallX(ball, player);
+    return RACKET_SIDE[who] * (x - player.x) >= 0 ? 'forehand' : 'backhand';
   }
 
   /** phase: idle → serve → rally → over → (serve …) */
@@ -196,9 +210,10 @@
       } else if (this.phase === 'rally') {
         this.you.charging = true;
         this.you.chargeTime = 0;
-        // フォア/バックはテイクバックを始めた瞬間（＝今)のボールとの位置関係で決め、
-        // 溜めている間ボールや自分が動いても変えない。毎フレーム判定し直すと、溜めている
-        // 最中に左右が入れ替わってテイクバックの向きが急に反転して見えることがあった。
+        // フォア/バックはテイクバックを始めた瞬間、ボールの仮想延長線（今の速度のまま
+        // 届いたときの左右関係）と自分の位置関係で決め、溜めている間は変えない。
+        // 毎フレーム判定し直すと、溜めている最中に左右が入れ替わってテイクバックの
+        // 向きが急に反転して見えることがあった。
         this.you.chargeStroke = classifyStroke('you', this.ball, this.you);
       }
     }

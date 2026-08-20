@@ -426,28 +426,44 @@ function tossAndHit(g) {
   }
 }
 
-// --- フォアハンド/バックハンドの判定（打点がラケット側か逆側か） ---
+// --- フォアハンド/バックハンドの判定（ボールの仮想延長線がラケット側か逆側か） ---
+// vx/vz を0にして、速度による延長を無効化し、打点の位置関係だけを見る。
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start();
   g.you.x = 0;
-  g.ball.x = 1.5; g.ball.y = 1; g.ball.z = -2; // 'you' の world +x 側 = ラケット側
+  g.ball.x = 1.5; g.ball.y = 1; g.ball.z = -2; g.ball.vx = 0; g.ball.vz = 0; // 'you' の world +x 側 = ラケット側
   g.hit('you');
   ok(g.you.stroke === 'forehand', `ball on racket side -> forehand, got ${g.you.stroke}`);
 
-  g.ball.x = -1.5; g.ball.y = 1; g.ball.z = -2; // world -x 側 = 逆側
+  g.ball.x = -1.5; g.ball.y = 1; g.ball.z = -2; g.ball.vx = 0; g.ball.vz = 0; // world -x 側 = 逆側
   g.hit('you');
   ok(g.you.stroke === 'backhand', `ball on off side -> backhand, got ${g.you.stroke}`);
 
   // cpu は180°回転しているので判定が反転する（world -x 側がラケット側）
   g.cpu.x = 0;
-  g.ball.x = -1.5; g.ball.y = 1; g.ball.z = 2;
+  g.ball.x = -1.5; g.ball.y = 1; g.ball.z = 2; g.ball.vx = 0; g.ball.vz = 0;
   g.hit('cpu');
   ok(g.cpu.stroke === 'forehand', `cpu: ball on its racket side -> forehand, got ${g.cpu.stroke}`);
 
-  g.ball.x = 1.5; g.ball.y = 1; g.ball.z = 2;
+  g.ball.x = 1.5; g.ball.y = 1; g.ball.z = 2; g.ball.vx = 0; g.ball.vz = 0;
   g.hit('cpu');
   ok(g.cpu.stroke === 'backhand', `cpu: ball on its off side -> backhand, got ${g.cpu.stroke}`);
+}
+
+// --- フォアハンド/バックハンドの判定（ボールの仮想延長線を使う） ---
+// 現在位置ではラケット側でも、速度の延長線がプレイヤーに届く頃には逆側に来るなら、
+// 逆側（バックハンド等）と判定されるべき。
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.you.x = 0; g.you.z = -HALF_L - 0.6;
+  // 今は 'you' のラケット側(+x)にいるが、-x 方向へ進んでいて、届く頃には逆側(-x)に来る
+  g.ball.x = 0.3; g.ball.y = 1; g.ball.z = -3;
+  g.ball.vx = -4; g.ball.vz = -4; // player.z へ向かって進む
+  g.hit('you');
+  ok(g.you.stroke === 'backhand',
+    `virtual extension crossing to off side -> backhand, got ${g.you.stroke}`);
 }
 
 // --- サーブは stroke='serve'（横振りではなく専用の縦振りポーズを使う） ---
