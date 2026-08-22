@@ -406,9 +406,24 @@
     Object.assign(PLAYER, DEFAULT_PLAYER_CPU, preset.player);
   }
 
+  /**
+   * スピン（トップスピン／スライス／フラット）。「アーケードのまま感覚チューニングする」方針
+   * （2026-08-17に人間と合意済み）のため、マグヌス力の実式は使わず、飛翔中の実効重力と
+   * バウンド時の反発係数・摩擦係数に体感重視の倍率を掛ける簡易モデルにした。
+   * トップスピンは実効重力を上げて「山なりに見えても速く沈み、高く弾む」、スライスは
+   * 実効重力を下げて「滑るように伸び、低く滑る」。フラット（倍率1）は現状の物理と完全に一致する
+   * ので、スピンを選ばない限り既存のバランス（サーブ・スマッシュ・ボレー等）は一切変わらない。
+   * キーで明示的にスピンを選ばない通常のグラウンドストローク・CPU/AIの返球はすべてフラット。
+   */
+  const SPIN = {
+    GRAVITY_MULT: { flat: 1, top: 1.35, slice: 0.72 },
+    BOUNCE_RESTITUTION_MULT: { flat: 1, top: 1.20, slice: 0.78 },
+    BOUNCE_FRICTION_MULT: { flat: 1, top: 0.96, slice: 1.05 },
+  };
+
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO,
-    CPU_LEVELS, applyCpuLevel,
+    CPU_LEVELS, applyCpuLevel, SPIN,
   };
 })(window.RallyOne = window.RallyOne || {});

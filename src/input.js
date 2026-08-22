@@ -12,6 +12,14 @@
   const MOVE_DOWN = ['ArrowDown', 'KeyS'];
   const LOB = ['ShiftLeft', 'ShiftRight'];
   const SWING = ['Space'];
+  /**
+   * グラウンドストローク限定のスピン選択（スマッシュ・ボレー・サーブ・ロブは対象外、常にフラット）。
+   * Ctrl/Alt はOS・ブラウザのショートカット（macOSのCtrl+←→でSpaces切替、ブラウザのAlt+←→で
+   * 戻る/進む等）と衝突し矢印キー移動と同時押しできないため、衝突のない素のキーを充てる。
+   * 何も押さなければ従来通りフラット（挙動は一切変わらない）。
+   */
+  const TOPSPIN_KEYS = ['KeyV'];
+  const SLICE_KEYS = ['KeyC'];
   /** ダブルスのAIパートナーへの指示。Q＝ネットへ前へ、E＝ベースラインまで下がれ */
   const FORMATION_NET = ['KeyQ'];
   const FORMATION_BACK = ['KeyE'];
@@ -84,6 +92,13 @@
 
     get lob() {
       return this.any(LOB);
+    }
+
+    /** @returns {'top'|'slice'|null} グラウンドストロークのスピン選択。何も押していなければ null（＝フラット） */
+    get spin() {
+      if (this.any(TOPSPIN_KEYS)) return 'top';
+      if (this.any(SLICE_KEYS)) return 'slice';
+      return null;
     }
   }
 

@@ -5,9 +5,18 @@
 (function (RallyOne) {
   'use strict';
 
-  const { COURT, PHYSICS } = RallyOne.config;
+  const { COURT, PHYSICS, SPIN } = RallyOne.config;
   const { lerp } = RallyOne.math;
   const { GRAVITY, BALL_R } = PHYSICS;
+
+  /**
+   * スピンによる実効重力（トップスピン＝速く沈む／スライス＝滑るように伸びる）。
+   * `b.spin` が未設定（トス中など）なら通常の GRAVITY と完全に同じ（倍率1）。
+   */
+  function spinGravity(spin) {
+    const mult = SPIN.GRAVITY_MULT[spin];
+    return GRAVITY * (mult === undefined ? 1 : mult);
+  }
 
   /** ネットは中央がたわみ、ポストに向かって高くなる */
   function netHeightAt(x) {
@@ -20,7 +29,7 @@
     b.px = b.x;
     b.py = b.y;
     b.pz = b.z;
-    b.vy += GRAVITY * dt;
+    b.vy += spinGravity(b.spin) * dt;
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     b.z += b.vz * dt;
@@ -58,6 +67,7 @@
       x: b.x, y: b.y, z: b.z,
       px: b.x, py: b.y, pz: b.z,
       vx: b.vx, vy: b.vy, vz: b.vz,
+      spin: b.spin, // スピンで実効重力が変わるので、予測にも同じ重力を使わないと着地点がずれる
     };
     const dt = 1 / 120;
     for (let t = 0; t < limit; t += dt) {
@@ -72,11 +82,17 @@
    * from から target へ、baseT 秒で落とす初速を解く。
    * その軌道がネットに当たるなら、当たらなくなるまで滞空時間を伸ばして（＝山なりにして）解き直す。
    */
-  function solveShot(from, target, baseT, clearance) {
+  /**
+   * @param {'flat'|'top'|'slice'} [spin] 省略時（フラット）は従来と完全に同じ挙動になる。
+   *   ここで使った実効重力(g)は、後で実際に飛ばすとき integrate() が `ball.spin` から
+   *   同じ値を引けるよう、呼び出し側が返り値と一緒に `ball.spin = spin` も設定すること。
+   */
+  function solveShot(from, target, baseT, clearance, spin) {
     const margin = clearance === undefined ? 0.30 : clearance;
+    const g = spinGravity(spin);
     const velocityFor = (t) => ({
       vx: (target.x - from.x) / t,
-      vy: (target.y - from.y - 0.5 * GRAVITY * t * t) / t,
+      vy: (target.y - from.y - 0.5 * g * t * t) / t,
       vz: (target.z - from.z) / t,
     });
 
@@ -85,7 +101,7 @@
       const v = velocityFor(t);
       const tNet = -from.z / v.vz;                  // ネット面に達する時刻
       if (!(tNet > 0 && tNet < t)) return v;        // ネットを通らない軌道
-      const yNet = from.y + v.vy * tNet + 0.5 * GRAVITY * tNet * tNet;
+      const yNet = from.y + v.vy * tNet + 0.5 * g * tNet * tNet;
       if (yNet > netHeightAt(from.x + v.vx * tNet) + margin) return v;
       t *= 1.12;
     }
@@ -93,6 +109,6 @@
   }
 
   RallyOne.physics = {
-    netHeightAt, integrate, crossedNet, netCrossing, hitsNet, predictLanding, solveShot,
+    netHeightAt, integrate, crossedNet, netCrossing, hitsNet, predictLanding, solveShot, spinGravity,
   };
 })(window.RallyOne = window.RallyOne || {});

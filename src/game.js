@@ -7,7 +7,7 @@
 
   const {
     BOUNDS, CHARGE, COURT, CPU, DOUBLES, FX, HALF_L, HALF_W, PHYSICS, PLAYER, RETURN, SERVE, SHOT,
-    TIMING, TIMING_AIM, VOLLEY,
+    SPIN, TIMING, TIMING_AIM, VOLLEY,
   } = RallyOne.config;
   const {
     approach, approach2D, clamp, lerp, rand, signOr,
@@ -91,6 +91,7 @@
         bounces: 0, last: 'you', live: false,
         impact: 0,      // 打った瞬間の演出（着弾フラッシュ・膨張）の残り時間
         impactPower: 0, // その打球の溜め量(0〜1)。演出の派手さに使う
+        spin: 'flat',   // 'flat'|'top'|'slice'。飛翔中の実効重力とバウンドの弾み方に効く
       };
       this.you = {
         x: 0, z: -HALF_L - 0.6, vx: 0, vz: 0, // vx/vz は実速度（加速度で目標速度に近づける）
@@ -344,6 +345,7 @@
       ball.live = false;
       ball.bounces = 0;
       ball.vx = ball.vy = ball.vz = 0;
+      ball.spin = 'flat'; // 前のポイントのスピンを持ち越さない
 
       this.you.charging = false;
       this.you.chargeTime = 0; // 前のサーブの溜めを持ち越さない
@@ -467,7 +469,9 @@
       const flightT = who === 'you' ? lerp(SERVE.T, SERVE.CHARGE_T, this.you.swingCharge) : SERVE.T;
 
       ball.y = from.y;
-      Object.assign(ball, solveShot(from, target, flightT, SERVE.CLEARANCE));
+      // サーブはスピン選択の対象外（フラット固定）。既にバランス調整済みのため据え置く。
+      Object.assign(ball, solveShot(from, target, flightT, SERVE.CLEARANCE, 'flat'));
+      ball.spin = 'flat';
       ball.live = true;
       ball.bounces = 0;
       ball.last = team; // スコア判定・当たり判定はチーム単位（hit() と同じ扱い）
@@ -538,7 +542,14 @@
           ? { target: shotTarget(this.you.x, -1, stretch), flight: lerp(CPU.SHOT_T, CPU.STRETCH_T, stretch) }
           : { target: shotTarget(this.cpu.x, 1, stretch), flight: lerp(CPU.SHOT_T, CPU.STRETCH_T, stretch) };
 
-      Object.assign(ball, solveShot(from, shot.target, shot.flight));
+      // スピン選択は人間の通常グラウンドストローク限定（スマッシュ・ボレー・CPU/AIはフラット固定）。
+      // C＝スライス／V＝トップスピン。何も押していなければ従来通りフラット（挙動は一切変わらない）。
+      const spin = (who === 'you' && (stroke === 'forehand' || stroke === 'backhand'))
+        ? (this.input.spin || 'flat')
+        : 'flat';
+
+      Object.assign(ball, solveShot(from, shot.target, shot.flight, undefined, spin));
+      ball.spin = spin;
       ball.last = TEAM_OF[who]; // スコア判定はチーム単位。誰が打ったかは player.stroke 側で個別に持つ
       ball.bounces = 0;
       ball.impact = FX.IMPACT_DURATION * lerp(1, FX.CHARGE_TIME_BOOST, charge);
@@ -969,10 +980,13 @@
     /** @returns {boolean} このバウンドでポイントが決まったか */
     bounce() {
       const ball = this.ball;
+      // トップスピンは高く弾み、スライスは低く滑る（フラットは倍率1＝従来通り）。
+      const restMult = SPIN.BOUNCE_RESTITUTION_MULT[ball.spin] || 1;
+      const friMult = SPIN.BOUNCE_FRICTION_MULT[ball.spin] || 1;
       ball.y = BALL_R;
-      ball.vy = -ball.vy * PHYSICS.RESTITUTION;
-      ball.vx *= PHYSICS.FRICTION;
-      ball.vz *= PHYSICS.FRICTION;
+      ball.vy = -ball.vy * PHYSICS.RESTITUTION * restMult;
+      ball.vx *= PHYSICS.FRICTION * friMult;
+      ball.vz *= PHYSICS.FRICTION * friMult;
       ball.bounces++;
       this.hooks.sound('bounce');
 

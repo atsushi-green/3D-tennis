@@ -1311,5 +1311,133 @@ function tossAndHit(g, holdFrames = 0) {
   ok(R.config.COURT.W === 8.23, 'applyCpuLevel does not touch court dimensions');
 }
 
+// --- スピン：実効重力（フラットは従来のGRAVITYと完全一致、トップスピンはより強く、スライスはより弱く） ---
+{
+  const { spinGravity } = R.physics;
+  const { PHYSICS: PHYS } = R.config;
+  ok(spinGravity('flat') === PHYS.GRAVITY, `flat spin is exactly the base gravity, got ${spinGravity('flat')}`);
+  ok(spinGravity(undefined) === PHYS.GRAVITY, 'no spin (e.g. during the toss) also falls back to the base gravity');
+  ok(spinGravity('top') < PHYS.GRAVITY, `topspin's effective gravity is stronger (more negative), got ${spinGravity('top')}`);
+  ok(spinGravity('slice') > PHYS.GRAVITY, `slice's effective gravity is weaker, got ${spinGravity('slice')}`);
+}
+
+// --- スピン：同じ発射点・同じ着地目標・同じ飛翔時間でも、トップスピンは山なりに高く上がり
+//     （実効重力が強い分、同じ時間で降りてくるにはより高く上げる必要がある）、
+//     スライスは低く滑るように飛ぶ（着地点そのものは spin によらず一致する）。
+{
+  const { solveShot, integrate } = R.physics;
+  function peakAndLanding(spin) {
+    const from = { x: 0, y: 1, z: -6 };
+    const target = { x: 1.5, y: 0.11, z: 8 };
+    const v = solveShot(from, target, 0.9, 0.30, spin);
+    const b = { x: from.x, y: from.y, z: from.z, vx: v.vx, vy: v.vy, vz: v.vz, spin };
+    let peak = b.y;
+    for (let i = 0; i < 400 && b.y >= 0.11; i++) {
+      integrate(b, 1 / 240);
+      if (b.y > peak) peak = b.y;
+    }
+    return { peak, x: b.x, z: b.z };
+  }
+
+  const flat = peakAndLanding('flat');
+  const top = peakAndLanding('top');
+  const slice = peakAndLanding('slice');
+
+  ok(top.peak > flat.peak, `topspin arcs higher than flat for the same target/time: top=${top.peak.toFixed(2)} flat=${flat.peak.toFixed(2)}`);
+  ok(flat.peak > slice.peak, `flat arcs higher than slice for the same target/time: flat=${flat.peak.toFixed(2)} slice=${slice.peak.toFixed(2)}`);
+  ok(Math.abs(top.x - flat.x) < 0.05 && Math.abs(slice.x - flat.x) < 0.05,
+    `landing x is unaffected by spin (same aim regardless of spin): flat=${flat.x.toFixed(3)} top=${top.x.toFixed(3)} slice=${slice.x.toFixed(3)}`);
+  ok(Math.abs(top.z - flat.z) < 0.05 && Math.abs(slice.z - flat.z) < 0.05,
+    `landing z is unaffected by spin (same depth regardless of spin): flat=${flat.z.toFixed(3)} top=${top.z.toFixed(3)} slice=${slice.z.toFixed(3)}`);
+}
+
+// --- スピン：バウンドの弾み方（トップスピンは高く弾む、スライスは低く滑って伸びる） ---
+{
+  const { SPIN } = R.config;
+  function bounced(spin) {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.ball.spin = spin;
+    g.ball.y = 0.2; g.ball.vy = -6; g.ball.vx = 3; g.ball.vz = 4;
+    g.bounce();
+    return { vy: g.ball.vy, vx: g.ball.vx, vz: g.ball.vz };
+  }
+  const flat = bounced('flat');
+  const top = bounced('top');
+  const slice = bounced('slice');
+
+  ok(flat.vy === 6 * R.config.PHYSICS.RESTITUTION, `flat bounce uses the plain restitution, got ${flat.vy}`);
+  ok(top.vy > flat.vy, `topspin bounces higher than flat: top=${top.vy.toFixed(2)} flat=${flat.vy.toFixed(2)}`);
+  ok(slice.vy < flat.vy, `slice bounces lower than flat: slice=${slice.vy.toFixed(2)} flat=${flat.vy.toFixed(2)}`);
+  ok(Math.abs(slice.vx) > Math.abs(flat.vx) && Math.abs(slice.vz) > Math.abs(flat.vz),
+    `slice retains more horizontal pace after the bounce (skids) than flat: slice.vx=${slice.vx.toFixed(2)} flat.vx=${flat.vx.toFixed(2)}`);
+  ok(SPIN.BOUNCE_RESTITUTION_MULT.flat === 1 && SPIN.BOUNCE_FRICTION_MULT.flat === 1,
+    'the flat preset is multiplier 1 in both dimensions, matching the pre-spin behaviour exactly');
+}
+
+// --- スピン選択：C=スライス／V=トップスピン。何も押さなければ従来通りフラット固定（回帰なし） ---
+{
+  // 通常のグラウンドストローク：入力を反映する
+  const spinInput = { moveX: 0, moveZ: 0, lob: false, spin: null };
+  const g = new R.Game({ input: spinInput, hooks: noHooks });
+  g.start();
+  g.you.z = -HALF_L - 0.6; // ベースライン付近＝ボレー圏外にしておく
+  g.ball.x = 1.5; g.ball.y = 1; g.ball.z = -2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
+
+  spinInput.spin = null;
+  g.hit('you');
+  ok(g.ball.spin === 'flat', `no modifier held -> flat (unchanged default), got ${g.ball.spin}`);
+
+  spinInput.spin = 'top';
+  g.ball.x = 1.5; g.ball.y = 1; g.ball.z = -2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
+  g.hit('you');
+  ok(g.ball.spin === 'top', `holding V (topspin) is applied to a groundstroke, got ${g.ball.spin}`);
+
+  spinInput.spin = 'slice';
+  g.ball.x = 1.5; g.ball.y = 1; g.ball.z = -2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
+  g.hit('you');
+  ok(g.ball.spin === 'slice', `holding C (slice) is applied to a groundstroke, got ${g.ball.spin}`);
+
+  // スマッシュ：スピン選択の対象外（フラット固定）
+  spinInput.spin = 'top';
+  g.you.chargeStroke = null;
+  g.you.swingCharge = PLAYER.SMASH_MIN_CHARGE;
+  g.ball.x = 0; g.ball.y = PLAYER.SMASH_MIN_Y + 0.1; g.ball.z = -HALF_L - 0.6; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
+  g.hit('you');
+  ok(g.you.stroke === 'smash', 'precondition: this hit is classified as a smash');
+  ok(g.ball.spin === 'flat', `smash ignores spin input and stays flat, got ${g.ball.spin}`);
+
+  // ボレー：スピン選択の対象外（フラット固定）
+  spinInput.spin = 'slice';
+  g.you.swingCharge = 0;
+  g.you.x = 0; g.you.z = -1; // サービスラインより前＝ボレー圏内
+  g.ball.x = 0.5; g.ball.y = 1; g.ball.z = -1.5; g.ball.bounces = 0; g.ball.vx = 0; g.ball.vz = 0;
+  g.hit('you');
+  ok(g.you.stroke.startsWith('volley-'), 'precondition: this hit is classified as a volley');
+  ok(g.ball.spin === 'flat', `volley ignores spin input and stays flat, got ${g.ball.spin}`);
+
+  // CPU/AIの返球：人間の入力に関わらず常にフラット
+  spinInput.spin = 'top';
+  g.cpu.x = 0; g.cpu.z = HALF_L + 0.5;
+  g.ball.x = 0; g.ball.y = 1; g.ball.z = 2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
+  g.hit('cpu');
+  ok(g.ball.spin === 'flat', `CPU/AI returns are always flat regardless of the human's held spin key, got ${g.ball.spin}`);
+
+  // サーブ：スピン選択の対象外（既に調整済みのバランスを崩さないためフラット固定）
+  spinInput.spin = 'slice';
+  const gs = new R.Game({ input: spinInput, hooks: noHooks });
+  gs.start();
+  tossAndHit(gs);
+  ok(gs.ball.spin === 'flat', `serves stay flat regardless of a held spin key, got ${gs.ball.spin}`);
+}
+
+// --- newPoint() は前のポイントのスピンを持ち越さない ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.ball.spin = 'top';
+  g.newPoint();
+  ok(g.ball.spin === 'flat', `newPoint() resets spin to flat, got ${g.ball.spin}`);
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);
