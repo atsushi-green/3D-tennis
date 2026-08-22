@@ -355,8 +355,60 @@
     LERP: 4,
   };
 
+  /**
+   * CPU/AI の強さのプリセット（Easy/Normal/Hard）。スタート画面で選び、選んだ段階に応じて
+   * `CPU`（狙いの精度・アウト確率・追う範囲）と `PLAYER` のCPU専用値（反応遅延・追跡/回復速度）
+   * を実行時に上書きする。コート寸法やルールに関わる値（COURT・RULES 等）はここでは変えない。
+   * `normal` は空オブジェクト＝上書きなし（＝現状のバランス値がそのままベースラインになる）。
+   */
+  const CPU_LEVELS = {
+    easy: {
+      cpu: {
+        SHOT_T: 1.12, AIM_X_MIN: 1.0, AIM_X_MAX: 2.4, AIM_Z_MIN: 5.8, AIM_Z_MAX: 8.0,
+        OUT_LONG: 0.20, OUT_WIDE: 0.14, CHASE_X_LIMIT: 5.4, CHASE_BEHIND: 0.9,
+        STRETCH_OUT_LONG: 0.34, STRETCH_OUT_WIDE: 0.26,
+      },
+      player: {
+        CPU_CHASE: 5.4, CPU_RECOVER: 3.4, CPU_REACT: 0.30, CPU_RECOVER_DELAY: 0.50,
+      },
+    },
+    normal: { cpu: {}, player: {} },
+    hard: {
+      cpu: {
+        SHOT_T: 0.78, AIM_X_MIN: 1.7, AIM_X_MAX: 3.9, AIM_Z_MIN: 7.6, AIM_Z_MAX: 9.9,
+        OUT_LONG: 0.03, OUT_WIDE: 0.02, CHASE_X_LIMIT: 7.0, CHASE_BEHIND: 0.3,
+        STRETCH_OUT_LONG: 0.12, STRETCH_OUT_WIDE: 0.08,
+      },
+      player: {
+        CPU_CHASE: 7.6, CPU_RECOVER: 5.0, CPU_REACT: 0.10, CPU_RECOVER_DELAY: 0.22,
+      },
+    },
+  };
+
+  // easy/hard から normal へ戻れるよう、初期値（＝normalの実値）を退避しておく
+  const DEFAULT_CPU = Object.assign({}, CPU);
+  const DEFAULT_PLAYER_CPU = {
+    CPU_CHASE: PLAYER.CPU_CHASE,
+    CPU_RECOVER: PLAYER.CPU_RECOVER,
+    CPU_REACT: PLAYER.CPU_REACT,
+    CPU_RECOVER_DELAY: PLAYER.CPU_RECOVER_DELAY,
+  };
+
+  /**
+   * CPU/AI の強さを切り替える。`CPU`/`PLAYER` はモジュール読み込み時に他ファイルへ参照ごと
+   * 渡されている（分割代入）ため、新しいオブジェクトに差し替えるのではなく、既存オブジェクトの
+   * プロパティを書き換える（Object.assign）。呼び出し側は他のプロパティに触れる必要はない。
+   * @param {'easy'|'normal'|'hard'} level
+   */
+  function applyCpuLevel(level) {
+    const preset = CPU_LEVELS[level] || CPU_LEVELS.normal;
+    Object.assign(CPU, DEFAULT_CPU, preset.cpu);
+    Object.assign(PLAYER, DEFAULT_PLAYER_CPU, preset.player);
+  }
+
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO,
+    CPU_LEVELS, applyCpuLevel,
   };
 })(window.RallyOne = window.RallyOne || {});

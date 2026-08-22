@@ -15,6 +15,8 @@
   /** ダブルスのAIパートナーへの指示。Q＝ネットへ前へ、E＝ベースラインまで下がれ */
   const FORMATION_NET = ['KeyQ'];
   const FORMATION_BACK = ['KeyE'];
+  /** スタート画面でのみ有効。CPU/AIの強さ（Easy/Normal/Hard）を選ぶ */
+  const DIFFICULTY_KEYS = { Digit1: 'easy', Digit2: 'normal', Digit3: 'hard' };
   /** ブラウザのスクロールを止めたいキー */
   const SWALLOW = MOVE_LEFT.concat(MOVE_RIGHT, MOVE_UP, MOVE_DOWN, SWING);
 
@@ -26,7 +28,7 @@
     /**
      * @param {{onStart:Function, onStartDoubles:Function, onChargeStart:Function,
      *   onChargeRelease:Function, onFormationNet:Function, onFormationBack:Function,
-     *   isStarted:Function}} handlers
+     *   onSelectDifficulty:Function, isStarted:Function}} handlers
      */
     attach(handlers) {
       addEventListener('keydown', (e) => {
@@ -35,6 +37,7 @@
         this.held.add(e.code);
         if (!handlers.isStarted()) {
           if (e.code === 'KeyD') handlers.onStartDoubles();
+          else if (DIFFICULTY_KEYS[e.code]) handlers.onSelectDifficulty(DIFFICULTY_KEYS[e.code]);
           else handlers.onStart();
         } else if (SWING.indexOf(e.code) !== -1) {
           handlers.onChargeStart();

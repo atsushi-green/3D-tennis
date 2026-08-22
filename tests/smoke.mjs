@@ -1275,5 +1275,41 @@ function tossAndHit(g, holdFrames = 0) {
   ok(g.timers.length <= 1, `doubles: timers do not leak: ${g.timers.length}`);
 }
 
+// --- CPU/AIの強さプリセット（Easy/Normal/Hard）：スタート画面の難易度選択が実際にCPUの値へ反映される ---
+{
+  const { CPU_LEVELS, applyCpuLevel } = R.config;
+  ok(!!CPU_LEVELS.easy && !!CPU_LEVELS.normal && !!CPU_LEVELS.hard, 'three presets exist');
+
+  applyCpuLevel('normal'); // 他のテストの実行順に依存しないよう、まずベースラインへ戻す
+  const baseline = { ...R.config.CPU };
+  const basePlayerCpu = {
+    CPU_CHASE: R.config.PLAYER.CPU_CHASE,
+    CPU_RECOVER: R.config.PLAYER.CPU_RECOVER,
+    CPU_REACT: R.config.PLAYER.CPU_REACT,
+  };
+
+  applyCpuLevel('easy');
+  ok(R.config.CPU.OUT_LONG > baseline.OUT_LONG && R.config.CPU.OUT_WIDE > baseline.OUT_WIDE,
+    `easy misses more often than normal: OUT_LONG=${R.config.CPU.OUT_LONG} OUT_WIDE=${R.config.CPU.OUT_WIDE}`);
+  ok(R.config.CPU.SHOT_T > baseline.SHOT_T, 'easy hits slower/loopier shots than normal');
+  ok(R.config.PLAYER.CPU_REACT > basePlayerCpu.CPU_REACT, 'easy reacts slower than normal');
+  ok(R.config.PLAYER.CPU_CHASE < basePlayerCpu.CPU_CHASE, 'easy chases slower than normal');
+
+  applyCpuLevel('hard');
+  ok(R.config.CPU.OUT_LONG < baseline.OUT_LONG && R.config.CPU.OUT_WIDE < baseline.OUT_WIDE,
+    `hard misses less often than normal: OUT_LONG=${R.config.CPU.OUT_LONG} OUT_WIDE=${R.config.CPU.OUT_WIDE}`);
+  ok(R.config.CPU.SHOT_T < baseline.SHOT_T, 'hard hits faster/flatter shots than normal');
+  ok(R.config.PLAYER.CPU_REACT < basePlayerCpu.CPU_REACT, 'hard reacts faster than normal');
+  ok(R.config.PLAYER.CPU_CHASE > basePlayerCpu.CPU_CHASE, 'hard chases faster than normal');
+
+  applyCpuLevel('normal');
+  ok(JSON.stringify(R.config.CPU) === JSON.stringify(baseline), 'switching back to normal restores the baseline CPU values');
+  ok(R.config.PLAYER.CPU_CHASE === basePlayerCpu.CPU_CHASE && R.config.PLAYER.CPU_REACT === basePlayerCpu.CPU_REACT,
+    'switching back to normal restores the baseline PLAYER CPU values');
+
+  // COURT/RULES 等のゲームルール寄りの値には触れない
+  ok(R.config.COURT.W === 8.23, 'applyCpuLevel does not touch court dimensions');
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);

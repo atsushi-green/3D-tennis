@@ -86,6 +86,10 @@ canvas{display:block}
 #start .cta-alt{display:block;margin-top:14px;border-color:var(--dim);color:var(--dim);
   font-size:11px;letter-spacing:.1em;text-transform:none;padding:7px 16px}
 
+/* CPUの強さ選択（スタート画面、キー操作のみ。クリックでは選べない＝#startのクリックは開始に使うため） */
+.diff-opt{margin:0 4px;opacity:.45}
+.diff-opt.on{opacity:1;color:var(--ball);font-weight:700}
+
 @media (max-width:520px){
   #keys{font-size:10px;gap:10px}
   #bug .nm{min-width:84px}

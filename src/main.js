@@ -2,12 +2,15 @@
 (function (RallyOne) {
   'use strict';
 
-  const { PHYSICS } = RallyOne.config;
+  const { PHYSICS, applyCpuLevel } = RallyOne.config;
   const { sfx, unlock } = RallyOne.audio;
 
   const input = new RallyOne.Input();
   const hud = new RallyOne.Hud();
   const world = RallyOne.scene.createWorld();
+
+  /** スタート画面で選んだCPU/AIの強さ。既定はNormal（未選択のまま開始した場合）。 */
+  let cpuLevel = 'normal';
 
   const game = new RallyOne.Game({
     input,
@@ -23,11 +26,13 @@
     isStarted: () => game.started,
     onStart: () => {
       unlock(); // AudioContext はユーザー操作の中でしか起こせない
+      applyCpuLevel(cpuLevel);
       hud.hideStartScreen();
       game.start(false);
     },
     onStartDoubles: () => {
       unlock();
+      applyCpuLevel(cpuLevel);
       hud.hideStartScreen();
       game.start(true);
     },
@@ -35,6 +40,10 @@
     onChargeRelease: () => game.chargeRelease(),
     onFormationNet: () => game.setYouMateFormation('net'),
     onFormationBack: () => game.setYouMateFormation('back'),
+    onSelectDifficulty: (level) => {
+      cpuLevel = level;
+      hud.setDifficulty(level);
+    },
   });
 
   hud.renderScore(game.match, game.server, game.stats);
