@@ -33,12 +33,13 @@ canvas{display:block}
 #bug .srv::after{content:"●";color:var(--ball);font-size:9px;margin-left:6px;vertical-align:2px}
 
 /* エース／ダブルフォルトの通算（you–cpu）。スコアボードの邪魔をしない控えめな表示 */
-#stats{
+#stats,#wind{
   margin-top:6px;padding:4px 10px;
   background:rgba(9,20,34,.6);border-radius:2px;
   font-size:11px;letter-spacing:.04em;color:var(--dim);
   font-variant-numeric:tabular-nums;
 }
+#wind:empty{display:none}
 
 #head{
   position:absolute;top:14px;right:14px;text-align:right;

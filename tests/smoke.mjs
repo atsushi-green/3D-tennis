@@ -98,7 +98,9 @@ ok(pointLabel(3, 3) === '40' && pointLabel(4, 3) === 'Ad' && pointLabel(3, 4) ==
 
 const { HALF_W, HALF_L, COURT, PLAYER, SERVE } = R.config;
 const fakeInput = { moveX: 0, moveZ: 0, lob: false };
-const noHooks = { sound() {}, call() {}, clearCall() {}, score() {} };
+const noHooks = {
+  sound() {}, call() {}, clearCall() {}, score() {}, wind() {},
+};
 
 /** 即座に離す（溜め時間0）タップ。1回の Space 押下＋即離しを表す。 */
 function tap(g) {
@@ -1437,6 +1439,88 @@ function tossAndHit(g, holdFrames = 0) {
   g.ball.spin = 'top';
   g.newPoint();
   ok(g.ball.spin === 'flat', `newPoint() resets spin to flat, got ${g.ball.spin}`);
+}
+
+// --- 風：integrate() は b.wind が未設定/0 なら従来の物理と完全に一致する（後方互換） ---
+{
+  const { integrate } = R.physics;
+  const withoutWind = { x: 0, y: 1, z: 0, vx: 2, vy: 0, vz: 5 };
+  const explicitZero = { x: 0, y: 1, z: 0, vx: 2, vy: 0, vz: 5, wind: 0 };
+  for (let i = 0; i < 60; i++) {
+    integrate(withoutWind, 1 / 60);
+    integrate(explicitZero, 1 / 60);
+  }
+  ok(withoutWind.vx === 2 && withoutWind.x === explicitZero.x,
+    `no wind field leaves vx untouched (backward compatible), vx=${withoutWind.vx}`);
+  ok(withoutWind.x === explicitZero.x && withoutWind.vx === explicitZero.vx,
+    'wind:undefined and wind:0 behave identically');
+}
+
+// --- 風：integrate() で vx に継続的に加算される（横方向に流される） ---
+{
+  const { integrate } = R.physics;
+  const blown = { x: 0, y: 1, z: 0, vx: 2, vy: 0, vz: 5, wind: 0.6 };
+  const calm = { x: 0, y: 1, z: 0, vx: 2, vy: 0, vz: 5, wind: 0 };
+  for (let i = 0; i < 60; i++) {
+    integrate(blown, 1 / 60);
+    integrate(calm, 1 / 60);
+  }
+  ok(blown.vx > calm.vx, `a positive wind accelerates vx over time: blown=${blown.vx.toFixed(3)} calm=${calm.vx.toFixed(3)}`);
+  ok(blown.x > calm.x, `a positive wind drifts the ball further in +x: blown=${blown.x.toFixed(3)} calm=${calm.x.toFixed(3)}`);
+}
+
+// --- 風：predictLanding() も b.wind を織り込む（CPUの追跡・着地マーカーが実際の着地点とずれない） ---
+{
+  const { predictLanding } = R.physics;
+  const from = {
+    x: 0, y: 1, z: -6, vx: 1, vy: 3, vz: 6, wind: 0.6,
+  };
+  const noWind = { ...from, wind: 0 };
+  const landed = predictLanding(from);
+  const landedCalm = predictLanding(noWind);
+  ok(!landed.net && !landedCalm.net, 'precondition: both trajectories clear the net');
+  ok(Math.abs(landed.x - landedCalm.x) > 0.02,
+    `predicted landing x differs when wind is present: wind=${landed.x.toFixed(3)} calm=${landedCalm.x.toFixed(3)}`);
+}
+
+// --- 風：ポイントごとに Game#wind が WIND.MAX_ACCEL の範囲内でランダムに決まり、hooks.wind に通知される ---
+{
+  const { WIND } = R.config;
+  let notified;
+  const hooksWithWind = { ...noHooks, wind: (v) => { notified = v; } };
+  for (let i = 0; i < 20; i++) {
+    const g = new R.Game({ input: fakeInput, hooks: hooksWithWind });
+    g.start();
+    ok(g.wind >= -WIND.MAX_ACCEL && g.wind <= WIND.MAX_ACCEL,
+      `Game#wind stays within +-WIND.MAX_ACCEL, got ${g.wind}`);
+    ok(notified === g.wind, `hooks.wind() is called with the same value as Game#wind, got ${notified} vs ${g.wind}`);
+  }
+}
+
+// --- 風：サーブの飛翔（トス〜1本目の着地）は常に無風。返球された瞬間から this.wind が乗る ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.wind = 0.6; // 強制的に非0の風にしておく
+  tossAndHit(g); // フォールトなく1本目のサーブを打つ
+  ok(g.ball.wind === 0, `the serve itself flies with zero wind regardless of Game#wind, got ${g.ball.wind}`);
+
+  // レシーバーが返球すると、以降 ball.wind は Game#wind に切り替わる
+  g.you.z = -HALF_L - 0.6;
+  g.ball.x = 0; g.ball.y = 1; g.ball.z = -2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
+  g.hit('you');
+  ok(g.ball.wind === g.wind, `after the return, ball.wind matches the point's wind, got ${g.ball.wind} vs ${g.wind}`);
+}
+
+// --- 風：ラリー中の通常の打球にも Game#wind がそのまま乗る ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.wind = -0.4;
+  g.you.z = -HALF_L - 0.6;
+  g.ball.x = 0; g.ball.y = 1; g.ball.z = -2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
+  g.hit('you');
+  ok(g.ball.wind === -0.4, `a groundstroke picks up the current point wind, got ${g.ball.wind}`);
 }
 
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);

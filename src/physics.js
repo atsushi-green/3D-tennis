@@ -24,12 +24,18 @@
     return COURT.NET_C + (COURT.NET_P - COURT.NET_C) * t * t;
   }
 
-  /** 1ステップ進める。p* に進める前の位置を残す（ネット通過判定に使う） */
+  /**
+   * 1ステップ進める。p* に進める前の位置を残す（ネット通過判定に使う）。
+   * `b.wind`（横方向の弱い加速度、未設定なら0）が設定されていれば vx にも足す。
+   * 打った側は狙いに織り込まない（＝解いた通りの初速で飛ばした後、風にさらされて
+   * 実際の着地点だけがずれる）ので、ここでの加算だけで完結し `solveShot()` 側は変更不要。
+   */
   function integrate(b, dt) {
     b.px = b.x;
     b.py = b.y;
     b.pz = b.z;
     b.vy += spinGravity(b.spin) * dt;
+    b.vx += (b.wind || 0) * dt;
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     b.z += b.vz * dt;
@@ -68,6 +74,7 @@
       px: b.x, py: b.y, pz: b.z,
       vx: b.vx, vy: b.vy, vz: b.vz,
       spin: b.spin, // スピンで実効重力が変わるので、予測にも同じ重力を使わないと着地点がずれる
+      wind: b.wind, // 風で流されるぶんも予測に織り込まないと、CPUの追跡・着地マーカーが実際とずれる
     };
     const dt = 1 / 120;
     for (let t = 0; t < limit; t += dt) {

@@ -421,9 +421,23 @@
     BOUNCE_FRICTION_MULT: { flat: 1, top: 0.96, slice: 1.05 },
   };
 
+  /**
+   * 風（弱いランダムな横風）。スピンと同じ「アーケードのまま感覚チューニングする」方針を踏襲し、
+   * 実効重力に倍率を掛けるのではなく、ボールの水平速度(vx)に毎フレーム弱い加速度を足す形にする
+   * （`physics.js` の `integrate()` が `b.wind`（未設定なら0＝既存物理と完全一致）を読む）。
+   * `MAX_ACCEL` は重力(`PHYSICS.GRAVITY`=-14.0)よりずっと弱く、既存のショット/サーブの
+   * バランス調整（ワイドサーブの成功率チューニング等）を大きく崩さない範囲にとどめてある。
+   * ポイントが始まるたび（`newPoint()`）に `-MAX_ACCEL`〜`+MAX_ACCEL` でランダムに決め直し、
+   * 同じポイント中（フォールトによるセカンドサーブも含む）は吹き続ける。
+   */
+  const WIND = {
+    MAX_ACCEL: 0.6,
+    DISPLAY_THRESHOLD: 0.05, // これ未満はHUDに「無風」と表示する
+  };
+
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO,
-    CPU_LEVELS, applyCpuLevel, SPIN,
+    CPU_LEVELS, applyCpuLevel, SPIN, WIND,
   };
 })(window.RallyOne = window.RallyOne || {});

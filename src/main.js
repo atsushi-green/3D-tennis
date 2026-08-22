@@ -19,6 +19,7 @@
       call: (big, sub) => hud.showCall(big, sub),
       clearCall: () => hud.hideCall(),
       score: () => hud.renderScore(game.match, game.server, game.stats),
+      wind: (accel) => hud.setWind(accel),
     },
   });
 

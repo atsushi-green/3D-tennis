@@ -3,6 +3,7 @@
   'use strict';
 
   const { pointLabel } = RallyOne.scoring;
+  const { WIND } = RallyOne.config;
   const $ = (id) => document.getElementById(id);
 
   class Hud {
@@ -13,6 +14,7 @@
         points: { you: $('p1'), cpu: $('p2') },
         aces: { you: $('ace1'), cpu: $('ace2') },
         doubleFaults: { you: $('df1'), cpu: $('df2') },
+        wind: $('wind'),
         call: $('call'),
         callBig: $('callBig'),
         callSub: $('callSub'),
@@ -26,6 +28,21 @@
     /** スタート画面のCPUの強さ表示を切り替える（実際の適用は config.applyCpuLevel が行う）。 */
     setDifficulty(level) {
       this.el.diffOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === level));
+    }
+
+    /**
+     * 風向き・強さの表示（ポイントごとに Game#newPoint() から呼ばれる）。
+     * @param {number} accel 横方向の加速度(m/s²)。world +x はカメラの都合で画面の左に映るので、
+     *   正の値（+x方向）は左向きの矢印にする。
+     */
+    setWind(accel) {
+      const abs = Math.abs(accel);
+      if (abs < WIND.DISPLAY_THRESHOLD) {
+        this.el.wind.textContent = '無風';
+        return;
+      }
+      const arrow = accel > 0 ? '←' : '→';
+      this.el.wind.textContent = `風 ${arrow} ${abs.toFixed(1)}`;
     }
 
     /**

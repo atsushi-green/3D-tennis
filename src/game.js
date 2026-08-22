@@ -7,7 +7,7 @@
 
   const {
     BOUNDS, CHARGE, COURT, CPU, DOUBLES, FX, HALF_L, HALF_W, PHYSICS, PLAYER, RETURN, SERVE, SHOT,
-    SPIN, TIMING, TIMING_AIM, VOLLEY,
+    SPIN, TIMING, TIMING_AIM, VOLLEY, WIND,
   } = RallyOne.config;
   const {
     approach, approach2D, clamp, lerp, rand, signOr,
@@ -92,6 +92,7 @@
         impact: 0,      // 打った瞬間の演出（着弾フラッシュ・膨張）の残り時間
         impactPower: 0, // その打球の溜め量(0〜1)。演出の派手さに使う
         spin: 'flat',   // 'flat'|'top'|'slice'。飛翔中の実効重力とバウンドの弾み方に効く
+        wind: 0,        // 横風（m/s²、vxに継続的に加算）。サーブの飛翔中は常に0、返球後だけ this.wind になる
       };
       this.you = {
         x: 0, z: -HALF_L - 0.6, vx: 0, vz: 0, // vx/vz は実速度（加速度で目標速度に近づける）
@@ -151,6 +152,15 @@
         you: { aces: 0, doubleFaults: 0 },
         cpu: { aces: 0, doubleFaults: 0 },
       };
+
+      /**
+       * このポイント中に吹いている風（横方向の加速度、m/s²）。newPoint() で決め直す。
+       * サーブの飛翔（トス〜1本目の着地）は風の影響を受けない（サーブ自体のバランス調整を
+       * 崩さないため）。ball.wind は beginServe() で0にリセットし、hit()（サーブの返球も含む）
+       * のたびにこの値へ差し替えることで、「サーブは常に無風、返ってきてからのラリーだけ
+       * 風に流される」という区別を作っている。
+       */
+      this.wind = 0;
     }
 
     actor(who) {
@@ -317,6 +327,10 @@
 
     newPoint() {
       this.serveNumber = 1;
+      // 風はポイントごとに決め直し、フォールトによるセカンドサーブ（beginServe の再実行）
+      // をまたいでも同じポイント中は吹き続ける（beginServe() 側では ball.wind を0に戻すだけ）。
+      this.wind = rand(-WIND.MAX_ACCEL, WIND.MAX_ACCEL);
+      this.hooks.wind(this.wind);
       this.beginServe();
     }
 
@@ -346,6 +360,7 @@
       ball.bounces = 0;
       ball.vx = ball.vy = ball.vz = 0;
       ball.spin = 'flat'; // 前のポイントのスピンを持ち越さない
+      ball.wind = 0; // サーブの飛翔中（1本目の着地まで）は無風にする。返球後は hit() で this.wind に差し替える
 
       this.you.charging = false;
       this.you.chargeTime = 0; // 前のサーブの溜めを持ち越さない
@@ -550,6 +565,9 @@
 
       Object.assign(ball, solveShot(from, shot.target, shot.flight, undefined, spin));
       ball.spin = spin;
+      // サーブの返球も含め、ここで打たれた球は以降このポイントの風(this.wind)にさらされる
+      // （サーブ自体の飛翔だけは beginServe() が ball.wind=0 にしているので無風のまま）。
+      ball.wind = this.wind;
       ball.last = TEAM_OF[who]; // スコア判定はチーム単位。誰が打ったかは player.stroke 側で個別に持つ
       ball.bounces = 0;
       ball.impact = FX.IMPACT_DURATION * lerp(1, FX.CHARGE_TIME_BOOST, charge);
