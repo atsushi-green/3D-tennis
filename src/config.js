@@ -416,9 +416,12 @@
    * キーで明示的にスピンを選ばない通常のグラウンドストローク・CPU/AIの返球はすべてフラット。
    */
   const SPIN = {
-    GRAVITY_MULT: { flat: 1, top: 1.35, slice: 0.72 },
-    BOUNCE_RESTITUTION_MULT: { flat: 1, top: 1.20, slice: 0.78 },
-    BOUNCE_FRICTION_MULT: { flat: 1, top: 0.96, slice: 1.05 },
+    // トップスピンの倍率は当初1.35/1.20だったが、「効きすぎて不安定（アウトしやすく感じる）」
+    // というフィードバックを受けて弱めた。同じ目標に着地させるため実効重力が強いほど初速も
+    // 上がる（=山なりに高く速く飛ぶ）ので、倍率が大きいほど弾道が「暴れて」見えやすい。
+    GRAVITY_MULT: { flat: 1, top: 1.18, slice: 0.72 },
+    BOUNCE_RESTITUTION_MULT: { flat: 1, top: 1.10, slice: 0.78 },
+    BOUNCE_FRICTION_MULT: { flat: 1, top: 0.98, slice: 1.05 },
   };
 
   /**

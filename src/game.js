@@ -100,6 +100,7 @@
         charging: false, chargeTime: 0, swingCharge: 0, // Space 押しっぱなしのテイクバック
         chargeFrac: 0, // 溜めている間だけ 0〜1 で増える、テイクバックの深さ用（chargeTime のポーズ表示版）
         chargeStroke: null, // chargeStart() の瞬間に固定するフォア/バック。溜めている間は変えない
+        chargeSpin: 'flat', // chargeStart() の瞬間に固定するスピン（V/C）。実際に当たるまで押し続けなくてよい
       };
       this.cpu = {
         x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, stroke: 'forehand', prep: null,
@@ -246,6 +247,11 @@
           // 毎フレーム判定し直すと、溜めている最中に左右が入れ替わってテイクバックの
           // 向きが急に反転して見えることがあった。
           this.you.chargeStroke = classifyStroke('you', this.ball, this.you);
+          // スピン（V/C）も同じタイミングで固定する。当たる瞬間までキーを押し続ける必要が
+          // あると、Space（威力）・←→（狙い）と同時に長く押しっぱなしを要求してしまい操作が
+          // 難しくなるため、テイクバックを始めた時点（Spaceを押した瞬間）で固定し、以降は
+          // 離してよいことにする。
+          this.you.chargeSpin = this.input.spin || 'flat';
         }
       }
     }
@@ -365,6 +371,7 @@
       this.you.charging = false;
       this.you.chargeTime = 0; // 前のサーブの溜めを持ち越さない
       this.you.chargeStroke = null;
+      this.you.chargeSpin = 'flat';
 
       // 前のサーブの反応遅延・打球後硬直を持ち越さない（moveDoublesTeams()/moveSinglesCpu() は
       // phase==='serve' 中は動かないので実害はないが、次のラリー開始時に混乱しないよう明示的に戻す）
@@ -558,9 +565,10 @@
           : { target: shotTarget(this.cpu.x, 1, stretch), flight: lerp(CPU.SHOT_T, CPU.STRETCH_T, stretch) };
 
       // スピン選択は人間の通常グラウンドストローク限定（スマッシュ・ボレー・CPU/AIはフラット固定）。
-      // C＝スライス／V＝トップスピン。何も押していなければ従来通りフラット（挙動は一切変わらない）。
+      // C＝スライス／V＝トップスピン。chargeStart() の瞬間に固定した値を使う（当たる瞬間まで
+      // 押し続けなくてよい。詳細はchargeStart()のコメント参照）。何も押していなければフラット。
       const spin = (who === 'you' && (stroke === 'forehand' || stroke === 'backhand'))
-        ? (this.input.spin || 'flat')
+        ? this.you.chargeSpin
         : 'flat';
 
       Object.assign(ball, solveShot(from, shot.target, shot.flight, undefined, spin));
