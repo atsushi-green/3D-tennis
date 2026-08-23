@@ -612,7 +612,7 @@ function tossAndHit(g, holdFrames = 0) {
     g.start();
     g.phase = 'rally';
     g.chargeStart();
-    for (let i = 0; i < 15; i++) g.update(1 / 60); // MAX_TIME の約半分
+    for (let i = 0; i < Math.round(MAX_TIME * 30); i++) g.update(1 / 60); // MAX_TIME の約半分
     g.chargeRelease();
     const flight = g.playerShot().flight;
     ok(flight < TAP_T && flight > CHARGE_T, `partial charge is between TAP_T and CHARGE_T, got ${flight}`);
@@ -629,6 +629,21 @@ function tossAndHit(g, holdFrames = 0) {
     g.chargeRelease();
     ok(g.playerShot().flight === LOB_T, `lob overrides charge, got ${g.playerShot().flight}`);
   }
+}
+
+// --- 溜め：フル溜めに要する時間が短すぎない／少し動いているだけでもキャップが効く ---
+// (退行テスト: MAX_TIME が短く(0.55秒)、かつ MOVE_CAP_SPEED_START が高い(0.5m/s)ままだと、
+//  位置取りで少し動いている程度の「よくある状況」でもキャップが発動せず、ほとんどの状況で
+//  楽にフル溜めできてしまっていた)
+{
+  const { MAX_TIME } = R.config.CHARGE;
+  ok(MAX_TIME >= 0.7,
+    `full charge should take meaningfully more than half a second to discourage easy MAX charging, got ${MAX_TIME}`);
+
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  ok(g.chargeSpeedCap(0) === 1, 'standing still: no cap on the charge');
+  ok(g.chargeSpeedCap(0.3) < 1,
+    `even modest movement (0.3 m/s, well below a real sprint) already reduces the charge cap, got ${g.chargeSpeedCap(0.3)}`);
 }
 
 // --- 溜めの強弱が体感できる差になっている（初速・深さ・演出）---

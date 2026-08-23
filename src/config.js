@@ -351,10 +351,15 @@
    * ラリー中もサーブの「打つ」瞬間も共通で使う。離した瞬間の溜め量(0〜1)で
    * SHOT.TAP_T〜CHARGE_T / SERVE.T〜CHARGE_T を補間する。
    */
+  // 以前は MAX_TIME が短く（0.55秒）、かつほぼ静止（0.5m/s以下）していないと発動しない
+  // MOVE_CAP_SPEED_START のせいで、少し位置取りしている程度の「よくある状況」でも
+  // キャップがまったく効かず、ほとんどの状況で楽にフル溜めできてしまっていた。
+  // MAX_TIME を伸ばして「待てば強い」の絶対値を上げ、MOVE_CAP_SPEED_START を下げて
+  // わずかな移動でもキャップが効き始めるようにした。
   const CHARGE = {
-    MAX_TIME: 0.55, // これ以上溜めても威力は増えない(秒)
+    MAX_TIME: 0.85, // これ以上溜めても威力は増えない(秒)
     MOVE_CAP_FLOOR: 0.35,       // 最高速で動いている間、溜められる上限（MAX_TIMEに対する割合）
-    MOVE_CAP_SPEED_START: 0.5,  // これ以下の速度ならキャップなし（フル溜め可能）
+    MOVE_CAP_SPEED_START: 0.15, // これ以下の速度ならキャップなし（フル溜め可能）
     MOVE_CAP_SPEED_FULL: PLAYER.SPEED, // この速度以上でキャップがMOVE_CAP_FLOORまで下がりきる
   };
 
