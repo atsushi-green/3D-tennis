@@ -1756,5 +1756,31 @@ function tossAndHit(g, holdFrames = 0) {
     `youMate hitting must not extend you's trail despite ball.last staying 'you', got ${g.trail.length} vs frozen ${frozenLength}`);
 }
 
+// --- 軌跡：バウンド（IN/OUT判定に使う座標）の瞬間を必ず1点記録する ---
+// (退行テスト: update() は1フレームに1点しか記録しないため、速い球ではその間に何cmも
+//  進んでしまい、直線で結んだ軌跡の「着地したように見える位置」と、実際に判定に使う
+//  bounce() 時点の座標がずれることがあった＝軌跡ではINに見えるのに実際はOUT)
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  const from = { x: 0, y: 1, z: -2 };
+  const target = { x: HALF_W - 0.05, y: R.config.PHYSICS.BALL_R, z: 8 }; // サイドライン際
+  const v = R.physics.solveShot(from, target, 0.35, 0.3, 'flat'); // 短い飛翔時間＝速い球
+  Object.assign(g.ball, {
+    x: from.x, y: from.y, z: from.z, vx: v.vx, vy: v.vy, vz: v.vz, bounces: 0, last: 'you', live: true, spin: 'flat',
+  });
+  g.updateTrailOwner('you');
+  // わざと粗いフレームレート（1/20秒）でシミュレートし、着地の瞬間を挟む2点の間隔を広げる
+  for (let i = 0; i < 60 && g.ball.bounces < 1; i++) g.update(1 / 20);
+  ok(g.ball.bounces >= 1, 'precondition: the ball landed within the simulated frames');
+  // bounce() が明示的に追加した点は y===BALL_R ちょうどになる（フレームサンプルの点は
+  // 空中の途中の高さなので一致しない）。この点があること自体が、通常のフレームサンプル
+  // 頼みではなく着地の瞬間を確実に記録していることの証拠になる。
+  const bouncePoint = g.trail.find((p) => p.y === R.config.PHYSICS.BALL_R);
+  ok(!!bouncePoint, `the trail includes an explicit bounce-height point (y===BALL_R), got ${JSON.stringify(g.trail)}`);
+  ok(bouncePoint && Math.abs(bouncePoint.x - target.x) < 0.05 && Math.abs(bouncePoint.z - target.z) < 0.05,
+    `the recorded bounce point matches the intended landing target (within STEP_SLACK-ish tolerance), got ${JSON.stringify(bouncePoint)}`);
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);

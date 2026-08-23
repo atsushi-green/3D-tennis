@@ -1075,6 +1075,14 @@
       const restMult = SPIN.BOUNCE_RESTITUTION_MULT[ball.spin] || 1;
       const friMult = SPIN.BOUNCE_FRICTION_MULT[ball.spin] || 1;
       ball.y = BALL_R;
+      // 軌跡は通常 update() が1フレームに1点ずつ記録するだけなので、速い球ほど着地の瞬間を
+      // 挟む2点の間隔が開き、IN/OUT判定に実際に使うこの着地座標（x,z）と、直線で結んだ軌跡が
+      // 見せる「着地したように見える位置」がずれることがあった（＝軌跡ではINに見えるのに
+      // 実際はOUT）。判定に使う座標そのものをここで明示的に1点追加しておくことで、
+      // 軌跡が必ずこの座標を通るようにする。
+      if (this.trailActive && this.trail.length < TRAIL.MAX_POINTS) {
+        this.trail.push({ x: ball.x, y: ball.y, z: ball.z });
+      }
       ball.vy = -ball.vy * PHYSICS.RESTITUTION * restMult;
       ball.vx *= PHYSICS.FRICTION * friMult;
       ball.vz *= PHYSICS.FRICTION * friMult;
