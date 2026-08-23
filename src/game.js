@@ -873,6 +873,13 @@
 
     /** シングルスの CPU 移動（従来どおり）。ダブルスでは使わない。 */
     moveSinglesCpu(cpuBefore, dt) {
+      // サーブ待ち中（phase==='serve'）は動かさない。newPoint() が置いたレシーブの構え位置
+      // （サーブが狙う対角のボックス付近）から、サーブが打たれる前に homePosition()（センター）
+      // へ歩いて戻ってしまうと、実際にサーブが来る頃には構えが崩れてしまう。
+      if (this.phase === 'serve') {
+        this.cpu.speed = 0;
+        return;
+      }
       const incoming = this.phase === 'rally' && this.ball.last === 'you';
       if (incoming && this.reactTimers.cpu > 0) {
         this.cpu.speed = 0; // まだ反応できていない

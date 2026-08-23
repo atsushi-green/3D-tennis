@@ -267,6 +267,25 @@ function tossAndHit(g, holdFrames = 0) {
   ok(g.you.z < -HALF_L, `receiver is positioned behind their own baseline, z=${g.you.z}`);
 }
 
+// --- レシーブ位置はサイドライン寄り（ボックス中央ではない）で、サーブが打たれるまで崩れない ---
+// (退行テスト: moveSinglesCpu() が phase==='serve' 中も homePosition()（センター）へ向けて
+//  毎フレーム歩かせていたため、newPoint() が置いたレシーブの構えが、人間がトス/溜めしている
+//  間にセンターへ寄っていって崩れてしまっていた)
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.server = 'you'; // cpu チームが受ける番
+  g.start();
+  ok(g.phase === 'serve' && g.cpu.x !== 0, `precondition: cpu starts near the sideline, not centered, x=${g.cpu.x}`);
+  ok(Math.abs(g.cpu.x) > HALF_W - 2, `receive stance is near the sideline, not mid-box, x=${g.cpu.x}`);
+  const stance = { x: g.cpu.x, z: g.cpu.z };
+
+  // 人間がトス/溜めしている間の複数フレームぶん進める。まだ serve() は呼ばれていない。
+  for (let i = 0; i < 60; i++) g.movePlayers(1 / 60);
+  ok(g.phase === 'serve', 'precondition: still waiting to serve');
+  ok(Math.abs(g.cpu.x - stance.x) < 1e-6 && Math.abs(g.cpu.z - stance.z) < 1e-6,
+    `receiver is not dragged toward the center before the serve, got x=${g.cpu.x} z=${g.cpu.z}`);
+}
+
 // --- サーブはノーバウンドで打ち返してはいけない（volley禁止） ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
