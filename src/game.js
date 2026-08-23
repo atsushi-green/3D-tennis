@@ -685,9 +685,10 @@
       if (this.phase === 'over') return;
       // ダブルフォルト＝サーバー側の失点。エース＝サーブがリターンに一度も触れられずに
       // (serveInFlight のまま)2バウンドで決まった場合（＝サーバー側の得点）。
+      const isAce = reason === 'ツーバウンド' && this.serveInFlight;
       if (reason === 'ダブルフォルト') {
         this.stats[this.server].doubleFaults++;
-      } else if (reason === 'ツーバウンド' && this.serveInFlight) {
+      } else if (isAce) {
         this.stats[winner].aces++;
       }
       this.phase = 'over';
@@ -726,9 +727,12 @@
         return;
       }
 
+      // 「ツーバウンド」は判定としては正しいが表現として味気ないので、実況らしく言い換える：
+      // サーブが一度も触れられずに決まったなら「エース！」、ラリー中の決定打なら「ウィナー！」。
+      const twoBounceCall = isAce ? 'エース！' : 'ウィナー！';
       const sub = result.type === 'game'
         ? `ゲーム — ${mine ? 'YOU' : 'CPU'}${result.tiebreak ? '（6-6 タイブレーク！）' : ''}`
-        : reason;
+        : reason === 'ツーバウンド' ? twoBounceCall : reason;
       this.hooks.call(mine ? 'ポイント' : '失点', sub);
       this.hooks.score();
       this.after(TIMING.NEXT_POINT, () => this.newPoint());

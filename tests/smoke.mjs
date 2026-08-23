@@ -515,6 +515,37 @@ function tossAndHit(g, holdFrames = 0) {
     'a rally point (serve already returned) is not an ace, even if it ends on a double bounce');
 }
 
+// --- コール表現：「ツーバウンド」は味気ないので、エース／ウィナーに言い換える ---
+{
+  const calls = [];
+  const hooksWithCall = { ...noHooks, call: (big, sub) => calls.push({ big, sub }) };
+
+  const gAce = new R.Game({ input: fakeInput, hooks: hooksWithCall });
+  gAce.start();
+  gAce.serve('you');
+  gAce.ball.bounces = 0;
+  gAce.ball.x = 1.0; gAce.ball.y = 0; gAce.ball.vy = -1; gAce.ball.z = 3;
+  gAce.bounce();
+  gAce.ball.bounces = 1;
+  gAce.ball.y = 0; gAce.ball.vy = -1;
+  gAce.bounce(); // 誰も触れないまま2バウンド＝エース
+  const aceCall = calls[calls.length - 1];
+  ok(aceCall.sub === 'エース！', `an untouched serve calls out 'エース！' instead of 'ツーバウンド', got ${aceCall.sub}`);
+
+  const gWinner = new R.Game({ input: fakeInput, hooks: hooksWithCall });
+  gWinner.start();
+  gWinner.serve('you');
+  gWinner.ball.bounces = 0;
+  gWinner.ball.x = 1.0; gWinner.ball.y = 0; gWinner.ball.vy = -1; gWinner.ball.z = 3;
+  gWinner.bounce();
+  gWinner.hit('cpu'); // リターンされたラリー
+  gWinner.ball.bounces = 1;
+  gWinner.ball.y = 0; gWinner.ball.vy = -1;
+  gWinner.bounce(); // 相手が拾えず2バウンド＝ラリーの決定打
+  const winnerCall = calls[calls.length - 1];
+  ok(winnerCall.sub === 'ウィナー！', `a rally-ending double bounce calls out 'ウィナー！' instead of 'ツーバウンド', got ${winnerCall.sub}`);
+}
+
 // --- 移動は加速度ベース：急に最高速にならず、離しても急停止しない（滑るような自然さ） ---
 {
   const input = { moveX: 0, moveZ: 1, lob: false };
