@@ -1678,7 +1678,7 @@ function tossAndHit(g, holdFrames = 0) {
   ok(g.ball.wind === -0.4, `a groundstroke picks up the current point wind, got ${g.ball.wind}`);
 }
 
-// --- 軌跡：you が打つと Game#trail がその打点1点から描き直される ---
+// --- 軌跡：誰か（you）が打つと Game#trail がその打点1点から描き直される ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start();
@@ -1689,7 +1689,7 @@ function tossAndHit(g, holdFrames = 0) {
   ok(g.trail[0].x === 0.3 && g.trail[0].z === -2, `the reset point is the contact point, got ${JSON.stringify(g.trail[0])}`);
 }
 
-// --- 軌跡：you の打球が飛んでいる間、update() のたびに Game#trail が伸びる ---
+// --- 軌跡：直近の打球が飛んでいる間、update() のたびに Game#trail が伸びる ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start();
@@ -1698,10 +1698,11 @@ function tossAndHit(g, holdFrames = 0) {
   g.hit('you');
   const lenAfterHit = g.trail.length;
   for (let i = 0; i < 10; i++) g.update(1 / 60);
-  ok(g.trail.length > lenAfterHit, `the trail keeps growing while the you-hit ball is live, got length ${g.trail.length}`);
+  ok(g.trail.length > lenAfterHit, `the trail keeps growing while the hit ball is live, got length ${g.trail.length}`);
 }
 
-// --- 軌跡：相手に打ち返された（ball.last が 'you' でなくなった）瞬間から先は伸びない ---
+// --- 軌跡：相手（cpu）に打ち返されると、軌跡は凍結せず相手の打点から描き直される ---
+// （常に「今まさに飛んでいる最新の1打」を表す。誰が打ったかは問わない）
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start();
@@ -1709,12 +1710,16 @@ function tossAndHit(g, holdFrames = 0) {
   g.ball.x = 0; g.ball.y = 1; g.ball.z = -2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0; g.ball.live = true;
   g.hit('you');
   for (let i = 0; i < 5; i++) g.update(1 / 60);
-  g.cpu.x = g.ball.x; g.cpu.z = g.ball.z; g.cpu.speed = 0;
-  g.hit('cpu'); // 相手が打ち返した＝もう you の球ではない
-  const frozenLength = g.trail.length;
+  ok(g.trail.length > 1, 'precondition: the you-hit trail grew past its single reset point');
+
+  g.cpu.x = 1.2; g.cpu.z = 3.4; g.cpu.speed = 0;
+  g.ball.x = 1.2; g.ball.y = 1; g.ball.z = 3.4; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
+  g.hit('cpu'); // 相手が打ち返した＝以降は cpu の直近の1打を表す
+  ok(g.trail.length === 1 && g.trail[0].x === 1.2 && g.trail[0].z === 3.4,
+    `the opponent's hit redraws the trail from their own contact point, got ${JSON.stringify(g.trail)}`);
+  const lenAfterCpuHit = g.trail.length;
   for (let i = 0; i < 10; i++) g.update(1 / 60);
-  ok(g.trail.length === frozenLength,
-    `the trail freezes once the ball is returned by the opponent, got ${g.trail.length} vs frozen ${frozenLength}`);
+  ok(g.trail.length > lenAfterCpuHit, `the trail keeps growing for the cpu's shot too, got ${g.trail.length}`);
 }
 
 // --- 軌跡：you が次に打つと、前のポイントの軌跡は消えて新しい1本に描き直される ---
@@ -1733,10 +1738,7 @@ function tossAndHit(g, holdFrames = 0) {
     `a new you-hit redraws the trail from scratch, got ${JSON.stringify(g.trail)}`);
 }
 
-// --- 軌跡：ダブルスで youMate が打っても you の軌跡には追記されない ---
-// (退行テスト: ball.last はチーム単位('you'|'cpu')なので、youMate が打っても 'you' のまま。
-//  かつて軌跡の伸長判定を ball.last==='you' だけで見ていたため、youMate の打球位置が
-//  you 自身の凍結済み軌跡に紛れ込んで不連続な線になっていた)
+// --- 軌跡：ダブルスで youMate が打っても、その打点からきちんと描き直される ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start(true);
@@ -1744,16 +1746,14 @@ function tossAndHit(g, holdFrames = 0) {
   g.ball.x = 0; g.ball.y = 1; g.ball.z = -2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0; g.ball.live = true;
   g.hit('you');
   for (let i = 0; i < 5; i++) g.update(1 / 60);
-  const frozenLength = g.trail.length;
-  ok(frozenLength > 1, 'precondition: the trail grew after the you hit');
+  ok(g.trail.length > 1, 'precondition: the trail grew after the you hit');
 
   g.youMate.x = 3; g.youMate.z = 5;
   g.ball.x = 3.2; g.ball.y = 1; g.ball.z = 5; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
   g.hit('youMate');
   ok(g.ball.last === 'you', "precondition: ball.last stays the team value 'you' even when youMate hits");
-  for (let i = 0; i < 10; i++) g.update(1 / 60);
-  ok(g.trail.length === frozenLength,
-    `youMate hitting must not extend you's trail despite ball.last staying 'you', got ${g.trail.length} vs frozen ${frozenLength}`);
+  ok(g.trail.length === 1 && g.trail[0].x === 3.2 && g.trail[0].z === 5,
+    `youMate's hit redraws the trail from youMate's own contact point, got ${JSON.stringify(g.trail)}`);
 }
 
 // --- 軌跡：バウンド（IN/OUT判定に使う座標）の瞬間を必ず1点記録する ---
@@ -1769,7 +1769,7 @@ function tossAndHit(g, holdFrames = 0) {
   Object.assign(g.ball, {
     x: from.x, y: from.y, z: from.z, vx: v.vx, vy: v.vy, vz: v.vz, bounces: 0, last: 'you', live: true, spin: 'flat',
   });
-  g.updateTrailOwner('you');
+  g.resetTrail();
   // わざと粗いフレームレート（1/20秒）でシミュレートし、着地の瞬間を挟む2点の間隔を広げる
   for (let i = 0; i < 60 && g.ball.bounces < 1; i++) g.update(1 / 20);
   ok(g.ball.bounces >= 1, 'precondition: the ball landed within the simulated frames');

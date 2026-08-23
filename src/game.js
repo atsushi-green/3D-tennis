@@ -134,18 +134,13 @@
       /** setTimeout ではなくゲームループで数える。ポイント間で確実に破棄できる。 */
       this.timers = [];
       /**
-       * you が打った直近の球の軌跡（{x,y,z}の配列）。you が新しく打つ（serve()/hit()）たびに
-       * 描き直す＝IN/OUTに関わらず常に一番新しい1本だけ残る。次に you が打つまでは
-       * ポイントをまたいで残り続ける（アウトの結果を振り返れるように）。表示は scene 側の仕事。
+       * ラリー中の直近1打の軌跡（{x,y,z}の配列）。誰か（you/cpu/youMate/cpuMate）が新しく
+       * 打つ（serve()/hit()）たびに描き直す＝常に「そのポイントを決めた最後の1打」だけが
+       * 残る。ポイントが終わった後は、次に誰かが打つまでポイントをまたいで残り続ける
+       * （アウトの結果を振り返れるように）。ラリー中に表示するか（phase==='rally'の間は
+       * 隠す）は scene 側の仕事。
        */
       this.trail = [];
-      /**
-       * 今の軌跡が you 自身の打球によるものか（＝update() で伸ばしてよいか）。
-       * ball.last はチーム単位（'you'|'cpu'）で、ダブルスの youMate が打っても 'you' の
-       * ままなので、ball.last だけでは you 本人と youMate を区別できない。
-       * updateTrailOwner() が you 本人の打球のときだけ true にする。
-       */
-      this.trailActive = false;
       /**
        * CPU 側の反応遅延タイマー（cpu/cpuMate/youMate）。新しい球が飛んできた瞬間に
        * PLAYER.CPU_REACT にセットし、0になるまで移動を止める（＝逆を突かれると間に合わない）。
@@ -524,7 +519,7 @@
       ball.live = true;
       ball.bounces = 0;
       ball.last = team; // スコア判定・当たり判定はチーム単位（hit() と同じ扱い）
-      this.updateTrailOwner(who);
+      this.resetTrail();
 
       this.tossActive = false;
       this.serveInFlight = true; // 一度も返球されていない＝ノーバウンドで打ち返してはいけない
@@ -609,26 +604,16 @@
       ball.bounces = 0;
       ball.impact = FX.IMPACT_DURATION * lerp(1, FX.CHARGE_TIME_BOOST, charge);
       ball.impactPower = charge; // フラッシュの大きさに使う
-      this.updateTrailOwner(who);
+      this.resetTrail();
 
       player.anim = PLAYER.SWING_ANIM;
       player.stroke = stroke;
       this.hooks.sound('hit', TEAM_OF[who], stroke, charge); // 音程はチーム単位（誰が打っても同じ）
     }
 
-    /**
-     * 誰が打ったか（serve()/hit()の呼び出し元 who）に応じて、軌跡を you 本人のものとして
-     * 記録し続けてよいかを更新する。you 本人が打った瞬間だけ、その打点1点から描き直して
-     * 記録を再開する。youMate を含むそれ以外の誰かが打った瞬間は記録を止める
-     * （それまでの you の軌跡はそのまま残る＝次に you が打つまで最新の1本として表示され続ける）。
-     */
-    updateTrailOwner(who) {
-      if (who !== 'you') {
-        this.trailActive = false;
-        return;
-      }
+    /** 誰か（serve()/hit()の呼び出し元）が新しく打った瞬間、軌跡をその打点1点から描き直す。 */
+    resetTrail() {
       this.trail = [{ x: this.ball.x, y: this.ball.y, z: this.ball.z }];
-      this.trailActive = true;
     }
 
     /**
@@ -771,10 +756,11 @@
         this.stepBall(Math.min(remaining, STEP));
       }
 
-      // you 本人が打った球が飛んでいる（＝まだ誰にも打ち返されていない）間だけ軌跡を伸ばす。
-      // 誰か（youMate を含む）に打ち返された、またはポイントが終わった瞬間から先は伸びず、
-      // その時点の軌跡がそのまま残る（＝次に you が打つまで、最新の1本として表示され続ける）。
-      if (this.trailActive && this.ball.live && this.trail.length < TRAIL.MAX_POINTS) {
+      // 直近の1打が飛んでいる間だけ軌跡を伸ばす。誰かに打ち返された瞬間は resetTrail() が
+      // 軌跡を打ち返した側の打点から描き直すので、ここで伸ばすのは常に「今まさに飛んでいる
+      // 最新の1打」。ポイントが終わった瞬間から先は（ball.live===false になり）伸びず、
+      // その時点の軌跡がそのまま残る（＝次に誰かが打つまで、最新の1本として表示され続ける）。
+      if (this.ball.live && this.trail.length < TRAIL.MAX_POINTS) {
         this.trail.push({ x: this.ball.x, y: this.ball.y, z: this.ball.z });
       }
 
@@ -1080,7 +1066,7 @@
       // 見せる「着地したように見える位置」がずれることがあった（＝軌跡ではINに見えるのに
       // 実際はOUT）。判定に使う座標そのものをここで明示的に1点追加しておくことで、
       // 軌跡が必ずこの座標を通るようにする。
-      if (this.trailActive && this.trail.length < TRAIL.MAX_POINTS) {
+      if (this.trail.length < TRAIL.MAX_POINTS) {
         this.trail.push({ x: ball.x, y: ball.y, z: ball.z });
       }
       ball.vy = -ball.vy * PHYSICS.RESTITUTION * restMult;

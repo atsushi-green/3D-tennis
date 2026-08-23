@@ -40,6 +40,8 @@
 
     addEventListener('resize', stage.resize);
 
+    const NO_TRAIL = []; // ラリー中は軌跡を隠す（毎フレーム確保しないよう使い回す）
+
     function syncCamera(player, dt) {
       const t = Math.min(1, dt * CAMERA.LERP);
       camera.position.x = lerp(camera.position.x, player.x * CAMERA.FOLLOW_X, t);
@@ -76,7 +78,10 @@
       scene3d.applyImpactPunch(ballMesh, ball, FX);
       scene3d.placeImpact(impactFlash, ball, FX);
       scene3d.placeBallShadow(shadows.ball, ball);
-      scene3d.updateTrail(trail, state.trail);
+      // 軌跡はラリーの決着がついた後（ポイント間の 'serve' 待ち・'over'）だけ見せる。
+      // ラリー中に出しっぱなしだと本来の目的（アウトの結果を振り返る）を超えて
+      // 「次にどこへ来るか」の手がかりになってしまうため。
+      scene3d.updateTrail(trail, state.phase === 'rally' ? NO_TRAIL : state.trail);
 
       syncCamera(state.you, dt);
     }

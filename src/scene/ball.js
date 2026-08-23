@@ -1,4 +1,4 @@
-/** ボール、擬似影（ブロブ）、you が打った球の軌跡。 */
+/** ボール、擬似影（ブロブ）、直近1打の軌跡。 */
 (function (RallyOne) {
   'use strict';
 
@@ -98,7 +98,7 @@
   };
 
   /**
-   * you が打った直近の球の軌跡。点数が毎フレーム変わる（伸びる／描き直る）ので、
+   * ラリー中の直近1打の軌跡。点数が毎フレーム変わる（伸びる／描き直る）ので、
    * TRAIL.MAX_POINTS 分の頂点を先に確保しておき、setDrawRange() で実際に使う分だけ描く
    * （フレームごとに geometry を作り直さない）。
    */
@@ -114,20 +114,27 @@
     return mesh;
   };
 
-  /** @param {{x:number,y:number,z:number}[]} points */
+  /**
+   * @param {{x:number,y:number,z:number}[]} points ラリー中は呼び出し側が空配列を渡して
+   *   非表示にする（world.js 参照）。その間は pointCount 比較に触れないため、次に本物の
+   *   配列が渡ってきたとき、たまたま前のラリーと同じ点数だと更新をスキップしてしまう
+   *   （＝古いラリーの軌跡が残り続ける）。resetTrail() は毎回新しい配列を作るので、
+   *   参照が変わったかどうかも合わせて見ることで、点数の偶然の一致による更新漏れを防ぐ。
+   */
   scene3d.updateTrail = function updateTrail(mesh, points) {
     if (points.length < 2) {
       mesh.visible = false;
       return;
     }
     mesh.visible = true;
-    if (mesh.userData.pointCount !== points.length) {
+    if (mesh.userData.trailRef !== points || mesh.userData.pointCount !== points.length) {
       const position = mesh.geometry.attributes.position;
       for (let i = 0; i < points.length; i++) {
         position.setXYZ(i, points[i].x, points[i].y, points[i].z);
       }
       position.needsUpdate = true;
       mesh.geometry.setDrawRange(0, points.length);
+      mesh.userData.trailRef = points;
       mesh.userData.pointCount = points.length;
     }
   };
