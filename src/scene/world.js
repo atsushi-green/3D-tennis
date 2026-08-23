@@ -7,7 +7,6 @@
 
   const { CAMERA, FX, PLAYER, THEME } = RallyOne.config;
   const { lerp } = RallyOne.math;
-  const { predictLanding } = RallyOne.physics;
   const scene3d = RallyOne.scene;
 
   scene3d.createWorld = function createWorld() {
@@ -31,27 +30,14 @@
       youMate: scene3d.createShadow(0.26),
       cpuMate: scene3d.createShadow(0.26),
     };
-    const marker = scene3d.createMarker();
     const impactFlash = scene3d.createImpactFlash();
     scene.add(
       you, cpu, youMate, cpuMate, ballMesh,
       shadows.ball, shadows.you, shadows.cpu, shadows.youMate, shadows.cpuMate,
-      marker, impactFlash,
+      impactFlash,
     );
 
     addEventListener('resize', stage.resize);
-
-    /** 着地マーカーは「プレイヤーが追うべき球」だけに出す */
-    function syncMarker(ball) {
-      if (!(ball.live && ball.bounces === 0 && ball.last === 'cpu')) {
-        marker.visible = false;
-        return;
-      }
-      const landing = predictLanding(ball);
-      marker.visible = !landing.net;
-      marker.position.x = landing.x;
-      marker.position.z = landing.z;
-    }
 
     function syncCamera(player, dt) {
       const t = Math.min(1, dt * CAMERA.LERP);
@@ -90,7 +76,6 @@
       scene3d.placeImpact(impactFlash, ball, FX);
       scene3d.placeBallShadow(shadows.ball, ball);
 
-      syncMarker(ball);
       syncCamera(state.you, dt);
     }
 

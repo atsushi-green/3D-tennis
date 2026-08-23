@@ -84,18 +84,6 @@
     ballMesh.scale.setScalar(punch);
   };
 
-  scene3d.createMarker = function createMarker() {
-    const mesh = new THREE.Mesh(
-      new THREE.RingGeometry(0.28, 0.36, 28),
-      new THREE.MeshBasicMaterial({
-        color: THEME.BALL, transparent: true, opacity: 0.65, depthWrite: false,
-      }),
-    );
-    mesh.rotation.x = -Math.PI / 2;
-    mesh.position.y = GROUND_Y + 0.002;
-    return mesh;
-  };
-
   /** 高いボールの影ほど大きく薄くする */
   scene3d.placeBallShadow = function placeBallShadow(shadow, ball) {
     const scale = Math.min(Math.max(0.28 - ball.y * 0.012, 0.13), 0.3);

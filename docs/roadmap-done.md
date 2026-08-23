@@ -10,6 +10,11 @@
 - テスト: <tests/smoke.mjs の結果>
 ```
 
+## 2026-08-23 落下予測点を非表示にする
+- ブランチ: evolve/hide-landing-marker
+- 実施内容: `src/scene/world.js` の `syncMarker()`（CPUが打った、まだバウンドしていない球の着地点にリングを表示する処理）と、その呼び出し・`marker` メッシュの生成/scene登録、未使用になった `predictLanding` importを削除。`src/scene/ball.js` の `scene3d.createMarker()`（リング形状の生成）も未使用になったため削除。着地点を予測する`physics.js`側のロジック自体（CPUの追跡AIが内部で使う`predictLanding`）は変更していない。
+- テスト: `node tests/smoke.mjs` — ALL PASS。`node --check` で構文確認。ブラウザ実機（`claude-in-chrome`、ローカル`http.server`経由）でサーブ〜CPU返球までを目視確認し、以前はCPU打球の着地点に出ていた黄色いリングが表示されなくなったことを確認。コンソールエラーなし。code-reviewスキル（low）で確認、指摘なし。
+
 ## 2026-08-23 サーブが極端な範囲を出た場合の保険判定が、フォールトのやり直しルールを迂回していたのを修正
 - ブランチ: なし（ユーザーからの直接指示（「ダブルフォルトが正しく実装されますか？」「サーブを外すと失点アウトと表示される」）を受けて本会話中に調査・実装）
 - 実施内容: ユーザー報告を受け、`serveFault()`（1本目はセカンドサーブ、2本目はダブルフォルト）まわりを`git log`ベースでコードレビューし、さらに実際の`update()`ループを通した再現テスト（`chargeStart→複数フレームのupdate→chargeRelease`で実際に人間/CPU双方の1本目サーブをネット・アウト双方で本当に失敗させる）を行い、通常のパラメータ範囲では正しく「セカンドサーブ」に回ることを確認した。その過程で1件、理論上のギャップを発見：`stepBall()`の「計算が破綻したときの保険」判定（`Math.abs(ball.z) > BOUNDS.Z || Math.abs(ball.x) > BOUNDS.X`で無条件に`endPoint(...,'アウト')`）が`serveInFlight`を見ておらず、サーブがこの極端な範囲（保険用の18m/24m、通常のサーブの狙いは最大でも±3.9m程度なので通常は絶対に届かない）に達した場合、1本目でも即座に失点扱いになっていた（`bounce()`側の通常の着地判定は`serveInFlight`を見て正しくフォールト扱いにしていたが、この保険判定だけ見落としがあった）。`hitsNet()`の分岐と同じパターンに揃え、`serveInFlight`のときは`serveFault('アウト')`を呼ぶよう修正。
