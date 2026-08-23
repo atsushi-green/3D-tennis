@@ -1014,7 +1014,11 @@
       if (this.phase === 'rally') this.checkSwings();
 
       if (Math.abs(ball.z) > BOUNDS.Z || Math.abs(ball.x) > BOUNDS.X) {
-        this.endPoint(opponent(ball.last), 'アウト');
+        // 通常のサーブの狙い(最大でも±3.9m程度)ではまず届かない極端な範囲だが、計算が
+        // 破綻した場合の保険なのでバウンド判定と同様にサーブ中はフォールト扱いにする
+        // （即失点にしてサーブのやり直しルールを迂回してしまわないように）。
+        if (this.serveInFlight) this.serveFault('アウト');
+        else this.endPoint(opponent(ball.last), 'アウト');
       }
     }
 

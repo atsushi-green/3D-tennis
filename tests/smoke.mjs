@@ -96,7 +96,9 @@ ok(pointLabel(3, 3) === '40' && pointLabel(4, 3) === 'Ad' && pointLabel(3, 4) ==
   ok(m.serveSide === -1, `after 2 tiebreak points, the serve side flips back, got ${m.serveSide}`);
 }
 
-const { HALF_W, HALF_L, COURT, PLAYER, SERVE } = R.config;
+const {
+  HALF_W, HALF_L, COURT, PLAYER, SERVE, BOUNDS,
+} = R.config;
 const fakeInput = { moveX: 0, moveZ: 0, lob: false };
 const noHooks = {
   sound() {}, call() {}, clearCall() {}, score() {}, wind() {},
@@ -453,6 +455,22 @@ function tossAndHit(g, holdFrames = 0) {
   ok(g.phase === 'over', 'precondition: double fault ends the point');
   ok(g.stats.you.doubleFaults === 1, 'double fault counts against the server (you)');
   ok(g.stats.cpu.doubleFaults === 0, "double fault doesn't count against the receiver");
+}
+
+// --- 極端な範囲（BOUNDS）を出た球の保険判定も、サーブ中はフォールト扱いにする ---
+// (退行テスト: stepBall() の「計算が破綻したときの保険」判定が serveInFlight を見ておらず、
+//  1本目のサーブがこの保険に引っかかると、セカンドサーブに回らず即失点になっていた)
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.serve('you');
+  ok(g.serveInFlight === true, 'precondition: first serve is in flight');
+  g.ball.x = BOUNDS.X + 1; // 通常のサーブでは絶対に届かない極端な位置（保険判定の対象）
+  g.ball.z = 3;
+  g.stepBall(1 / 240);
+  ok(g.serveNumber === 2, 'an out-of-bounds first serve retries as a fault, not an instant loss');
+  ok(g.phase === 'serve', 'does not end the point');
+  ok(g.match.points.you === 0 && g.match.points.cpu === 0, 'no point is awarded');
 }
 
 // --- スタッツ：エースはサーブが一度も返球されずに2バウンドで決まったときだけ積む ---
