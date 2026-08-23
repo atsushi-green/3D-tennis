@@ -668,9 +668,9 @@ function tossAndHit(g, holdFrames = 0) {
   const tapShot = hitWith(0);
   const fullShot = hitWith(1);
 
-  ok(fullShot.speed > tapShot.speed * 1.6,
-    `full charge should be at least 60% faster: tap=${tapShot.speed.toFixed(1)} full=${fullShot.speed.toFixed(1)}`);
-  ok(fullShot.landing.z > tapShot.landing.z + 2.5,
+  ok(fullShot.speed > tapShot.speed * 2.1,
+    `full charge should be at least 110% faster: tap=${tapShot.speed.toFixed(1)} full=${fullShot.speed.toFixed(1)}`);
+  ok(fullShot.landing.z > tapShot.landing.z + 4.5,
     `full charge should land clearly deeper: tap=${tapShot.landing.z.toFixed(1)} full=${fullShot.landing.z.toFixed(1)}`);
   ok(fullShot.impact > tapShot.impact,
     `full charge should have a longer impact effect: tap=${tapShot.impact} full=${fullShot.impact}`);
