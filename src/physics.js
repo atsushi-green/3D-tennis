@@ -86,6 +86,70 @@
   }
 
   /**
+   * 現在の滞空区間の頂点（vy が正から負に転じる瞬間＝一番高く上がった位置）の予測。
+   * バウンド直後の球を追うのに使う：predictLanding() は「次に地面に着く瞬間」＝
+   * まだ1回もバウンドしていなければ狙い通り最初の着地点になるが、既にバウンドした
+   * 球に使うと「次（＝2バウンド目）の着地点」という、実際に打つ場所よりずっと先の
+   * 点になってしまう。頂点は現在の弾道だけから決まる固定の点（風がなければ）なので、
+   * predictLanding(ball, 短い秒数) のように「今から何秒後か」で先読みする方式と違い、
+   * ボールが近づくにつれて追跡目標がずるずる先へ動き続ける（＝CPUがいつまでも
+   * 全力疾走のままになる）ことがない。
+   * 頂点に達する前に着地／ネットしてしまう場合はそちらを返す。
+   * @returns {{x:number, z:number, t:number, net:boolean}}
+   */
+  function predictApex(b, maxT) {
+    const limit = maxT === undefined ? 5 : maxT;
+    const s = {
+      x: b.x, y: b.y, z: b.z,
+      px: b.x, py: b.y, pz: b.z,
+      vx: b.vx, vy: b.vy, vz: b.vz,
+      spin: b.spin,
+      wind: b.wind,
+    };
+    const dt = 1 / 120;
+    for (let t = 0; t < limit; t += dt) {
+      const vyBefore = s.vy;
+      integrate(s, dt);
+      if (hitsNet(s)) return { x: s.x, z: s.z, t, net: true };
+      if (s.y <= BALL_R && s.vy < 0) return { x: s.x, z: s.z, t, net: false };
+      if (vyBefore > 0 && s.vy <= 0) return { x: s.x, z: s.z, t, net: false };
+    }
+    return { x: s.x, z: s.z, t: limit, net: false };
+  }
+
+  /**
+   * ボールが指定した z 平面を通過する瞬間の位置。通過する前に着地／ネットしてしまうなら null。
+   * ダブルスの前衛が「まだ着地していないボールが自分の目の前を素通りするか（＝ポーチできるか）」
+   * を判定するのに使う（isResponder が着地点だけで判断すると、前衛の近くを通る球でも
+   * 着地点が深い相方任せになってしまうため）。
+   * @returns {{x:number, y:number, t:number}|null}
+   */
+  function predictAtZ(b, targetZ, maxT) {
+    const limit = maxT === undefined ? 5 : maxT;
+    const startSign = Math.sign(targetZ - b.z);
+    if (startSign === 0) return { x: b.x, y: b.y, t: 0 };
+    const s = {
+      x: b.x, y: b.y, z: b.z,
+      px: b.x, py: b.y, pz: b.z,
+      vx: b.vx, vy: b.vy, vz: b.vz,
+      spin: b.spin,
+      wind: b.wind,
+    };
+    const dt = 1 / 120;
+    for (let t = 0; t < limit; t += dt) {
+      integrate(s, dt);
+      if (hitsNet(s)) return null;
+      if (s.y <= BALL_R && s.vy < 0) return null; // 通過する前に着地する
+      if (Math.sign(targetZ - s.z) !== startSign) {
+        const span = s.z - s.pz;
+        const tt = span === 0 ? 1 : (targetZ - s.pz) / span;
+        return { x: lerp(s.px, s.x, tt), y: lerp(s.py, s.y, tt), t };
+      }
+    }
+    return null;
+  }
+
+  /**
    * from から target へ、baseT 秒で落とす初速を解く。
    * その軌道がネットに当たるなら、当たらなくなるまで滞空時間を伸ばして（＝山なりにして）解き直す。
    */
@@ -116,6 +180,6 @@
   }
 
   RallyOne.physics = {
-    netHeightAt, integrate, crossedNet, netCrossing, hitsNet, predictLanding, solveShot, spinGravity,
+    netHeightAt, integrate, crossedNet, netCrossing, hitsNet, predictLanding, predictApex, predictAtZ, solveShot, spinGravity,
   };
 })(window.RallyOne = window.RallyOne || {});

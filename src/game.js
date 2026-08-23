@@ -492,8 +492,9 @@
         y: BALL_R,
         z: dir * (COURT.SERVICE - rand(SERVE.DEPTH_MIN, SERVE.DEPTH_MAX)),
       };
-      // プレイヤーは「打つ」瞬間の溜め量で威力が変わる。CPU は常に一定。
-      const flightT = who === 'you' ? lerp(SERVE.T, SERVE.CHARGE_T, this.you.swingCharge) : SERVE.T;
+      // プレイヤーは「打つ」瞬間の溜め量で威力が変わる。CPU/AI（cpu・cpuMate・youMate）は
+      // 溜め演出がない代わりに、常に一定のそこそこの威力（SERVE.CPU_T）で打つ。
+      const flightT = who === 'you' ? lerp(SERVE.T, SERVE.CHARGE_T, this.you.swingCharge) : SERVE.CPU_T;
 
       ball.y = from.y;
       // サーブはスピン選択の対象外（フラット固定）。既にバランス調整済みのため据え置く。
@@ -893,7 +894,7 @@
         this.cpu.speed = 0; // まだ反応できていない
         return;
       }
-      const target = incoming ? chasePosition(this.ball) : homePosition();
+      const target = incoming ? chasePosition(this.ball, 1, this.cpu) : homePosition();
       this.moveIfRecovered('cpu', this.cpu, cpuBefore, target, incoming ? PLAYER.CPU_CHASE : PLAYER.CPU_RECOVER, dt);
     }
 
@@ -927,14 +928,14 @@
       const cpuTeamChasing = this.phase === 'rally' && ball.last === 'you';
       if (cpuTeamChasing && this.doublesResponder('cpu') === 'cpu') {
         if (this.reactTimers.cpu <= 0) {
-          this.moveIfRecovered('cpu', this.cpu, cpuBefore, chasePosition(ball, 1), PLAYER.CPU_CHASE, dt);
+          this.moveIfRecovered('cpu', this.cpu, cpuBefore, chasePosition(ball, 1, this.cpu), PLAYER.CPU_CHASE, dt);
         } else {
           this.cpu.speed = 0;
         }
         this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore, coverPosition(this.cpu.x, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
       } else if (cpuTeamChasing) {
         if (this.reactTimers.cpuMate <= 0) {
-          this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore, chasePosition(ball, 1), PLAYER.CPU_CHASE, dt);
+          this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore, chasePosition(ball, 1, this.cpuMate), PLAYER.CPU_CHASE, dt);
         } else {
           this.cpuMate.speed = 0;
         }
@@ -950,7 +951,7 @@
       const mateChasing = this.phase === 'rally' && ball.last === 'cpu'
         && this.doublesResponder('you') === 'youMate';
       if (mateChasing && this.reactTimers.youMate <= 0) {
-        this.moveIfRecovered('youMate', this.youMate, youMateBefore, chasePosition(ball, -1), PLAYER.CPU_CHASE, dt);
+        this.moveIfRecovered('youMate', this.youMate, youMateBefore, chasePosition(ball, -1, this.youMate), PLAYER.CPU_CHASE, dt);
       } else if (mateChasing) {
         this.youMate.speed = 0;
       } else {
