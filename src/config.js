@@ -34,7 +34,7 @@
   const PLAYER = {
     SPEED: 7.2,            // プレイヤーの移動速度
     CPU_CHASE: 6.6,        // CPU が落下点へ寄る速度
-    CPU_RECOVER: 4.2,      // CPU が定位置へ戻る速度
+    CPU_RECOVER: 3.4,      // CPU が定位置へ戻る速度（CHASEよりかなり遅い＝打った後は本気で追わない）
     REACH: 1.55,           // プレイヤーの打球可能距離
     REACH_Y: 2.5,          // これより高い球は打てない
     // これ以上の高さで、かつ SMASH_MIN_CHARGE 以上溜めてから離すとスマッシュになる
@@ -60,7 +60,12 @@
     CPU_REACT: 0.18,
     // CPU/AI が打ち返した直後、定位置（ミドル）へ戻り始めるまでの硬直時間(秒)。
     // 振り抜いた勢いのままではすぐに動き出せないはず、という想定。この間は棒立ちになる。
-    CPU_RECOVER_DELAY: 0.35,
+    // CPU_RECOVER も含め、「打ってからミドルに戻るのが速すぎる」というフィードバックを受けて
+    // 元の値(0.35 / 4.2)より硬直を長く・戻る速度を遅くしてある。
+    CPU_RECOVER_DELAY: 0.55,
+    // 人間が打った（サーブ含む）直後の硬直時間(秒)。CPU_RECOVER_DELAYと同じ考え方で、
+    // 振り抜いた直後は追加入力があってもすぐには動き出せない（フォロースルー中）。
+    HIT_RECOVER_DELAY: 0.32,
     SWING_WINDOW: 0.22,    // スイング入力が有効な時間
     SWING_ANIM: 0.28,
     SERVE_ANIM: 0.30,
@@ -174,7 +179,9 @@
     CHASE_X_LIMIT: 6.4, // 落下点を追う範囲
     CHASE_Z_MIN: 1.6,
     CHASE_Z_MAX: HALF_L + 2.4,
-    CHASE_BEHIND: 0.5,  // 落下点の少し後ろに構える
+    // 落下点そのものではなく、ボールが弾んでから打ちやすい高さまで上がってくる分だけ
+    // 後ろに下がって構える（0.5だと着地点のほぼ真上で待つ格好になり不自然だったため広げた）。
+    CHASE_BEHIND: 1.4,
     // 「ぎりぎり追いついた」ときの返球（打点での実速度 / CPU_CHASE の比率＝stretch 0〜1 で補間）。
     // 全力疾走のまま打った球は威力もコースの精度も落ちる＝ゆるい山なりで安全な返球になる。
     STRETCH_T: 1.35,          // 飛翔時間（山なり）
@@ -367,22 +374,22 @@
     easy: {
       cpu: {
         SHOT_T: 1.12, AIM_X_MIN: 1.0, AIM_X_MAX: 2.4, AIM_Z_MIN: 5.8, AIM_Z_MAX: 8.0,
-        OUT_LONG: 0.20, OUT_WIDE: 0.14, CHASE_X_LIMIT: 5.4, CHASE_BEHIND: 0.9,
+        OUT_LONG: 0.20, OUT_WIDE: 0.14, CHASE_X_LIMIT: 5.4, CHASE_BEHIND: 1.9,
         STRETCH_OUT_LONG: 0.34, STRETCH_OUT_WIDE: 0.26,
       },
       player: {
-        CPU_CHASE: 5.4, CPU_RECOVER: 3.4, CPU_REACT: 0.30, CPU_RECOVER_DELAY: 0.50,
+        CPU_CHASE: 5.4, CPU_RECOVER: 2.6, CPU_REACT: 0.30, CPU_RECOVER_DELAY: 0.70,
       },
     },
     normal: { cpu: {}, player: {} },
     hard: {
       cpu: {
         SHOT_T: 0.78, AIM_X_MIN: 1.7, AIM_X_MAX: 3.9, AIM_Z_MIN: 7.6, AIM_Z_MAX: 9.9,
-        OUT_LONG: 0.03, OUT_WIDE: 0.02, CHASE_X_LIMIT: 7.0, CHASE_BEHIND: 0.3,
+        OUT_LONG: 0.03, OUT_WIDE: 0.02, CHASE_X_LIMIT: 7.0, CHASE_BEHIND: 0.9,
         STRETCH_OUT_LONG: 0.12, STRETCH_OUT_WIDE: 0.08,
       },
       player: {
-        CPU_CHASE: 7.6, CPU_RECOVER: 5.0, CPU_REACT: 0.10, CPU_RECOVER_DELAY: 0.22,
+        CPU_CHASE: 7.6, CPU_RECOVER: 4.2, CPU_REACT: 0.10, CPU_RECOVER_DELAY: 0.42,
       },
     },
   };

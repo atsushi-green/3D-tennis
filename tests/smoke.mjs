@@ -286,6 +286,67 @@ function tossAndHit(g, holdFrames = 0) {
     `receiver is not dragged toward the center before the serve, got x=${g.cpu.x} z=${g.cpu.z}`);
 }
 
+// --- グラウンドストロークの構え位置は、落下点そのものではなく弾んでから打ちやすい分だけ後ろ ---
+// (退行テスト: CHASE_BEHIND が小さすぎて、着地点のほぼ真上で待つような不自然な構えになっていた)
+{
+  const { chasePosition } = R.ai;
+  const { CHASE_BEHIND } = R.config.CPU;
+  const { predictLanding } = R.physics;
+  const ball = {
+    x: 1, y: 2, z: 5, vx: 0.5, vy: 0, vz: 6, // cpu 陣地(z>0)へ向かって落ちてくる球
+  };
+  const landing = predictLanding(ball);
+  const target = chasePosition(ball, 1);
+  ok(CHASE_BEHIND > 1.0, `chase margin behind the bounce is generous, not right on top of it, got ${CHASE_BEHIND}`);
+  ok(Math.abs(target.z - landing.z) >= CHASE_BEHIND - 1e-9,
+    `chase target sits at least CHASE_BEHIND(${CHASE_BEHIND}) beyond the actual bounce point, landing.z=${landing.z} target.z=${target.z}`);
+}
+
+// --- 打った直後（人間もCPUも）はフォロースルー中で、しばらく動けない ---
+// (退行テスト: 打ってからミドルに戻るまでの時間が短すぎるというフィードバックを受けて、
+//  硬直時間を延ばした。人間側にも同様の硬直（HIT_RECOVER_DELAY）を新設した)
+{
+  const { HIT_RECOVER_DELAY, CPU_RECOVER_DELAY } = PLAYER;
+
+  // 人間：打った直後は入力があっても動けず、硬直が明けると動ける
+  {
+    const input = { moveX: 1, moveZ: 0, lob: false };
+    const g = new R.Game({ input, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.you.x = 0; g.you.z = -2;
+    g.ball.x = 0; g.ball.y = 1; g.ball.z = -2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
+    g.hit('you');
+    ok(g.recoverTimers.you === HIT_RECOVER_DELAY, `hitting sets the human's recover timer, got ${g.recoverTimers.you}`);
+
+    const stillFrames = Math.floor(HIT_RECOVER_DELAY / (1 / 60)) - 2;
+    for (let i = 0; i < stillFrames; i++) g.movePlayers(1 / 60);
+    ok(g.you.x === 0, `human cannot move yet during the post-hit recovery lock, x=${g.you.x}`);
+
+    for (let i = 0; i < 30; i++) g.movePlayers(1 / 60); // 硬直が明けるのに十分な時間
+    ok(g.you.x !== 0, `human can move again once the recovery lock expires, x=${g.you.x}`);
+  }
+
+  // CPU：打った直後は棒立ちで、硬直が明けると定位置(home)へ戻り始める
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.cpu.x = 3; g.cpu.z = 5;
+    g.ball.x = 3; g.ball.y = 1; g.ball.z = 5; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
+    g.hit('cpu');
+    ok(g.recoverTimers.cpu === CPU_RECOVER_DELAY, `hitting sets the cpu's recover timer, got ${g.recoverTimers.cpu}`);
+
+    const cpuXAfterHit = g.cpu.x;
+    const stillFrames = Math.floor(CPU_RECOVER_DELAY / (1 / 60)) - 2;
+    for (let i = 0; i < stillFrames; i++) g.movePlayers(1 / 60);
+    ok(g.cpu.x === cpuXAfterHit, `cpu stays put during its own post-hit recovery lock, x=${g.cpu.x}`);
+
+    for (let i = 0; i < 60; i++) g.movePlayers(1 / 60); // 硬直が明けて home へ戻り始めるのに十分な時間
+    ok(g.cpu.x < cpuXAfterHit, `cpu starts recovering toward home once its lock expires, x=${g.cpu.x}`);
+  }
+}
+
 // --- サーブはノーバウンドで打ち返してはいけない（volley禁止） ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });

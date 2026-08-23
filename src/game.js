@@ -139,11 +139,15 @@
        */
       this.reactTimers = { cpu: 0, cpuMate: 0, youMate: 0 };
       /**
-       * CPU 側の打球後の硬直タイマー（cpu/cpuMate/youMate）。振り抜いた瞬間に
-       * PLAYER.CPU_RECOVER_DELAY にセットし、0になるまで定位置への回復移動を止める
-       * （＝打った直後は棒立ちで、すぐにミドルへ戻れるわけではない）。
+       * 打球後の硬直タイマー（cpu/cpuMate/youMate/you）。振り抜いた瞬間に
+       * PLAYER.CPU_RECOVER_DELAY（you は PLAYER.HIT_RECOVER_DELAY）にセットし、0になるまで
+       * 動けなくする（＝打った直後は棒立ちで、すぐにミドルへ戻れるわけではない）。
+       * you の分は moveIfRecovered() ではなく movePlayers() 内で直接見る（you は目標位置へ
+       * 寄せる自動移動ではなく、入力をそのまま速度に反映する方式のため）。
        */
-      this.recoverTimers = { cpu: 0, cpuMate: 0, youMate: 0 };
+      this.recoverTimers = {
+        cpu: 0, cpuMate: 0, youMate: 0, you: 0,
+      };
       /** 直前フレームの ball.last。変化を検知して反応遅延タイマーを起動するために使う。 */
       this.lastBallOwnerSeen = null;
       /** 今のポイントのサーブが1本目(1)か、1本目がフォールトした後のセカンドサーブ(2)か。 */
@@ -381,6 +385,7 @@
       this.recoverTimers.cpu = 0;
       this.recoverTimers.cpuMate = 0;
       this.recoverTimers.youMate = 0;
+      this.recoverTimers.you = 0;
       this.lastBallOwnerSeen = null;
 
       const side = this.match.serveSide; // クロス(-1)から始まり、ポイントごとに逆クロス(+1)と交互になる
@@ -530,8 +535,9 @@
       const from = { x: ball.x, y: Math.max(ball.y, 0.5), z: ball.z };
       this.serveInFlight = false; // 一度でも打ち返されたら「ノーバウンド禁止」の制約は解除
 
-      // CPU/AI は打った直後すぐには動けない（＝すぐにミドルへ戻れるほど強くない）。
-      if (who !== 'you') this.recoverTimers[who] = PLAYER.CPU_RECOVER_DELAY;
+      // 打った直後は（人間も含めて）すぐには動けない。フォロースルー中は追加入力があっても
+      // 動き出せないはず、という想定（CPU/AIはすぐにミドルへ戻れるほど強くない、という意味も兼ねる）。
+      this.recoverTimers[who] = who === 'you' ? PLAYER.HIT_RECOVER_DELAY : PLAYER.CPU_RECOVER_DELAY;
 
       // ball.x/z はまだ打点のまま（solveShot が書き換えるのは vx/vy/vz だけ）なので、
       // ここで打点とプレイヤー位置からフォア/バックを判定できる。shot の計算より前に
@@ -813,8 +819,9 @@
 
       // トス中（自分のサーブで、まだ打っていない間）は、打点がトスした位置からずれてしまう
       // ので入力があっても一切動かさない（＝ボールはプレイヤーの手元ではなく静止したトス
-      // 位置から放たれる、という見た目のずれをなくす）。
-      if (!this.tossActive) {
+      // 位置から放たれる、という見た目のずれをなくす）。打った直後のフォロースルー中
+      // （recoverTimers.you）も同様に、入力があっても動き出せない。
+      if (!this.tossActive && this.recoverTimers.you <= 0) {
         const youBefore = { x: this.you.x, z: this.you.z };
         const mx = this.input.moveX * INPUT_X_TO_WORLD;
         const mz = this.input.moveZ;
@@ -858,6 +865,7 @@
       this.recoverTimers.cpu = Math.max(0, this.recoverTimers.cpu - dt);
       this.recoverTimers.cpuMate = Math.max(0, this.recoverTimers.cpuMate - dt);
       this.recoverTimers.youMate = Math.max(0, this.recoverTimers.youMate - dt);
+      this.recoverTimers.you = Math.max(0, this.recoverTimers.you - dt);
 
       const owner = this.ball.last;
       if (this.phase === 'rally' && owner !== this.lastBallOwnerSeen) {
