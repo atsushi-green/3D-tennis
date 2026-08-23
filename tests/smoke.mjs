@@ -838,6 +838,24 @@ function tossAndHit(g, holdFrames = 0) {
   }
 }
 
+// --- CPU/AIのサーブも T／ボディ／ワイドの3コースへ散らばる ---
+// (退行テスト: 以前は専用の SERVE.AIM_X_MIN〜AIM_X_MAX という狭い範囲しか使っておらず、
+//  結果としてボディ相当の場所にしか来なかった＝「必ず正面に来る」)
+{
+  const { AIM_WIDE_MIN, AIM_T_MAX } = SERVE;
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  let sawWide = false;
+  let sawT = false;
+  for (let i = 0; i < 60; i++) {
+    const x = Math.abs(g.cpuServeAimMagnitude());
+    if (x >= AIM_WIDE_MIN) sawWide = true;
+    if (x <= AIM_T_MAX) sawT = true;
+  }
+  ok(sawWide, 'CPU serve course selection reaches the wide zone across repeated samples');
+  ok(sawT, 'CPU serve course selection reaches the T zone across repeated samples');
+}
+
 // --- フォアハンド/バックハンドの判定（ボールの仮想延長線がラケット側か逆側か） ---
 // vx/vz を0にして、速度による延長を無効化し、打点の位置関係だけを見る。
 {

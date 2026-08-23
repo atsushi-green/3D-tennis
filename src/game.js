@@ -496,10 +496,11 @@
       // プレイヤーはトス中の実際の高さで打つ。CPU はトス演出を挟まないので固定の打点高さを使う。
       const contactY = who === 'you' ? Math.max(ball.y, SERVE.BALL_Y) : SERVE.TOSS_Y;
       const from = { x: ball.x, y: contactY, z: ball.z };
-      // サービスはコートの対角へ入れる。狙う横位置（コース）はプレイヤーのみ選べる
+      // サービスはコートの対角へ入れる。狙う横位置（コース）はプレイヤーが ←→ で選び、
+      // CPU/AI はランダムに選ぶ（どちらも T／ボディ／ワイドの3コース）
       const magnitude = who === 'you'
         ? this.serveAimMagnitude(targetSign)
-        : rand(SERVE.AIM_X_MIN, SERVE.AIM_X_MAX);
+        : this.cpuServeAimMagnitude();
       const target = {
         x: targetSign * magnitude,
         y: BALL_R,
@@ -545,6 +546,14 @@
       return aim === targetSign
         ? rand(SERVE.AIM_WIDE_MIN, SERVE.AIM_WIDE_MAX)
         : rand(SERVE.AIM_T_MIN, SERVE.AIM_T_MAX);
+    }
+
+    /** CPU/AI のサーブのコース選択。プレイヤーと同じ T／ボディ／ワイドから毎回ランダムに選ぶ。 */
+    cpuServeAimMagnitude() {
+      const roll = Math.random();
+      if (roll < 1 / 3) return rand(SERVE.AIM_T_MIN, SERVE.AIM_T_MAX);
+      if (roll < 2 / 3) return rand(SERVE.AIM_BODY_MIN, SERVE.AIM_BODY_MAX);
+      return rand(SERVE.AIM_WIDE_MIN, SERVE.AIM_WIDE_MAX);
     }
 
     hit(who) {
