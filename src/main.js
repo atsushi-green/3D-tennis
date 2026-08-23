@@ -37,7 +37,7 @@
       hud.hideStartScreen();
       game.start(true);
     },
-    onChargeStart: () => game.chargeStart(),
+    onChargeStart: (spin) => game.chargeStart(spin),
     onChargeRelease: () => game.chargeRelease(),
     onFormationNet: () => game.setYouMateFormation('net'),
     onFormationBack: () => game.setYouMateFormation('back'),

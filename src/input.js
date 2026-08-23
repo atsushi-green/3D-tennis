@@ -11,26 +11,30 @@
   const MOVE_UP = ['ArrowUp', 'KeyW'];
   const MOVE_DOWN = ['ArrowDown', 'KeyS'];
   const LOB = ['ShiftLeft', 'ShiftRight'];
-  const SWING = ['Space'];
   /**
-   * グラウンドストローク限定のスピン選択（スマッシュ・ボレー・サーブ・ロブは対象外、常にフラット）。
-   * Ctrl/Alt はOS・ブラウザのショートカット（macOSのCtrl+←→でSpaces切替、ブラウザのAlt+←→で
-   * 戻る/進む等）と衝突し矢印キー移動と同時押しできないため、衝突のない素のキーを充てる。
-   * 何も押さなければ従来通りフラット（挙動は一切変わらない）。
+   * 溜め・スイングのキー（グラウンドストローク・サーブのスピン選択を兼ねる。スマッシュ・
+   * ボレー・ロブは対象外、常にフラット）。B/V/C は横並びの3キーで、押している間だけ溜め、
+   * 離した瞬間にそのキーに対応するスピンで打つ。Ctrl/Alt はOS・ブラウザのショートカット
+   * （macOSのCtrl+←→でSpaces切替、ブラウザのAlt+←→で戻る/進む等）と衝突し矢印キー移動と
+   * 同時押しできないため、衝突のない素のキーを充てる。
+   * @type {{[code: string]: 'flat'|'top'|'slice'}}
    */
-  const TOPSPIN_KEYS = ['KeyV'];
-  const SLICE_KEYS = ['KeyC'];
+  const SWING = { KeyB: 'flat', KeyV: 'top', KeyC: 'slice' };
+  const SWING_CODES = Object.keys(SWING);
   /** ダブルスのAIパートナーへの指示。Q＝ネットへ前へ、E＝ベースラインまで下がれ */
   const FORMATION_NET = ['KeyQ'];
   const FORMATION_BACK = ['KeyE'];
   /** スタート画面でのみ有効。CPU/AIの強さ（Easy/Normal/Hard）を選ぶ */
   const DIFFICULTY_KEYS = { Digit1: 'easy', Digit2: 'normal', Digit3: 'hard' };
   /** ブラウザのスクロールを止めたいキー */
-  const SWALLOW = MOVE_LEFT.concat(MOVE_RIGHT, MOVE_UP, MOVE_DOWN, SWING);
+  const SWALLOW = MOVE_LEFT.concat(MOVE_RIGHT, MOVE_UP, MOVE_DOWN, SWING_CODES);
 
   class Input {
     constructor() {
       this.held = new Set();
+      // 溜め始めに使った1つのキー（B/V/C いずれか、またはポインタなら 'Pointer'）。
+      // 溜めている間に他の2キーを押しても無視し、この打鍵が離されたときだけ離した扱いにする。
+      this.chargeKey = null;
     }
 
     /**
@@ -47,8 +51,9 @@
           if (e.code === 'KeyD') handlers.onStartDoubles();
           else if (DIFFICULTY_KEYS[e.code]) handlers.onSelectDifficulty(DIFFICULTY_KEYS[e.code]);
           else handlers.onStart();
-        } else if (SWING.indexOf(e.code) !== -1) {
-          handlers.onChargeStart();
+        } else if (SWING[e.code] && !this.chargeKey) {
+          this.chargeKey = e.code;
+          handlers.onChargeStart(SWING[e.code]);
         } else if (FORMATION_NET.indexOf(e.code) !== -1) {
           handlers.onFormationNet();
         } else if (FORMATION_BACK.indexOf(e.code) !== -1) {
@@ -58,21 +63,33 @@
 
       addEventListener('keyup', (e) => {
         this.held.delete(e.code);
-        if (handlers.isStarted() && SWING.indexOf(e.code) !== -1) handlers.onChargeRelease();
+        if (handlers.isStarted() && e.code === this.chargeKey) {
+          this.chargeKey = null;
+          handlers.onChargeRelease();
+        }
       });
       // ウィンドウを離れている間の keyup は届かないので、戻ったときに押下状態を捨てる。
-      // Space を押しっぱなしのまま離脱された場合に備え、溜めも強制的に離す。
+      // 溜めキーを押しっぱなしのまま離脱された場合に備え、溜めも強制的に離す。
       addEventListener('blur', () => {
         this.held.clear();
-        if (handlers.isStarted()) handlers.onChargeRelease();
+        if (handlers.isStarted() && this.chargeKey) {
+          this.chargeKey = null;
+          handlers.onChargeRelease();
+        }
       });
 
       addEventListener('pointerdown', () => {
         if (!handlers.isStarted()) handlers.onStart();
-        else handlers.onChargeStart();
+        else if (!this.chargeKey) {
+          this.chargeKey = 'Pointer';
+          handlers.onChargeStart(this.heldSpin());
+        }
       });
       addEventListener('pointerup', () => {
-        if (handlers.isStarted()) handlers.onChargeRelease();
+        if (handlers.isStarted() && this.chargeKey === 'Pointer') {
+          this.chargeKey = null;
+          handlers.onChargeRelease();
+        }
       });
     }
 
@@ -94,11 +111,14 @@
       return this.any(LOB);
     }
 
-    /** @returns {'top'|'slice'|null} グラウンドストローク・サーブのスピン選択。何も押していなければ null（＝フラット） */
-    get spin() {
-      if (this.any(TOPSPIN_KEYS)) return 'top';
-      if (this.any(SLICE_KEYS)) return 'slice';
-      return null;
+    /**
+     * クリック/タップで溜め始めたときのスピン。B/V/C を押しっぱなしのまま同時にクリックする
+     * 組み合わせのための救済で、通常はキーボードのみで B/V/C が直接スピンを決める。
+     * @returns {'flat'|'top'|'slice'}
+     */
+    heldSpin() {
+      const code = SWING_CODES.find((c) => this.held.has(c));
+      return code ? SWING[code] : 'flat';
     }
   }
 

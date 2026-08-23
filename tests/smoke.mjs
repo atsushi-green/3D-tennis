@@ -104,18 +104,19 @@ const noHooks = {
   sound() {}, call() {}, clearCall() {}, score() {}, wind() {},
 };
 
-/** 即座に離す（溜め時間0）タップ。1回の Space 押下＋即離しを表す。 */
+/** 即座に離す（溜め時間0）タップ。1回の溜めキー押下＋即離しを表す。 */
 function tap(g) {
   g.chargeStart();
   g.chargeRelease();
 }
 
 /**
- * Space を押しっぱなしにしてサーブする、を模した実際のフロー。
+ * 溜めキーを押しっぱなしにしてサーブする、を模した実際のフロー。
  * 押下と同時にトス＋テイクバックの溜めが始まり、holdFrames ぶん待ってから離す＝打つ。
+ * @param {'flat'|'top'|'slice'} [spin] 押したキーに対応するスピン。省略時はフラット。
  */
-function tossAndHit(g, holdFrames = 0) {
-  g.chargeStart(); // トスとチャージを同時に開始
+function tossAndHit(g, holdFrames = 0, spin = 'flat') {
+  g.chargeStart(spin); // トスとチャージを同時に開始
   for (let f = 0; f < holdFrames; f++) g.update(1 / 60);
   g.chargeRelease(); // 離した瞬間に打つ
 }
@@ -1546,56 +1547,40 @@ function tossAndHit(g, holdFrames = 0) {
     'the flat preset is multiplier 1 in both dimensions, matching the pre-spin behaviour exactly');
 }
 
-// --- スピン選択：C=スライス／V=トップスピン。何も押さなければ従来通りフラット固定（回帰なし） ---
-// chargeStart()（Spaceを押した瞬間）にスピンを固定する。当たる瞬間まで押し続ける必要はない
-// （操作が難しいというフィードバックを受けて、chargeStroke（フォア/バック）と同じ方式に変更した）。
+// --- スピン選択：B=フラット／V=トップスピン／C=スライス、それぞれ独立した溜め・スイングキー ---
+// chargeStart(spin) の引数（押されたキーに対応するスピン）をその瞬間に固定する。当たる瞬間
+// まで押し続ける必要はない（chargeStroke（フォア/バック）と同じ方式）。
 {
-  // 通常のグラウンドストローク：chargeStart() の時点で押していたキーを反映する
-  const spinInput = { moveX: 0, moveZ: 0, lob: false, spin: null };
-  const g = new R.Game({ input: spinInput, hooks: noHooks });
+  // 通常のグラウンドストローク：chargeStart() に渡したスピンを反映する
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start();
   g.phase = 'rally';
   g.you.z = -HALF_L - 0.6; // ベースライン付近＝ボレー圏外にしておく
   g.ball.x = 1.5; g.ball.y = 1; g.ball.z = -2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
 
-  spinInput.spin = null;
-  g.chargeStart();
+  g.chargeStart(); // B（引数省略）＝フラット
   g.chargeRelease();
   g.hit('you');
-  ok(g.ball.spin === 'flat', `no modifier held -> flat (unchanged default), got ${g.ball.spin}`);
+  ok(g.ball.spin === 'flat', `B (no spin arg) -> flat, got ${g.ball.spin}`);
 
-  spinInput.spin = 'top';
   g.ball.x = 1.5; g.ball.y = 1; g.ball.z = -2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
-  g.chargeStart();
+  g.chargeStart('top'); // V
   g.chargeRelease();
   g.hit('you');
-  ok(g.ball.spin === 'top', `holding V (topspin) at chargeStart() is applied to a groundstroke, got ${g.ball.spin}`);
+  ok(g.ball.spin === 'top', `V (topspin) at chargeStart() is applied to a groundstroke, got ${g.ball.spin}`);
 
-  spinInput.spin = 'slice';
   g.ball.x = 1.5; g.ball.y = 1; g.ball.z = -2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
-  g.chargeStart();
+  g.chargeStart('slice'); // C
   g.chargeRelease();
   g.hit('you');
-  ok(g.ball.spin === 'slice', `holding C (slice) at chargeStart() is applied to a groundstroke, got ${g.ball.spin}`);
-
-  // 当たる瞬間まで押し続けなくてよい：chargeStart() の後に離しても（さらに別のキーへ持ち替えても）
-  // 固定したスピンのまま打てる
-  spinInput.spin = 'top';
-  g.ball.x = 1.5; g.ball.y = 1; g.ball.z = -2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
-  g.chargeStart();
-  spinInput.spin = null; // 溜めている途中でキーを離す
-  g.chargeRelease();
-  spinInput.spin = 'slice'; // 打つ瞬間には別のキーに触れていても関係ない
-  g.hit('you');
-  ok(g.ball.spin === 'top', `spin stays fixed to what was held at chargeStart(), even if released/changed before contact, got ${g.ball.spin}`);
+  ok(g.ball.spin === 'slice', `C (slice) at chargeStart() is applied to a groundstroke, got ${g.ball.spin}`);
 
   // スマッシュ：スピン選択の対象外（フラット固定）
-  spinInput.spin = 'top';
   g.you.chargeStroke = null;
   g.you.chargeSpin = 'flat';
   g.you.swingCharge = PLAYER.SMASH_MIN_CHARGE;
   g.ball.x = 0; g.ball.y = PLAYER.SMASH_MIN_Y + 0.1; g.ball.z = -HALF_L - 0.6; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
-  g.chargeStart();
+  g.chargeStart('top'); // V を押していてもスマッシュには反映されない
   g.chargeRelease();
   g.you.swingCharge = PLAYER.SMASH_MIN_CHARGE; // chargeRelease() が溜め時間から上書きするので、テスト用に固定し直す
   g.hit('you');
@@ -1603,11 +1588,10 @@ function tossAndHit(g, holdFrames = 0) {
   ok(g.ball.spin === 'flat', `smash ignores spin input and stays flat, got ${g.ball.spin}`);
 
   // ボレー：スピン選択の対象外（フラット固定）
-  spinInput.spin = 'slice';
   g.you.swingCharge = 0;
   g.you.x = 0; g.you.z = -1; // サービスラインより前＝ボレー圏内
   g.ball.x = 0.5; g.ball.y = 1; g.ball.z = -1.5; g.ball.bounces = 0; g.ball.vx = 0; g.ball.vz = 0;
-  g.chargeStart();
+  g.chargeStart('slice'); // C を押していてもボレーには反映されない
   g.chargeRelease();
   g.hit('you');
   ok(g.you.stroke.startsWith('volley-'), 'precondition: this hit is classified as a volley');
@@ -1620,28 +1604,16 @@ function tossAndHit(g, holdFrames = 0) {
   ok(g.ball.spin === 'flat', `CPU/AI returns are always flat regardless of the human's held spin key, got ${g.ball.spin}`);
 
   // サーブ：トスを上げた瞬間（chargeStart()）に固定したスピンでスライスサーブ・スピンサーブが打てる
-  spinInput.spin = 'slice';
-  const gs = new R.Game({ input: spinInput, hooks: noHooks });
+  const gs = new R.Game({ input: fakeInput, hooks: noHooks });
   gs.start();
-  tossAndHit(gs);
+  tossAndHit(gs, 0, 'slice'); // C を押しっぱなしにしてサーブ
   ok(gs.ball.spin === 'slice', `holding C (slice) through the toss produces a slice serve, got ${gs.ball.spin}`);
 
-  // トスを上げた後にキーを離しても（当たる瞬間まで押し続けなくても）固定したスピンのまま打てる
-  const gs2 = new R.Game({ input: spinInput, hooks: noHooks });
-  gs2.start();
-  spinInput.spin = 'top';
-  gs2.chargeStart(); // トスを上げた瞬間にスピンが固定される
-  spinInput.spin = null;
-  gs2.chargeRelease();
-  ok(gs2.ball.spin === 'top', `serve spin stays fixed to what was held at toss time, even if released before contact, got ${gs2.ball.spin}`);
-
   // CPU/AI のサーブ：人間の入力に関わらず常にフラット
-  spinInput.spin = 'slice';
-  const gs3 = new R.Game({ input: spinInput, hooks: noHooks });
+  const gs3 = new R.Game({ input: fakeInput, hooks: noHooks });
   gs3.start();
   gs3.serve('cpu');
   ok(gs3.ball.spin === 'flat', `CPU/AI serves are always flat regardless of the human's held spin key, got ${gs3.ball.spin}`);
-  spinInput.spin = null;
 }
 
 // --- newPoint() は前のポイントのスピンを持ち越さない ---

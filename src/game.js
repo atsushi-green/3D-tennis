@@ -99,10 +99,10 @@
       this.you = {
         x: 0, z: -HALF_L - 0.6, vx: 0, vz: 0, // vx/vz は実速度（加速度で目標速度に近づける）
         swing: 0, anim: 0, speed: 0, stroke: 'forehand', prep: null,
-        charging: false, chargeTime: 0, swingCharge: 0, // Space 押しっぱなしのテイクバック
+        charging: false, chargeTime: 0, swingCharge: 0, // 溜めキー押しっぱなしのテイクバック
         chargeFrac: 0, // 溜めている間だけ 0〜1 で増える、テイクバックの深さ用（chargeTime のポーズ表示版）
         chargeStroke: null, // chargeStart() の瞬間に固定するフォア/バック。溜めている間は変えない
-        chargeSpin: 'flat', // chargeStart() の瞬間に固定するスピン（V/C）。実際に当たるまで押し続けなくてよい
+        chargeSpin: 'flat', // chargeStart() の瞬間に固定するスピン（B/V/C）。実際に当たるまで押し続けなくてよい
       };
       this.cpu = {
         x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, stroke: 'forehand', prep: null,
@@ -129,7 +129,7 @@
       this.doubles = false;
       /** ダブルスの AI パートナー(youMate)に指示する定位置。'net'（前へ）か 'back'（下がれ）。 */
       this.youMateFormation = 'net';
-      /** true の間、ボールはトス中（重力で上下するだけ）。Space を離して打つまで待つ。 */
+      /** true の間、ボールはトス中（重力で上下するだけ）。溜めキーを離して打つまで待つ。 */
       this.tossActive = false;
       /** true の間はサーブがまだ一度も返球されていない＝ノーバウンドで打ち返してはいけない。 */
       this.serveInFlight = false;
@@ -238,21 +238,22 @@
     }
 
     /**
-     * Space / クリックを押した瞬間。
-     * サーブは Space を押しっぱなしにする間トスが上がり続け、離した瞬間に打つ
+     * 溜めキー（B＝フラット／V＝トップスピン／C＝スライス。クリックも可）を押した瞬間。
+     * サーブは押しっぱなしにする間トスが上がり続け、離した瞬間に打つ
      * （＝トス開始とテイクバックの溜め開始は同じ1回の押下）。ラリー中はテイクバックを
      * 溜め始める。実際に打つのは chargeRelease()（離した瞬間）。
+     * @param {'flat'|'top'|'slice'} [spin] 押したキーに対応するスピン。省略時はフラット。
      */
-    chargeStart() {
+    chargeStart(spin = 'flat') {
       // 自分がサーブする番（＝ダブルスで味方が回ってきているときは対象外）のときだけ反応する
       const myServe = this.phase === 'serve' && this.servingPlayer() === 'you';
       if (myServe && !this.tossActive) {
         this.tossBall();
         this.you.charging = true;
         this.you.chargeTime = 0;
-        // サーブのスピン（V/C＝スライス／トップスピン）もトスを上げた瞬間に固定する。
+        // サーブのスピン（V/C＝トップスピン／スライス）もトスを上げた瞬間に固定する。
         // グラウンドストロークと同じ理由で、当たる瞬間まで押し続けなくてよい。
-        this.you.chargeSpin = this.input.spin || 'flat';
+        this.you.chargeSpin = spin;
         return;
       }
       if ((myServe && this.tossActive) || this.phase === 'rally') {
@@ -264,16 +265,14 @@
           // 毎フレーム判定し直すと、溜めている最中に左右が入れ替わってテイクバックの
           // 向きが急に反転して見えることがあった。
           this.you.chargeStroke = classifyStroke('you', this.ball, this.you);
-          // スピン（V/C）も同じタイミングで固定する。当たる瞬間までキーを押し続ける必要が
-          // あると、Space（威力）・←→（狙い）と同時に長く押しっぱなしを要求してしまい操作が
-          // 難しくなるため、テイクバックを始めた時点（Spaceを押した瞬間）で固定し、以降は
-          // 離してよいことにする。
-          this.you.chargeSpin = this.input.spin || 'flat';
+          // スピン（B/V/C）も同じタイミングで固定する。押したキーがそのまま結果になるので、
+          // 当たる瞬間まで押し続ける必要はない。
+          this.you.chargeSpin = spin;
         }
       }
     }
 
-    /** Space / クリックを離した瞬間。溜めた量（サーブはタイミング）に応じた威力で打つ。 */
+    /** 溜めキー（B/V/C）／クリックを離した瞬間。溜めた量（サーブはタイミング）に応じた威力で打つ。 */
     chargeRelease() {
       if (!this.you.charging) return;
       this.you.charging = false;
@@ -293,7 +292,7 @@
      * サーブの威力(0〜1)。長く溜めるほど強いのではなく、SERVE.CHARGE_SWEET_T にちょうど
      * 近いタイミングで離したときに最大になり、早すぎても遅すぎても CHARGE_WINDOW の幅で
      * 弱くなる（三角形のカーブ）。
-     * @param {number} heldTime Space を押してから離すまでの実経過時間(秒)
+     * @param {number} heldTime 溜めキーを押してから離すまでの実経過時間(秒)
      */
     serveTimingPower(heldTime) {
       const { CHARGE_SWEET_T, CHARGE_WINDOW } = SERVE;
@@ -430,7 +429,7 @@
       if (server === 'you') {
         this.hooks.call(
           faultReason ? 'セカンドサーブ' : 'サーブ',
-          faultReason ? `${faultReason} — もう一度` : '←→ でコース選択 ／ Space 押しっぱなしで打つ',
+          faultReason ? `${faultReason} — もう一度` : '←→ でコース選択 ／ B/V/C 押しっぱなしで打つ',
         );
       } else if (server === 'youMate') {
         // 人間のチームだが、今回は相方の番。人間は何もしなくてよい
@@ -480,14 +479,14 @@
       ball.y = ball.py = SERVE.BALL_Y;
     }
 
-    /** 1回目の Space。ボールを真上にトスし、重力で自然に落ちてくるのに任せる。 */
+    /** 1回目の溜めキー押下。ボールを真上にトスし、重力で自然に落ちてくるのに任せる。 */
     tossBall() {
       const ball = this.ball;
       ball.vx = 0;
       ball.vz = 0;
       ball.vy = Math.sqrt(2 * Math.abs(PHYSICS.GRAVITY) * (SERVE.TOSS_PEAK - SERVE.BALL_Y));
       this.tossActive = true;
-      this.hooks.call('トス', 'いいタイミングで Space を離す！');
+      this.hooks.call('トス', 'いいタイミングで離す！');
     }
 
     serve(who) {
@@ -628,7 +627,7 @@
     }
 
     /**
-     * ←→ で左右に打ち分け、Shift でロブ。威力は Space を離した瞬間の溜め量
+     * ←→ で左右に打ち分け、Shift でロブ。威力は溜めキーを離した瞬間の溜め量
      * （chargeRelease() が計算した this.you.swingCharge、0〜1）で決まる。
      * 無入力ならクロス気味に返す。
      *
@@ -802,11 +801,11 @@
      * ボールが自分の陣に向かっていて、まだ振っていない選手にテイクバック（構え）の
      * ポーズを出す。全キャラ共通：実際に打てる距離(REACH)より広い PREP_REACH 圏内に
      * 入った時点でラケットを引いておくので、実際にスイングが始まる前からフォア/バックが
-     * 見分けられる。人間は Space を溜めている間は距離に関わらず常にテイクバックを出す
+     * 見分けられる。人間は溜めキーを押している間は距離に関わらず常にテイクバックを出す
      * （＝打つ意思がすでに明確なため）。
      */
     updatePrep() {
-      // Space を溜めている間だけ 0〜1 で伸びる、テイクバックの深さ表示用の値。
+      // 溜めキーを押している間だけ 0〜1 で伸びる、テイクバックの深さ表示用の値。
       // 打つ・トスするなど他の文脈に移ったら（charging が false に戻ったら）即座に引っ込める。
       this.you.chargeFrac = this.you.charging
         ? clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1)
@@ -1035,7 +1034,7 @@
           // 打たずに落ちてきた。トスをやり直せるようにリセットする（フォルトにはしない）
           this.tossActive = false;
           this.placeServeBall();
-          this.hooks.call('サーブ', '←→ でコース選択 ／ Space 押しっぱなしで打つ');
+          this.hooks.call('サーブ', '←→ でコース選択 ／ B/V/C 押しっぱなしで打つ');
         }
         return;
       }
@@ -1149,7 +1148,7 @@
       const mustBounceFirst = this.serveInFlight && ball.bounces < 1;
       if (mustBounceFirst) return;
 
-      // プレイヤーは Space を押した瞬間の前後だけ打てる。人間が優先（AIパートナーに横取りさせない）
+      // プレイヤーは溜めキーを押した瞬間の前後だけ打てる。人間が優先（AIパートナーに横取りさせない）
       if (ball.last !== 'you' && ball.z < PLAYER.NET_MARGIN && this.you.swing > 0) {
         if (reaches(ball, this.you, PLAYER.REACH) && ball.y < PLAYER.REACH_Y) {
           this.hit('you');
