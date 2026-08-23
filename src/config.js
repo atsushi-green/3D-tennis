@@ -33,8 +33,11 @@
   /** 選手の移動・スイング */
   const PLAYER = {
     SPEED: 7.2,            // プレイヤーの移動速度
-    CPU_CHASE: 6.6,        // CPU が落下点へ寄る速度
-    CPU_RECOVER: 3.4,      // CPU が定位置へ戻る速度（CHASEよりかなり遅い＝打った後は本気で追わない）
+    // CPUの追跡ロジック（着地点の先読み・待球判定等）を賢くした結果、以前と同じ速度でも
+    // 無駄なく動けるようになり、体感の「足の速さ」が上がってしまっていた。ユーザー報告
+    // 「敵のフットワークが早すぎる」を受け、素の速度そのものを少し落として調整した。
+    CPU_CHASE: 5.8,        // CPU が落下点へ寄る速度
+    CPU_RECOVER: 3.0,      // CPU が定位置へ戻る速度（CHASEよりかなり遅い＝打った後は本気で追わない）
     REACH: 1.55,           // プレイヤーの打球可能距離
     REACH_Y: 2.5,          // これより高い球は打てない
     // これ以上の高さで、かつ SMASH_MIN_CHARGE 以上溜めてから離すとスマッシュになる
@@ -401,7 +404,9 @@
         STRETCH_OUT_LONG: 0.34, STRETCH_OUT_WIDE: 0.26,
       },
       player: {
-        CPU_CHASE: 5.4, CPU_RECOVER: 2.6, CPU_REACT: 0.30, CPU_RECOVER_DELAY: 0.70,
+        // normal の CPU_CHASE/CPU_RECOVER 引き下げに合わせて、normal比の相対関係
+        // （easyはより遅く、hardはより速く）を保ったまま比例して下げてある。
+        CPU_CHASE: 4.7, CPU_RECOVER: 2.3, CPU_REACT: 0.30, CPU_RECOVER_DELAY: 0.70,
       },
     },
     normal: { cpu: {}, player: {} },
@@ -412,7 +417,9 @@
         STRETCH_OUT_LONG: 0.12, STRETCH_OUT_WIDE: 0.08,
       },
       player: {
-        CPU_CHASE: 7.6, CPU_RECOVER: 4.2, CPU_REACT: 0.10, CPU_RECOVER_DELAY: 0.42,
+        // normal の CPU_CHASE/CPU_RECOVER 引き下げに合わせて、normal比の相対関係を保ったまま
+        // 比例して下げてある（easyのコメント参照）。
+        CPU_CHASE: 6.7, CPU_RECOVER: 3.7, CPU_REACT: 0.10, CPU_RECOVER_DELAY: 0.42,
       },
     },
   };
