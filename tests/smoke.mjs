@@ -322,6 +322,36 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `chasePosition() targets the predicted bounce apex, got target.z=${target.z} apex.z=${bounceApex.z}`);
 }
 
+// --- 先読みのクランプ(CHASE_APEX_LEAD_MAX)は、普通のラリー球の頂点を切り落とさない大きさ ---
+// (退行テスト: 4.5 では実戦の球の100%が切り落とされていた（実測した「着地点→バウンド後の
+//  頂点」距離は中央値6.35m）。そのためCPUは着地点で待ってからバウンド後に慌てて走り出す
+//  羽目になり、打球の70.6%を全力疾走のまま打つ＝ぎりぎりの弱い返球になっていた。
+//  逆に大きくしすぎると今度は CHASE_Z_MAX（後方の限界）へ下がって張り付くので、
+//  実戦から採取した実際の球で両側から挟んで固定する)
+{
+  const { CPU } = R.config;
+  const { predictLanding, predictBounceApex } = R.physics;
+  const { chasePosition } = R.ai;
+  // 擬似ランダムな試合シミュレーションから採取した、人間が実際に打った球（先読み距離が
+  // 中央値付近のもの）。ベースライン(z≈-11.9)から相手陣地(z>0)へ打ち出した直後の状態。
+  const rallyBalls = [
+    { x: -2.94, y: 0.91, z: -11.51, vx: 1.91, vy: 8.63, vz: 12.44, bounces: 0 },
+    { x: 2.85, y: 0.93, z: -11.60, vx: -2.13, vy: 8.62, vz: 13.19, bounces: 0 },
+  ];
+  for (const ball of rallyBalls) {
+    const landing = predictLanding(ball);
+    const apex = predictBounceApex(ball);
+    const lead = Math.hypot(apex.x - landing.x, apex.z - landing.z);
+    ok(lead <= CPU.CHASE_APEX_LEAD_MAX,
+      `a real rally ball's bounce apex fits inside the lead clamp (lead=${lead.toFixed(2)} <= ${CPU.CHASE_APEX_LEAD_MAX})`);
+    const target = chasePosition(ball, 1);
+    ok(Math.abs(target.z - apex.z) < 1e-9,
+      `the clamp doesn't truncate a real rally ball's apex, got target.z=${target.z} apex.z=${apex.z}`);
+    ok(target.z < CPU.CHASE_Z_MAX,
+      `the target stays in front of the rear chase limit (no camping), got target.z=${target.z} limit=${CPU.CHASE_Z_MAX}`);
+  }
+}
+
 // --- 打った直後（人間もCPUも）はフォロースルー中で、しばらく動けない ---
 // (退行テスト: 打ってからミドルに戻るまでの時間が短すぎるというフィードバックを受けて、
 //  硬直時間を延ばした。人間側にも同様の硬直（HIT_RECOVER_DELAY）を新設した)
