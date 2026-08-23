@@ -10,6 +10,12 @@
 - テスト: <tests/smoke.mjs の結果>
 ```
 
+## 2026-08-23 風向きの表示・変動を調整する
+- ブランチ: evolve/wind-display
+- 実施内容: 2点対応。①「風向きが細かく変わりすぎる」への対応として、`newPoint()`が毎ポイント`this.wind`を`rand(-WIND.MAX_ACCEL, WIND.MAX_ACCEL)`で無関係な値に決め直していたのを、前のポイントの風から`WIND.DRIFT_ACCEL`（新設、0.15）の範囲だけランダムに変化させクランプする「ドリフト」方式に変更した（点ごとに向きが唐突に入れ替わらず、実際の風のようにゆっくり強弱・向きが変わる）。②「HUDの風向き表示をもっと目立たせる」への対応として、`styles/main.css`で`#wind`を`#stats`（エース/DF表示）と共有していたスタイルから分離し、フォントサイズを11px→15px・太字化・スコアバーと同系色（`--ball`）のアクセント縁取りを追加して視覚的に目立つようにした。
+- テスト: `node tests/smoke.mjs` — ALL PASS。新規テスト1件：ポイントを重ねても`Game#wind`の変化幅が毎回`WIND.DRIFT_ACCEL`以内に収まり、かつ`WIND.MAX_ACCEL`の範囲をはみ出さないこと（50ポイント分）。`node --check`で構文確認。ブラウザ実機（`claude-in-chrome`、`RallyOne.game`を直接操作）で、風表示のスタイルが目立つようになったこと（太字・大きめ・アクセント縁取り）と、`newPoint()`を連続で呼んだときに風の値がなだらかに推移すること（例: 0.553→0.534→0.6→0.6→…→0.497→0.6→0.572）、「無風」表示も引き続き正しく出ることを確認。コンソールエラーなし。code-reviewスキル（low）で確認、指摘なし。
+- 備考: この会話中にユーザーから新規フィードバックが2件`docs/ROADMAP.md`に追加されていた（軌跡とIN/OUT判定のずれ、軌跡の表示タイミング・CPU対応）。サイズ（M/M）を付けてバックログに追加済み。
+
 ## 2026-08-23 スライスサーブ・スピンサーブを実装する
 - ブランチ: evolve/serve-spin
 - 実施内容: グラウンドストロークの既存スピン選択（V＝トップスピン／C＝スライス）をサーブにも適用した。`chargeStart()`のサーブ用分岐（トスを上げる1回目の押下）に、グラウンドストローク側と同じ「その瞬間の入力で固定し、以降は離してよい」ロジックを追加：`this.you.chargeSpin = this.input.spin || 'flat';`。`serve(who)`は、これまで`solveShot()`/`ball.spin`に常に`'flat'`を渡していたのを、`who==='you'`のときは`this.you.chargeSpin`を使うように変更（CPU/AIのサーブは他の打球と同じく常にフラット固定のまま）。物理側（`SPIN.GRAVITY_MULT`・`BOUNCE_RESTITUTION_MULT`・`BOUNCE_FRICTION_MULT`、`physics.js`の`solveShot()`/`integrate()`）は既存のグラウンドストローク実装をそのまま再利用しており、変更していない。`input.js`のコメント・README.mdの操作表も実態に合わせて更新。

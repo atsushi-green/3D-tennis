@@ -353,9 +353,11 @@
 
     newPoint() {
       this.serveNumber = 1;
-      // 風はポイントごとに決め直し、フォールトによるセカンドサーブ（beginServe の再実行）
-      // をまたいでも同じポイント中は吹き続ける（beginServe() 側では ball.wind を0に戻すだけ）。
-      this.wind = rand(-WIND.MAX_ACCEL, WIND.MAX_ACCEL);
+      // 風は毎ポイント、前のポイントの風から WIND.DRIFT_ACCEL の範囲だけ変える（無関係な
+      // 値へ決め直すと点ごとに向きが唐突に入れ替わって見えるため）。フォールトによる
+      // セカンドサーブ（beginServe の再実行）をまたいでも同じポイント中は吹き続ける
+      // （beginServe() 側では ball.wind を0に戻すだけ）。
+      this.wind = clamp(this.wind + rand(-WIND.DRIFT_ACCEL, WIND.DRIFT_ACCEL), -WIND.MAX_ACCEL, WIND.MAX_ACCEL);
       this.hooks.wind(this.wind);
       this.beginServe();
     }

@@ -1623,7 +1623,7 @@ function tossAndHit(g, holdFrames = 0) {
     `predicted landing x differs when wind is present: wind=${landed.x.toFixed(3)} calm=${landedCalm.x.toFixed(3)}`);
 }
 
-// --- 風：ポイントごとに Game#wind が WIND.MAX_ACCEL の範囲内でランダムに決まり、hooks.wind に通知される ---
+// --- 風：ポイントごとに Game#wind が WIND.MAX_ACCEL の範囲内で決まり、hooks.wind に通知される ---
 {
   const { WIND } = R.config;
   let notified;
@@ -1634,6 +1634,21 @@ function tossAndHit(g, holdFrames = 0) {
     ok(g.wind >= -WIND.MAX_ACCEL && g.wind <= WIND.MAX_ACCEL,
       `Game#wind stays within +-WIND.MAX_ACCEL, got ${g.wind}`);
     ok(notified === g.wind, `hooks.wind() is called with the same value as Game#wind, got ${notified} vs ${g.wind}`);
+  }
+}
+
+// --- 風：無関係な値へ飛ばず、前のポイントから WIND.DRIFT_ACCEL の範囲だけ変わる（ドリフト） ---
+{
+  const { WIND } = R.config;
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  for (let i = 0; i < 50; i++) {
+    const before = g.wind;
+    g.newPoint();
+    const delta = Math.abs(g.wind - before);
+    ok(delta <= WIND.DRIFT_ACCEL + 1e-9,
+      `wind changes by at most WIND.DRIFT_ACCEL per point, got delta=${delta} (before=${before}, after=${g.wind})`);
+    ok(g.wind >= -WIND.MAX_ACCEL && g.wind <= WIND.MAX_ACCEL, `drifted wind still stays within +-WIND.MAX_ACCEL, got ${g.wind}`);
   }
 }
 

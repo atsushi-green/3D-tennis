@@ -33,10 +33,20 @@ canvas{display:block}
 #bug .srv::after{content:"●";color:var(--ball);font-size:9px;margin-left:6px;vertical-align:2px}
 
 /* エース／ダブルフォルトの通算（you–cpu）。スコアボードの邪魔をしない控えめな表示 */
-#stats,#wind{
+#stats{
   margin-top:6px;padding:4px 10px;
   background:rgba(9,20,34,.6);border-radius:2px;
   font-size:11px;letter-spacing:.04em;color:var(--dim);
+  font-variant-numeric:tabular-nums;
+}
+/* 風向き。プレイ判断に直結する情報なので #stats より目立たせる（大きめ・太め・スコアバーと
+   同系色のアクセント縁取り）。playフィールドから絶えず見える位置に置いてあるので、
+   毎ポイントの変化にも気づきやすい */
+#wind{
+  margin-top:6px;padding:5px 10px;
+  background:rgba(9,20,34,.75);border-radius:2px;
+  border-left:3px solid var(--ball);
+  font-size:15px;font-weight:700;letter-spacing:.04em;color:var(--line);
   font-variant-numeric:tabular-nums;
 }
 #wind:empty{display:none}
