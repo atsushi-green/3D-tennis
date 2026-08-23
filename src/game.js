@@ -7,12 +7,14 @@
 
   const {
     BOUNDS, CHARGE, COURT, CPU, DOUBLES, FX, HALF_L, HALF_W, PHYSICS, PLAYER, RETURN, SERVE, SHOT,
-    SPIN, TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND,
+    TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND,
   } = RallyOne.config;
   const {
     approach, approach2D, clamp, lerp, rand, signOr,
   } = RallyOne.math;
-  const { hitsNet, integrate, solveShot } = RallyOne.physics;
+  const {
+    hitsNet, integrate, reflectBounce, solveShot,
+  } = RallyOne.physics;
   const {
     chasePosition, homePosition, shotTarget, isResponder, coverPosition,
   } = RallyOne.ai;
@@ -1070,10 +1072,10 @@
     /** @returns {boolean} このバウンドでポイントが決まったか */
     bounce() {
       const ball = this.ball;
-      // トップスピンは高く弾み、スライスは低く滑る（フラットは倍率1＝従来通り）。
-      const restMult = SPIN.BOUNCE_RESTITUTION_MULT[ball.spin] || 1;
-      const friMult = SPIN.BOUNCE_FRICTION_MULT[ball.spin] || 1;
-      ball.y = BALL_R;
+      // トップスピンは高く弾み、スライスは低く滑る（フラットは倍率1＝従来通り）。反発係数・
+      // 摩擦の実装は physics.js の reflectBounce() に一本化してあり（predictBounceApex() も
+      // 同じ実装を使う）、ここではその結果の座標を読むだけ。
+      reflectBounce(ball);
       // 軌跡は通常 update() が1フレームに1点ずつ記録するだけなので、速い球ほど着地の瞬間を
       // 挟む2点の間隔が開き、IN/OUT判定に実際に使うこの着地座標（x,z）と、直線で結んだ軌跡が
       // 見せる「着地したように見える位置」がずれることがあった（＝軌跡ではINに見えるのに
@@ -1082,9 +1084,6 @@
       if (this.trail.length < TRAIL.MAX_POINTS) {
         this.trail.push({ x: ball.x, y: ball.y, z: ball.z });
       }
-      ball.vy = -ball.vy * PHYSICS.RESTITUTION * restMult;
-      ball.vx *= PHYSICS.FRICTION * friMult;
-      ball.vz *= PHYSICS.FRICTION * friMult;
       ball.bounces++;
       this.hooks.sound('bounce');
 

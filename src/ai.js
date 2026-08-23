@@ -11,21 +11,41 @@
   const {
     clamp, lerp, rand, signOr,
   } = RallyOne.math;
-  const { predictLanding, predictApex, predictAtZ } = RallyOne.physics;
+  const {
+    predictLanding, predictBounceApex, predictApex, predictAtZ,
+  } = RallyOne.physics;
+
+  /** target を、anchor から CPU.CHASE_APEX_LEAD_MAX 以上は離れないように引き寄せる。 */
+  function leadFrom(anchor, target) {
+    return {
+      x: anchor.x + clamp(target.x - anchor.x, -CPU.CHASE_APEX_LEAD_MAX, CPU.CHASE_APEX_LEAD_MAX),
+      z: anchor.z + clamp(target.z - anchor.z, -CPU.CHASE_APEX_LEAD_MAX, CPU.CHASE_APEX_LEAD_MAX),
+    };
+  }
 
   /**
-   * 追跡目標として使う地点。まだ一度もバウンドしていない球はそのまま predictLanding()
-   * の（最初の）着地点でよい。
-   * 既に1バウンドした球に predictLanding() をそのまま使うと「次の（＝2バウンド目の）
-   * 着地点」まで先読みしてしまい、実際に打つ位置よりずっと先を追いかけてしまう。
-   * かわりに、まだ上がっている途中（vy>0）なら predictApex() で「今の弾道の頂点」
-   * （＝風がなければ現在地から一意に決まる固定点。時間ベースの先読みと違い、球が
-   * 近づいてもずるずる先へ動かない）を、頂点を過ぎて下り始めていたら素直に現在地を
+   * 追跡目標として使う地点。
+   * まだ一度もバウンドしていない球は predictBounceApex() で「1回バウンドした後、
+   * 打ちやすい高さまで上がってきた頂点」を先読みする。単純な着地点（＋固定の後退量）
+   * だけだと、サービスボックスのようにネットに近い場所へ着地する球でも、実際の打点は
+   * バウンド後さらに奥まで戻ってくることを見逃してしまい、着地の瞬間になって初めて
+   * 大きく方向転換する羽目になっていた（＝間に合わずぎりぎりの弱い返球になる）。
+   * バウンド前から本当の打点を見越して動けるようにする。
+   * ただし、その頂点は実際の着地点（predictLanding）から CPU.CHASE_APEX_LEAD_MAX を
+   * 超えては先読みしない（威力の弱いサーブでもコートの縦の長さぶん初速自体は速いため、
+   * 低く速い弾道だと頂点が着地点からコート外まで達するほど遠くなることがあり、
+   * そのまま追わせると逆に打点から大きく外れてしまうため）。
+   *
+   * 既にバウンドした球にこれと同じ「頂点」を求める場合（predictApex()）は、まだ
+   * 上がっている途中（vy>0）だけ使う。頂点は現在地から一意に決まる固定点（風が
+   * なければ）なので、時間ベースの先読みと違い、球が近づいてもずるずる先へ動かない。
+   * こちらは現在のボール位置（＝もう着地済みなので、着地点そのもの）からの先読み量を
+   * 同じ CHASE_APEX_LEAD_MAX で制限する。頂点を過ぎて下り始めていたら素直に現在地を
    * 追わせる（頂点はもう過ぎているので、これ以上先読みする意味がない）。
    */
   function chaseTarget(ball) {
-    if (ball.bounces === 0) return predictLanding(ball);
-    if (ball.vy > 0) return predictApex(ball);
+    if (ball.bounces === 0) return leadFrom(predictLanding(ball), predictBounceApex(ball));
+    if (ball.vy > 0) return leadFrom(ball, predictApex(ball));
     return { x: ball.x, z: ball.z };
   }
 
@@ -67,20 +87,15 @@
       const at = predictAtZ(ball, player.z);
       return { x: clamp(at.x, -CPU.CHASE_X_LIMIT, CPU.CHASE_X_LIMIT), z: player.z };
     }
+    // chaseTarget() はバウンド前・後のどちらでも「実際に打ちやすい高さまで上がってきた
+    // 頂点」を返す（predictBounceApex()/predictApex()）ので、そこからさらに下がる
+    // 必要はない。世界座標としての妥当な範囲にだけ収める。
     const landing = chaseTarget(ball);
-    // 「後ろに下がって待つ」のはバウンド前（＝着地点そのものはまだ低すぎて打てない）の
-    // 話であって、バウンド後（chaseTarget が頂点や現在地を返す）はもう十分な高さの
-    // 位置そのものなので、これ以上下げる必要はない。
-    const targetZ = ball.bounces >= 1
-      ? landing.z
-      : side > 0
-        ? Math.max(landing.z, CPU.CHASE_Z_MIN) + CPU.CHASE_BEHIND
-        : Math.min(landing.z, -CPU.CHASE_Z_MIN) - CPU.CHASE_BEHIND;
     const zMin = side > 0 ? CPU.CHASE_Z_MIN : -CPU.CHASE_Z_MAX;
     const zMax = side > 0 ? CPU.CHASE_Z_MAX : -CPU.CHASE_Z_MIN;
     return {
       x: clamp(landing.x, -CPU.CHASE_X_LIMIT, CPU.CHASE_X_LIMIT),
-      z: clamp(targetZ, zMin, zMax),
+      z: clamp(landing.z, zMin, zMax),
     };
   }
 

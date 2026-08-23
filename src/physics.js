@@ -64,6 +64,20 @@
   }
 
   /**
+   * バウンドの反射を1回分、その場で適用する（b を直接書き換える）。反発係数・摩擦は
+   * スピン別倍率込み。game.js の bounce() と predictBounceApex() の両方から使う
+   * （物理の実装を1箇所にまとめ、両者がずれないようにするため）。
+   */
+  function reflectBounce(b) {
+    const restMult = SPIN.BOUNCE_RESTITUTION_MULT[b.spin] || 1;
+    const friMult = SPIN.BOUNCE_FRICTION_MULT[b.spin] || 1;
+    b.y = BALL_R;
+    b.vy = -b.vy * PHYSICS.RESTITUTION * restMult;
+    b.vx *= PHYSICS.FRICTION * friMult;
+    b.vz *= PHYSICS.FRICTION * friMult;
+  }
+
+  /**
    * 落下地点の予測。CPU の追跡と着地マーカーが使う。
    * @returns {{x:number, z:number, t:number, net:boolean}} net=true ならネットまで届かない
    */
@@ -113,6 +127,44 @@
       if (hitsNet(s)) return { x: s.x, z: s.z, t, net: true };
       if (s.y <= BALL_R && s.vy < 0) return { x: s.x, z: s.z, t, net: false };
       if (vyBefore > 0 && s.vy <= 0) return { x: s.x, z: s.z, t, net: false };
+    }
+    return { x: s.x, z: s.z, t: limit, net: false };
+  }
+
+  /**
+   * まだ1回もバウンドしていない球について、「1回バウンドした後、打ちやすい高さまで
+   * 上がってきた頂点」を先読みする。CPU がまだ空中の球を追うとき、単純に着地点の
+   * 少し後ろで待つ（predictLanding + 一定のオフセット）だけだと、着地点そのものが
+   * ネットに近い（サービスボックス等）のに対して自分の定位置がベースライン付近と
+   * 大きく離れているケースで、実際の打点（バウンド後さらに奥まで戻ってくる位置）と
+   * 大きくずれてしまう。バウンドの反射までシミュレートして頂点を予測することで、
+   * バウンド前から「実際どこで打つことになるか」を見越して動けるようにする。
+   * @returns {{x:number, z:number, t:number, net:boolean}}
+   */
+  function predictBounceApex(b, maxT) {
+    const limit = maxT === undefined ? 5 : maxT;
+    const s = {
+      x: b.x, y: b.y, z: b.z,
+      px: b.x, py: b.y, pz: b.z,
+      vx: b.vx, vy: b.vy, vz: b.vz,
+      spin: b.spin,
+      wind: b.wind,
+    };
+    const dt = 1 / 120;
+    let bounced = false;
+    for (let t = 0; t < limit; t += dt) {
+      const vyBefore = s.vy;
+      integrate(s, dt);
+      if (hitsNet(s)) return { x: s.x, z: s.z, t, net: true };
+      if (!bounced) {
+        if (s.y <= BALL_R && s.vy < 0) {
+          reflectBounce(s);
+          bounced = true;
+        }
+        continue;
+      }
+      if (s.y <= BALL_R && s.vy < 0) return { x: s.x, z: s.z, t, net: false }; // 頂点前に2バウンド目
+      if (vyBefore > 0 && s.vy <= 0) return { x: s.x, z: s.z, t, net: false }; // 頂点
     }
     return { x: s.x, z: s.z, t: limit, net: false };
   }
@@ -180,6 +232,17 @@
   }
 
   RallyOne.physics = {
-    netHeightAt, integrate, crossedNet, netCrossing, hitsNet, predictLanding, predictApex, predictAtZ, solveShot, spinGravity,
+    netHeightAt,
+    integrate,
+    crossedNet,
+    netCrossing,
+    hitsNet,
+    reflectBounce,
+    predictLanding,
+    predictApex,
+    predictBounceApex,
+    predictAtZ,
+    solveShot,
+    spinGravity,
   };
 })(window.RallyOne = window.RallyOne || {});

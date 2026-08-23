@@ -193,9 +193,11 @@
     CHASE_X_LIMIT: 6.4, // 落下点を追う範囲
     CHASE_Z_MIN: 1.6,
     CHASE_Z_MAX: HALF_L + 2.4,
-    // 落下点そのものではなく、ボールが弾んでから打ちやすい高さまで上がってくる分だけ
-    // 後ろに下がって構える（0.5だと着地点のほぼ真上で待つ格好になり不自然だったため広げた）。
-    CHASE_BEHIND: 1.4,
+    // バウンド後に頂点（predictApex）を追わせる際、現在のボール位置からこの距離より先へは
+    // 先読みしない。威力の弱いサーブでもコートの縦の長さぶん初速自体は速いため、低く速い
+    // 弾道だと頂点がバウンド地点からかなり遠くなることがあり、そこをそのまま追わせると
+    // 実際に打点へ間に合う前に大きく行き過ぎてしまう（＝間に合わずぎりぎりの弱い返球になる）。
+    CHASE_APEX_LEAD_MAX: 4.5,
     // 「ぎりぎり追いついた」ときの返球（打点での実速度 / CPU_CHASE の比率＝stretch 0〜1 で補間）。
     // 全力疾走のまま打った球は威力もコースの精度も落ちる＝ゆるい山なりで安全な返球になる。
     STRETCH_T: 1.35,          // 飛翔時間（山なり）
@@ -404,7 +406,7 @@
     easy: {
       cpu: {
         SHOT_T: 1.12, AIM_X_MIN: 1.0, AIM_X_MAX: 2.4, AIM_Z_MIN: 5.8, AIM_Z_MAX: 8.0,
-        OUT_LONG: 0.20, OUT_WIDE: 0.14, CHASE_X_LIMIT: 5.4, CHASE_BEHIND: 1.9,
+        OUT_LONG: 0.20, OUT_WIDE: 0.14, CHASE_X_LIMIT: 5.4,
         STRETCH_OUT_LONG: 0.34, STRETCH_OUT_WIDE: 0.26,
       },
       player: {
@@ -417,7 +419,7 @@
     hard: {
       cpu: {
         SHOT_T: 0.78, AIM_X_MIN: 1.7, AIM_X_MAX: 3.9, AIM_Z_MIN: 7.6, AIM_Z_MAX: 9.9,
-        OUT_LONG: 0.03, OUT_WIDE: 0.02, CHASE_X_LIMIT: 7.0, CHASE_BEHIND: 0.9,
+        OUT_LONG: 0.03, OUT_WIDE: 0.02, CHASE_X_LIMIT: 7.0,
         STRETCH_OUT_LONG: 0.12, STRETCH_OUT_WIDE: 0.08,
       },
       player: {

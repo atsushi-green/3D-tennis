@@ -288,20 +288,22 @@ function tossAndHit(g, holdFrames = 0) {
     `receiver is not dragged toward the center before the serve, got x=${g.cpu.x} z=${g.cpu.z}`);
 }
 
-// --- グラウンドストロークの構え位置は、落下点そのものではなく弾んでから打ちやすい分だけ後ろ ---
-// (退行テスト: CHASE_BEHIND が小さすぎて、着地点のほぼ真上で待つような不自然な構えになっていた)
+// --- グラウンドストロークの構え位置は、落下点そのものではなく弾んでから打ちやすい高さの頂点 ---
+// (退行テスト: 固定オフセットが小さすぎて、着地点のほぼ真上で待つような不自然な構えになっていた。
+//  今は predictBounceApex() で「バウンド後に実際どこまで戻ってくるか」を物理的に先読みしている)
 {
   const { chasePosition } = R.ai;
-  const { CHASE_BEHIND } = R.config.CPU;
-  const { predictLanding } = R.physics;
+  const { predictLanding, predictBounceApex } = R.physics;
   const ball = {
-    x: 1, y: 2, z: 5, vx: 0.5, vy: 0, vz: 6, // cpu 陣地(z>0)へ向かって落ちてくる球
+    x: 1, y: 2, z: 5, vx: 0.5, vy: -3, vz: 6, bounces: 0, // cpu 陣地(z>0)へ向かって落ちてくる球
   };
   const landing = predictLanding(ball);
+  const bounceApex = predictBounceApex(ball);
   const target = chasePosition(ball, 1);
-  ok(CHASE_BEHIND > 1.0, `chase margin behind the bounce is generous, not right on top of it, got ${CHASE_BEHIND}`);
-  ok(Math.abs(target.z - landing.z) >= CHASE_BEHIND - 1e-9,
-    `chase target sits at least CHASE_BEHIND(${CHASE_BEHIND}) beyond the actual bounce point, landing.z=${landing.z} target.z=${target.z}`);
+  ok(bounceApex.z - landing.z > 1.0,
+    `the bounce apex sits generously beyond the raw landing point, not right on top of it, landing.z=${landing.z} apex.z=${bounceApex.z}`);
+  ok(Math.abs(target.z - bounceApex.z) < 1e-9,
+    `chasePosition() targets the predicted bounce apex, got target.z=${target.z} apex.z=${bounceApex.z}`);
 }
 
 // --- 打った直後（人間もCPUも）はフォロースルー中で、しばらく動けない ---
@@ -1230,15 +1232,21 @@ function tossAndHit(g, holdFrames = 0) {
 //  youMate が you 陣地の落下点を追うときにネットの向こう側へ寄ってしまうバグがあった)
 {
   const { chasePosition } = R.ai;
-  const deepCpuBall = { x: 1, y: 1, z: 9, vx: 0, vy: 1, vz: 0 };
-  const deepYouBall = { x: 1, y: 1, z: -9, vx: 0, vy: 1, vz: 0 }; // 鏡映しの入力
+  const deepCpuBall = {
+    x: 1, y: 1, z: 9, vx: 0, vy: 1, vz: 0, bounces: 0,
+  };
+  const deepYouBall = {
+    x: 1, y: 1, z: -9, vx: 0, vy: 1, vz: 0, bounces: 0,
+  }; // 鏡映しの入力
   const cpuSide = chasePosition(deepCpuBall, 1);
   const youSide = chasePosition(deepYouBall, -1);
   ok(cpuSide.z > 0, `default/side=1 stays on the cpu side for a deep cpu-side ball, z=${cpuSide.z}`);
   ok(youSide.z < 0, `side=-1 stays on the you side for the mirrored deep you-side ball, z=${youSide.z}`);
   ok(Math.abs(youSide.z) === Math.abs(cpuSide.z), 'side=-1 mirrors the magnitude of side=1 for mirrored inputs');
 
-  const shallowYouBall = { x: 0, y: 1, z: -0.5, vx: 0, vy: 1, vz: 0 };
+  const shallowYouBall = {
+    x: 0, y: 1, z: -0.5, vx: 0, vy: 1, vz: 0, bounces: 0,
+  };
   const youShallow = chasePosition(shallowYouBall, -1);
   ok(youShallow.z < 0, `even a shallow you-side landing keeps the chase target on the you side, z=${youShallow.z}`);
 }
