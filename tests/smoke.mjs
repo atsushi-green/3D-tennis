@@ -1831,5 +1831,30 @@ function tossAndHit(g, holdFrames = 0) {
     `the recorded bounce point matches the intended landing target (within STEP_SLACK-ish tolerance), got ${JSON.stringify(bouncePoint)}`);
 }
 
+// --- 軌跡：サービスのフォルト判定（inServiceBox）も、同じ「着地の瞬間を必ず1点記録する」
+//     仕組みでカバーされている（inServiceBox() も bounce() の中から同じ座標で呼ばれるため） ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.phase = 'rally';
+  g.serveInFlight = true;
+  g.serveNumber = 1;
+  const from = { x: 0, y: SERVE.TOSS_Y, z: -HALF_L };
+  // サービスラインより1m深く（サーバーは'you'なので dir=+1）＝コースに関わらず明確にフォルト
+  const target = { x: 0, y: R.config.PHYSICS.BALL_R, z: COURT.SERVICE + 1 };
+  const v = R.physics.solveShot(from, target, 0.3, SERVE.CLEARANCE, 'flat'); // 速い球
+  Object.assign(g.ball, {
+    x: from.x, y: from.y, z: from.z, vx: v.vx, vy: v.vy, vz: v.vz, bounces: 0, last: 'you', live: true, spin: 'flat',
+  });
+  g.resetTrail();
+  // わざと粗いフレームレート（1/20秒）でシミュレートする
+  for (let i = 0; i < 60 && g.ball.bounces < 1; i++) g.update(1 / 20);
+  const bouncePoint = g.trail.find((p) => p.y === R.config.PHYSICS.BALL_R);
+  ok(!!bouncePoint, `the trail includes the exact service-landing point (y===BALL_R), got ${JSON.stringify(g.trail)}`);
+  ok(g.serveNumber === 2, 'precondition: this long serve actually faulted (moved to the second serve)');
+  ok(bouncePoint && g.inServiceBox({ x: bouncePoint.x, z: bouncePoint.z }) === false,
+    `the trail's recorded landing point agrees with inServiceBox()'s fault ruling, got ${JSON.stringify(bouncePoint)}`);
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);
