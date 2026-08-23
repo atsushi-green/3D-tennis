@@ -1063,7 +1063,12 @@
         // 通常のサーブの狙い(最大でも±3.9m程度)ではまず届かない極端な範囲だが、計算が
         // 破綻した場合の保険なのでバウンド判定と同様にサーブ中はフォールト扱いにする
         // （即失点にしてサーブのやり直しルールを迂回してしまわないように）。
-        if (this.serveInFlight) this.serveFault('アウト');
+        // ただし serveInFlight のまま bounces>=1 ということは、bounce() が1バウンド目を
+        // サービスボックス内と認めた（フォールトにしなかった）ということ。それをレシーバーが
+        // 返せずに、2バウンド目より先にこの範囲まで転がり出ただけなので、フォールトではなく
+        // サーバーの得点＝エースとして扱う（2バウンドで決まった場合と同じ扱い）。
+        if (this.serveInFlight && ball.bounces < 1) this.serveFault('アウト');
+        else if (this.serveInFlight) this.endPoint(ball.last, 'ツーバウンド');
         else this.endPoint(opponent(ball.last), 'アウト');
       }
     }

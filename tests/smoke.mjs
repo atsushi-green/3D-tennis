@@ -104,6 +104,21 @@ const noHooks = {
   sound() {}, call() {}, clearCall() {}, score() {}, wind() {},
 };
 
+/**
+ * ボールを「ちょうど (x, z) へ接地する1ステップ」の状態に置いてから bounce() を呼ぶ。
+ * bounce() は直前位置（px/py/pz）から本当の接地点を線形補間して求めるので、現在座標だけを
+ * 書き換えると、補間の材料が前のポイントの座標のまま残って的外れな着地点になってしまう。
+ * @returns {boolean} bounce() の戻り値（このバウンドでポイントが決まったか）
+ */
+function bounceAt(g, x, z, bounces = 0) {
+  const BALL_R = R.config.PHYSICS.BALL_R;
+  Object.assign(g.ball, {
+    x, z, y: 0, vy: -1, bounces,
+    px: x, pz: z, py: BALL_R + 0.01,
+  });
+  return g.bounce();
+}
+
 /** 即座に離す（溜め時間0）タップ。1回の溜めキー押下＋即離しを表す。 */
 function tap(g) {
   g.chargeStart();
@@ -403,9 +418,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(g.phase === 'rally' && g.serveInFlight === true, 'precondition: serve is in flight');
 
   // コート全体には入っているが、サービスラインより深く着地＝サービスボックスの外（アウト）
-  g.ball.bounces = 0;
-  g.ball.x = 1.0; g.ball.y = 0; g.ball.vy = -1; g.ball.z = COURT.SERVICE + 1;
-  const ended = g.bounce();
+  const ended = bounceAt(g, 1.0, COURT.SERVICE + 1);
   ok(ended === true, 'a serve landing past the service line ends this attempt (fault)');
   ok(g.serveNumber === 2, 'first fault moves to the second serve');
   ok(g.phase === 'serve', 'does not end the point, goes back to waiting to serve');
@@ -428,9 +441,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start();
   g.serve('you');
-  g.ball.bounces = 0;
-  g.ball.x = 1.0; g.ball.y = 0; g.ball.vy = -1; g.ball.z = COURT.SERVICE + 1; // 1本目アウト
-  g.bounce();
+  bounceAt(g, 1.0, COURT.SERVICE + 1); // 1本目アウト
   ok(g.serveNumber === 2, 'precondition: on the second serve');
 
   tossAndHit(g); // セカンドサーブを普通に打つ
@@ -447,9 +458,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(g.stats.you.doubleFaults === 0 && g.stats.cpu.doubleFaults === 0, 'precondition: no stats yet');
 
   g.serve('you');
-  g.ball.bounces = 0;
-  g.ball.x = 1.0; g.ball.y = 0; g.ball.vy = -1; g.ball.z = COURT.SERVICE + 1; // 1本目アウト
-  g.bounce();
+  bounceAt(g, 1.0, COURT.SERVICE + 1); // 1本目アウト
   ok(g.serveNumber === 2, 'precondition: on the second serve');
 
   g.serve('you');
@@ -476,6 +485,31 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(g.match.points.you === 0 && g.match.points.cpu === 0, 'no point is awarded');
 }
 
+// --- 既にサービスボックスへ入ったサーブは、返球されずに BOUNDS を出ても「アウト」にしない ---
+// (退行テスト: BOUNDS の保険判定が serveInFlight を見るだけで bounces を見ておらず、
+//  「正しく入ったサーブをレシーバーが空振りし、2バウンド目より先に球が遠くまで転がり出た」
+//  ケースまでフォールト扱いになっていた。実際にはサーバーの得点＝エースであるべき)
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.serve('you');
+  ok(g.serveInFlight === true, 'precondition: serve in flight');
+
+  // サービスボックス内に着地させる（bounce() がフォールトにしない＝正しいサーブ）
+  ok(bounceAt(g, 1.0, 3) === false, 'precondition: the serve lands in the service box');
+  ok(g.serveInFlight === true && g.ball.bounces === 1,
+    'precondition: landed in but still untouched by the receiver');
+
+  // 誰も触れないまま、2バウンド目より先に BOUNDS を越えて転がり出る
+  g.ball.z = -(BOUNDS.Z + 1);
+  g.stepBall(1 / 240);
+  ok(g.phase === 'over', 'the point is decided, not replayed as a fault');
+  ok(g.serveNumber === 1, 'it is not treated as a fault (still on the first serve)');
+  ok(g.match.points.you === 1 && g.match.points.cpu === 0,
+    `the server wins the point (the receiver failed to return a good serve), got ${g.match.points.you}-${g.match.points.cpu}`);
+  ok(g.stats.you.aces === 1, 'it counts as an ace, same as an untouched serve that bounces twice');
+}
+
 // --- スタッツ：エースはサーブが一度も返球されずに2バウンドで決まったときだけ積む ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
@@ -483,16 +517,12 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   g.serve('you');
   ok(g.serveInFlight === true, 'precondition: serve in flight');
   // サービスボックス内に着地（フォールトではない）
-  g.ball.bounces = 0;
-  g.ball.x = 1.0; g.ball.y = 0; g.ball.vy = -1; g.ball.z = 3;
-  const decided1 = g.bounce();
+  const decided1 = bounceAt(g, 1.0, 3);
   ok(decided1 === false, 'precondition: lands in the box, point continues');
   ok(g.serveInFlight === true, 'precondition: still not returned');
 
   // 誰も触れないまま2バウンド目＝エース
-  g.ball.bounces = 1;
-  g.ball.y = 0; g.ball.vy = -1;
-  const decided2 = g.bounce();
+  const decided2 = bounceAt(g, 1.0, 3, 1);
   ok(decided2 === true, 'second bounce without a return ends the point');
   ok(g.phase === 'over' && g.match.points.you === 1, 'precondition: server wins the point');
   ok(g.stats.you.aces === 1, 'an untouched serve that bounces twice counts as an ace');
@@ -504,15 +534,11 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start();
   g.serve('you');
-  g.ball.bounces = 0;
-  g.ball.x = 1.0; g.ball.y = 0; g.ball.vy = -1; g.ball.z = 3;
-  g.bounce(); // サービスボックスに着地
+  bounceAt(g, 1.0, 3); // サービスボックスに着地
   g.hit('cpu'); // リターンされる＝serveInFlight が解除される
   ok(g.serveInFlight === false, 'precondition: the serve has been returned');
 
-  g.ball.bounces = 1;
-  g.ball.y = 0; g.ball.vy = -1;
-  g.bounce(); // 相手が拾えず2バウンド
+  bounceAt(g, 1.0, 3, 1); // 相手が拾えず2バウンド
   ok(g.phase === 'over', 'precondition: point ends on the second bounce');
   ok(g.stats.you.aces === 0,
     'a rally point (serve already returned) is not an ace, even if it ends on a double bounce');
@@ -1822,8 +1848,43 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   // 頼みではなく着地の瞬間を確実に記録していることの証拠になる。
   const bouncePoint = g.trail.find((p) => p.y === R.config.PHYSICS.BALL_R);
   ok(!!bouncePoint, `the trail includes an explicit bounce-height point (y===BALL_R), got ${JSON.stringify(g.trail)}`);
-  ok(bouncePoint && Math.abs(bouncePoint.x - target.x) < 0.05 && Math.abs(bouncePoint.z - target.z) < 0.05,
-    `the recorded bounce point matches the intended landing target (within STEP_SLACK-ish tolerance), got ${JSON.stringify(bouncePoint)}`);
+  // solveShot() は解析解だが実際の飛翔は 1/240 のオイラー積分なので、速い球ほど数cm手前で
+  // 接地する。ずれは必ず「狙いより手前」側（＝コートの内側）に出るので、その向きも確かめる。
+  const CONTACT_SLACK = 0.08;
+  ok(bouncePoint && Math.abs(bouncePoint.x - target.x) < CONTACT_SLACK
+    && Math.abs(bouncePoint.z - target.z) < CONTACT_SLACK,
+  `the recorded bounce point matches the intended landing target (within integration slack), got ${JSON.stringify(bouncePoint)}`);
+  ok(bouncePoint && bouncePoint.z <= target.z && bouncePoint.x <= target.x,
+    `the touchdown never overshoots the aim point (the old bug pushed it outward), got ${JSON.stringify(bouncePoint)}`);
+}
+
+// --- バウンドの接地点は、ステップ後の座標ではなく本当に地面を横切った座標を使う ---
+// (退行テスト: reflectBounce() が「1ステップ進んだ後の座標」をそのまま接地点にしていたため、
+//  速い球ほど進行方向へ数cm〜十数cm行き過ぎた点で IN/OUT を判定していた。ずれは必ず
+//  コートの外向きに出るので、ライン際の球が「入って見えるのにアウト」になっていた)
+{
+  const { integrate, reflectBounce } = R.physics;
+  const BALL_R = R.config.PHYSICS.BALL_R;
+  // 地面すれすれを高速で進む球。1ステップで z 方向に大きく進む状況を作る
+  const b = { x: 0, y: BALL_R + 0.01, z: 0, vx: 0, vy: -6, vz: 30, spin: 'flat' };
+  integrate(b, 1 / 240);
+  ok(b.y < BALL_R, `precondition: this step crosses the ground (y=${b.y.toFixed(4)})`);
+  // 補正しなければ、このステップ後の座標がそのまま接地点として使われていた
+  const stepped = { y: b.y, z: b.z, py: b.py, pz: b.pz };
+  reflectBounce(b);
+  ok(b.y === BALL_R, 'the bounce leaves the ball exactly at ground height');
+  ok(b.z < stepped.z,
+    `the contact point is pulled back from the stepped-past position (${b.z.toFixed(4)} < ${stepped.z.toFixed(4)})`);
+  // 真の接地点：y が BALL_R を横切る瞬間を線形補間で求めたもの
+  const t = (BALL_R - stepped.py) / (stepped.y - stepped.py);
+  ok(Math.abs(b.z - (stepped.pz + (stepped.z - stepped.pz) * t)) < 1e-9,
+    `the contact point is the interpolated ground crossing, got ${b.z}`);
+
+  // 直前位置が用意されていない（テレポートさせた）球では補間せず、今の座標をそのまま使う
+  const teleported = { x: 2, y: 0, z: 5, vx: 0, vy: -1, vz: 0, spin: 'flat' };
+  reflectBounce(teleported);
+  ok(teleported.x === 2 && teleported.z === 5,
+    `without a previous position the bounce keeps the current coords, got (${teleported.x}, ${teleported.z})`);
 }
 
 // --- 軌跡：サービスのフォルト判定（inServiceBox）も、同じ「着地の瞬間を必ず1点記録する」

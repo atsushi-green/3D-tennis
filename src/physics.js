@@ -64,13 +64,32 @@
   }
 
   /**
+   * このステップで地面（y = BALL_R）を横切った瞬間の位置。netCrossing() と同じ考え方。
+   * ステップ後の位置をそのまま着地点として使うと、速い球ほど進行方向へ行き過ぎた点に
+   * なり、しかもずれは必ずコートの外向きに出る（＝入っているように見えるのにアウト判定）。
+   * 直前位置が地面より上にない（＝このステップで横切っていない、あるいは px/py/pz が
+   * 用意されていない）ときは補間できないので、今の位置をそのまま返す。
+   */
+  function groundCrossing(b) {
+    if (!(b.py > BALL_R)) return { x: b.x, z: b.z };
+    const span = b.y - b.py;
+    const t = span === 0 ? 1 : (BALL_R - b.py) / span;
+    return { x: lerp(b.px, b.x, t), z: lerp(b.pz, b.z, t) };
+  }
+
+  /**
    * バウンドの反射を1回分、その場で適用する（b を直接書き換える）。反発係数・摩擦は
    * スピン別倍率込み。game.js の bounce() と predictBounceApex() の両方から使う
    * （物理の実装を1箇所にまとめ、両者がずれないようにするため）。
+   * 反射の前に、接地点そのものを groundCrossing() で補正する：IN/OUT 判定も軌跡も
+   * ここで確定した x/z を読むので、行き過ぎた座標のままだと判定が外側へ偏る。
    */
   function reflectBounce(b) {
     const restMult = SPIN.BOUNCE_RESTITUTION_MULT[b.spin] || 1;
     const friMult = SPIN.BOUNCE_FRICTION_MULT[b.spin] || 1;
+    const at = groundCrossing(b);
+    b.x = at.x;
+    b.z = at.z;
     b.y = BALL_R;
     b.vy = -b.vy * PHYSICS.RESTITUTION * restMult;
     b.vx *= PHYSICS.FRICTION * friMult;
