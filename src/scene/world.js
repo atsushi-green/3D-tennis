@@ -31,10 +31,11 @@
       cpuMate: scene3d.createShadow(0.26),
     };
     const impactFlash = scene3d.createImpactFlash();
+    const trail = scene3d.createTrail();
     scene.add(
       you, cpu, youMate, cpuMate, ballMesh,
       shadows.ball, shadows.you, shadows.cpu, shadows.youMate, shadows.cpuMate,
-      impactFlash,
+      impactFlash, trail,
     );
 
     addEventListener('resize', stage.resize);
@@ -75,6 +76,7 @@
       scene3d.applyImpactPunch(ballMesh, ball, FX);
       scene3d.placeImpact(impactFlash, ball, FX);
       scene3d.placeBallShadow(shadows.ball, ball);
+      scene3d.updateTrail(trail, state.trail);
 
       syncCamera(state.you, dt);
     }

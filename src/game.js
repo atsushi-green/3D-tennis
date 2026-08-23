@@ -7,7 +7,7 @@
 
   const {
     BOUNDS, CHARGE, COURT, CPU, DOUBLES, FX, HALF_L, HALF_W, PHYSICS, PLAYER, RETURN, SERVE, SHOT,
-    SPIN, TIMING, TIMING_AIM, VOLLEY, WIND,
+    SPIN, TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND,
   } = RallyOne.config;
   const {
     approach, approach2D, clamp, lerp, rand, signOr,
@@ -133,6 +133,19 @@
       this.serveInFlight = false;
       /** setTimeout ではなくゲームループで数える。ポイント間で確実に破棄できる。 */
       this.timers = [];
+      /**
+       * you が打った直近の球の軌跡（{x,y,z}の配列）。you が新しく打つ（serve()/hit()）たびに
+       * 描き直す＝IN/OUTに関わらず常に一番新しい1本だけ残る。次に you が打つまでは
+       * ポイントをまたいで残り続ける（アウトの結果を振り返れるように）。表示は scene 側の仕事。
+       */
+      this.trail = [];
+      /**
+       * 今の軌跡が you 自身の打球によるものか（＝update() で伸ばしてよいか）。
+       * ball.last はチーム単位（'you'|'cpu'）で、ダブルスの youMate が打っても 'you' の
+       * ままなので、ball.last だけでは you 本人と youMate を区別できない。
+       * updateTrailOwner() が you 本人の打球のときだけ true にする。
+       */
+      this.trailActive = false;
       /**
        * CPU 側の反応遅延タイマー（cpu/cpuMate/youMate）。新しい球が飛んできた瞬間に
        * PLAYER.CPU_REACT にセットし、0になるまで移動を止める（＝逆を突かれると間に合わない）。
@@ -503,6 +516,7 @@
       ball.live = true;
       ball.bounces = 0;
       ball.last = team; // スコア判定・当たり判定はチーム単位（hit() と同じ扱い）
+      this.updateTrailOwner(who);
 
       this.tossActive = false;
       this.serveInFlight = true; // 一度も返球されていない＝ノーバウンドで打ち返してはいけない
@@ -587,10 +601,26 @@
       ball.bounces = 0;
       ball.impact = FX.IMPACT_DURATION * lerp(1, FX.CHARGE_TIME_BOOST, charge);
       ball.impactPower = charge; // フラッシュの大きさに使う
+      this.updateTrailOwner(who);
 
       player.anim = PLAYER.SWING_ANIM;
       player.stroke = stroke;
       this.hooks.sound('hit', TEAM_OF[who], stroke, charge); // 音程はチーム単位（誰が打っても同じ）
+    }
+
+    /**
+     * 誰が打ったか（serve()/hit()の呼び出し元 who）に応じて、軌跡を you 本人のものとして
+     * 記録し続けてよいかを更新する。you 本人が打った瞬間だけ、その打点1点から描き直して
+     * 記録を再開する。youMate を含むそれ以外の誰かが打った瞬間は記録を止める
+     * （それまでの you の軌跡はそのまま残る＝次に you が打つまで最新の1本として表示され続ける）。
+     */
+    updateTrailOwner(who) {
+      if (who !== 'you') {
+        this.trailActive = false;
+        return;
+      }
+      this.trail = [{ x: this.ball.x, y: this.ball.y, z: this.ball.z }];
+      this.trailActive = true;
     }
 
     /**
@@ -731,6 +761,13 @@
       // 物理は固定ステップで刻む（フレームレート非依存）
       for (let remaining = dt; remaining > 0; remaining -= STEP) {
         this.stepBall(Math.min(remaining, STEP));
+      }
+
+      // you 本人が打った球が飛んでいる（＝まだ誰にも打ち返されていない）間だけ軌跡を伸ばす。
+      // 誰か（youMate を含む）に打ち返された、またはポイントが終わった瞬間から先は伸びず、
+      // その時点の軌跡がそのまま残る（＝次に you が打つまで、最新の1本として表示され続ける）。
+      if (this.trailActive && this.ball.live && this.trail.length < TRAIL.MAX_POINTS) {
+        this.trail.push({ x: this.ball.x, y: this.ball.y, z: this.ball.z });
       }
 
       // スイング入力の有効時間が、一度も hit() を呼ばずに（＝届かず）尽きた瞬間。

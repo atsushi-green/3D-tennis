@@ -334,6 +334,16 @@
   };
 
   /**
+   * 自分（you）が打った直近の球の軌跡表示。IN/OUTに関わらず、常に一番新しい1本だけ残す
+   * （次に you が打った瞬間に描き直す）。落下予測マーカーを消した代わりに、打った後の
+   * 結果を振り返れるようにする表示。
+   */
+  const TRAIL = {
+    MAX_POINTS: 300, // 1本の飛翔で記録する点の上限（60fpsなら5秒ぶん。通常のショットは十分収まる）
+    OPACITY: 0.55,
+  };
+
+  /**
    * Space を押しっぱなしにしている間のテイクバック（溜め）。
    * ラリー中もサーブの「打つ」瞬間も共通で使う。離した瞬間の溜め量(0〜1)で
    * SHOT.TAP_T〜CHARGE_T / SERVE.T〜CHARGE_T を補間する。
@@ -455,6 +465,6 @@
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO,
-    CPU_LEVELS, applyCpuLevel, SPIN, WIND,
+    CPU_LEVELS, applyCpuLevel, SPIN, WIND, TRAIL,
   };
 })(window.RallyOne = window.RallyOne || {});

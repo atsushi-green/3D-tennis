@@ -1,8 +1,8 @@
-/** ボール、擬似影（ブロブ）、着地マーカー。 */
+/** ボール、擬似影（ブロブ）、you が打った球の軌跡。 */
 (function (RallyOne) {
   'use strict';
 
-  const { PHYSICS, THEME } = RallyOne.config;
+  const { PHYSICS, THEME, TRAIL } = RallyOne.config;
   const scene3d = RallyOne.scene = RallyOne.scene || {};
 
   const GROUND_Y = 0.012; // 影はコート面より少し上に置いて Z ファイティングを避ける
@@ -95,5 +95,40 @@
   scene3d.placeGroundShadow = function placeGroundShadow(shadow, actor) {
     shadow.position.set(actor.x, GROUND_Y, actor.z);
     shadow.scale.setScalar(0.34);
+  };
+
+  /**
+   * you が打った直近の球の軌跡。点数が毎フレーム変わる（伸びる／描き直る）ので、
+   * TRAIL.MAX_POINTS 分の頂点を先に確保しておき、setDrawRange() で実際に使う分だけ描く
+   * （フレームごとに geometry を作り直さない）。
+   */
+  scene3d.createTrail = function createTrail() {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL.MAX_POINTS * 3), 3));
+    geometry.setDrawRange(0, 0);
+    const mesh = new THREE.Line(geometry, new THREE.LineBasicMaterial({
+      color: THEME.BALL, transparent: true, opacity: TRAIL.OPACITY,
+    }));
+    mesh.frustumCulled = false; // 点の数に応じて境界が変わるため、簡易に無効化しておく
+    mesh.visible = false;
+    return mesh;
+  };
+
+  /** @param {{x:number,y:number,z:number}[]} points */
+  scene3d.updateTrail = function updateTrail(mesh, points) {
+    if (points.length < 2) {
+      mesh.visible = false;
+      return;
+    }
+    mesh.visible = true;
+    if (mesh.userData.pointCount !== points.length) {
+      const position = mesh.geometry.attributes.position;
+      for (let i = 0; i < points.length; i++) {
+        position.setXYZ(i, points[i].x, points[i].y, points[i].z);
+      }
+      position.needsUpdate = true;
+      mesh.geometry.setDrawRange(0, points.length);
+      mesh.userData.pointCount = points.length;
+    }
   };
 })(window.RallyOne = window.RallyOne || {});

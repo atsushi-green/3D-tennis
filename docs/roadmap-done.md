@@ -10,6 +10,12 @@
 - テスト: <tests/smoke.mjs の結果>
 ```
 
+## 2026-08-23 自分が打ったボールの軌跡表示
+- ブランチ: evolve/ball-trail
+- 実施内容: you が打った直近の球の3D軌跡を線で表示する機能を追加。`game.js`に`this.trail`（{x,y,z}の配列、three.js/DOM非依存の素のデータ）を追加し、`serve(who)`/`hit(who)`が`who==='you'`のときだけ打点の1点から描き直す（＝IN/OUTに関わらず常に最新の1本だけが残る）`updateTrailOwner()`を呼ぶようにした。`update(dt)`では、you 本人の打球が生きている間だけ毎フレーム現在のボール位置を追記し、誰かに打ち返された／ポイントが終わった瞬間から先は伸びず、その時点の軌跡がそのまま（次にyouが打つまで）残り続ける。表示側（three.js）は`scene/ball.js`に`createTrail()`/`updateTrail()`を追加：`TRAIL.MAX_POINTS`（config.jsに新設）ぶんの頂点を先に確保したBufferGeometryを使い、`setDrawRange()`で実際に使う分だけ描画することで、フレームごとにgeometryを作り直さずに済むようにした。`scene/world.js`から`sync()`のたびに`state.trail`（Gameインスタンスそのものが渡ってくるので直接参照できる）を渡して更新。
+  - **セルフレビューで発見・修正した不具合**: 当初は伸長判定を`ball.last==='you'`（チーム単位）だけで見ていたが、`ball.last`はダブルスの`youMate`（AIパートナー）が打っても`'you'`のままのため、`youMate`の打球位置が you 自身の凍結済み軌跡に紛れ込み、不連続な線になるバグがあった（`resetTrailIfYou()`側は`who==='you'`＝you本人だけを見ていたため、リセット条件と伸長条件の粒度が食い違っていた）。you本人が打ったときだけtrueにする`this.trailActive`フラグを新設し、`updateTrailOwner(who)`が`who`（個人単位）を見てリセット・無効化の両方を行うように統一した。
+- テスト: `node tests/smoke.mjs` — ALL PASS。新規テスト5件：①`hit('you')`が軌跡を打点1点にリセットすること、②you の打球が飛んでいる間`update()`のたびに軌跡が伸びること、③相手に打ち返された瞬間から先は伸びず凍結すること、④次にyouが打つと前の軌跡が消えて新しい1本に描き直されること、⑤（セルフレビュー指摘の退行テスト）ダブルスで`youMate`が打っても`ball.last`は`'you'`のままだが、you自身の軌跡には追記されないこと。`node --check`で構文確認。ブラウザ実機（`claude-in-chrome`、ローカル`http.server`経由）でサーブ〜CPU返球までを目視確認し、打った直後からボールの後ろに薄い線（黄緑、TRAIL.OPACITY=0.55）が伸びていくこと、CPUに打ち返された後もその軌跡が消えずに残り続けること、次のポイントの構え中も残り続けることを確認。コンソールエラーなし（初回ロード時に1度ブラウザキャッシュ由来のエラーが出たが、ハードリロードで解消することを確認済み＝コード側の問題ではない）。code-reviewスキル（low）で1件指摘（ダブルスでの`youMate`打球の混入バグ）→上記の通り修正済み。
+
 ## 2026-08-23 落下予測点を非表示にする
 - ブランチ: evolve/hide-landing-marker
 - 実施内容: `src/scene/world.js` の `syncMarker()`（CPUが打った、まだバウンドしていない球の着地点にリングを表示する処理）と、その呼び出し・`marker` メッシュの生成/scene登録、未使用になった `predictLanding` importを削除。`src/scene/ball.js` の `scene3d.createMarker()`（リング形状の生成）も未使用になったため削除。着地点を予測する`physics.js`側のロジック自体（CPUの追跡AIが内部で使う`predictLanding`）は変更していない。
