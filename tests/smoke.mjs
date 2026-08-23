@@ -1511,11 +1511,16 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 
   applyCpuLevel('normal'); // 他のテストの実行順に依存しないよう、まずベースラインへ戻す
   const baseline = { ...R.config.CPU };
-  const basePlayerCpu = {
-    CPU_CHASE: R.config.PLAYER.CPU_CHASE,
-    CPU_RECOVER: R.config.PLAYER.CPU_RECOVER,
-    CPU_REACT: R.config.PLAYER.CPU_REACT,
-  };
+  // プリセットが上書きする PLAYER のキーはプリセット定義から導出して全部押さえる。
+  // 手で列挙すると、列挙し忘れたキーの復元漏れをこのテスト自身が見逃してしまう。
+  const presetPlayerKeys = [...new Set(
+    Object.values(CPU_LEVELS).flatMap((preset) => Object.keys(preset.player)),
+  )];
+  const basePlayerCpu = Object.fromEntries(
+    presetPlayerKeys.map((key) => [key, R.config.PLAYER[key]]),
+  );
+  ok(presetPlayerKeys.includes('CPU_RECOVER_DELAY') && presetPlayerKeys.includes('CPU_REACH'),
+    `the derived key list covers the presets' PLAYER overrides, got ${presetPlayerKeys.join(',')}`);
 
   applyCpuLevel('easy');
   ok(R.config.CPU.OUT_LONG > baseline.OUT_LONG && R.config.CPU.OUT_WIDE > baseline.OUT_WIDE,
@@ -1533,9 +1538,41 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 
   applyCpuLevel('normal');
   ok(JSON.stringify(R.config.CPU) === JSON.stringify(baseline), 'switching back to normal restores the baseline CPU values');
-  ok(R.config.PLAYER.CPU_CHASE === basePlayerCpu.CPU_CHASE && R.config.PLAYER.CPU_REACT === basePlayerCpu.CPU_REACT,
-    'switching back to normal restores the baseline PLAYER CPU values');
+  // プリセットが上書きしうる PLAYER のキーが1つ残らず normal の値へ戻ること
+  // （戻し漏れがあると、一度 easy/hard を選んだ後 normal に戻してもその値だけ効いたままになる）
+  for (const [key, value] of Object.entries(basePlayerCpu)) {
+    ok(R.config.PLAYER[key] === value,
+      `switching back to normal restores PLAYER.${key} (expected ${value}, got ${R.config.PLAYER[key]})`);
+  }
 
+  // 段階差の主軸はミス確率。easy > normal > hard の順に単調に下がっていること
+  // (退行テスト: hard のミス確率が normal と近すぎて「Hardを選んでも変わらない」状態だった。
+  //  実測ではミス確率が強さに最も効き、球速や狙いの深さはほとんど効かない)
+  const missRate = (level) => {
+    applyCpuLevel(level);
+    return {
+      base: R.config.CPU.OUT_LONG + R.config.CPU.OUT_WIDE,
+      stretch: R.config.CPU.STRETCH_OUT_LONG + R.config.CPU.STRETCH_OUT_WIDE,
+    };
+  };
+  const easyMiss = missRate('easy');
+  const normalMiss = missRate('normal');
+  const hardMiss = missRate('hard');
+  ok(easyMiss.base > normalMiss.base && normalMiss.base > hardMiss.base,
+    `miss rate falls monotonically easy>normal>hard: ${easyMiss.base} > ${normalMiss.base} > ${hardMiss.base}`);
+  ok(easyMiss.stretch > normalMiss.stretch && normalMiss.stretch > hardMiss.stretch,
+    `stretched-shot miss rate falls monotonically too: ${easyMiss.stretch} > ${normalMiss.stretch} > ${hardMiss.stretch}`);
+  // 単調なだけでは「Hardを選んでもほとんど変わらない」状態を防げない（変更前もミス率自体は
+  // normal より低かった）。ベンチで体感差が出た比率を下限として固定する：
+  // hard は normal の 1/5 以下、easy は normal の 2.5 倍以上。
+  ok(hardMiss.base <= normalMiss.base * 0.2,
+    `hard's miss rate is at most a fifth of normal's: ${hardMiss.base} vs ${normalMiss.base}`);
+  ok(hardMiss.stretch <= normalMiss.stretch * 0.3,
+    `hard barely misses even on stretched shots: ${hardMiss.stretch} vs ${normalMiss.stretch}`);
+  ok(easyMiss.base >= normalMiss.base * 2.5,
+    `easy misses at least 2.5x as often as normal: ${easyMiss.base} vs ${normalMiss.base}`);
+
+  applyCpuLevel('normal');
   // COURT/RULES 等のゲームルール寄りの値には触れない
   ok(R.config.COURT.W === 8.23, 'applyCpuLevel does not touch court dimensions');
 }

@@ -405,43 +405,53 @@
    * `CPU`（狙いの精度・アウト確率・追う範囲）と `PLAYER` のCPU専用値（反応遅延・追跡/回復速度）
    * を実行時に上書きする。コート寸法やルールに関わる値（COURT・RULES 等）はここでは変えない。
    * `normal` は空オブジェクト＝上書きなし（＝現状のバランス値がそのままベースラインになる）。
+   *
+   * 段階差の主軸は **アウトになる確率（OUT_*／STRETCH_OUT_*）**。実測で、
+   * 球速(SHOT_T)・狙いの深さ(AIM_Z)・ワイドさ(AIM_X)をきつくしても強さはほとんど変わらず
+   * （むしろ自分のミスが増えて弱くなる）、一方でミス確率を下げるだけで大きく強くなる。
+   * 追いつく力（CPU_CHASE/CPU_REACT/CPU_REACH）は補助的に段階差をつける。
+   *
+   * 実測値（着地点を予測して追いつく「そこそこ上手い人間」を相手に16試合、
+   * CPUのポイント率／セット勝率）：
+   *   easy   26.5% / 0.0%   normal 40.4% / 6.3%   hard 54.5% / 62.5%
+   * 変更前は normal 40.4%/6.3% に対し hard 42.5%/25.0% しかなく、
+   * 「Hard を選んでも Normal とほとんど変わらない」状態だった。
    */
   const CPU_LEVELS = {
     easy: {
       cpu: {
         SHOT_T: 1.12, AIM_X_MIN: 1.0, AIM_X_MAX: 2.4, AIM_Z_MIN: 5.8, AIM_Z_MAX: 8.0,
-        OUT_LONG: 0.20, OUT_WIDE: 0.14, CHASE_X_LIMIT: 5.4,
-        STRETCH_OUT_LONG: 0.34, STRETCH_OUT_WIDE: 0.26,
+        OUT_LONG: 0.28, OUT_WIDE: 0.20, CHASE_X_LIMIT: 5.4,
+        STRETCH_OUT_LONG: 0.46, STRETCH_OUT_WIDE: 0.36,
       },
       player: {
-        // normal の CPU_CHASE/CPU_RECOVER 引き下げに合わせて、normal比の相対関係
-        // （easyはより遅く、hardはより速く）を保ったまま比例して下げてある。
-        CPU_CHASE: 4.7, CPU_RECOVER: 2.3, CPU_REACT: 0.30, CPU_RECOVER_DELAY: 0.70,
+        CPU_CHASE: 4.3, CPU_RECOVER: 2.3, CPU_REACT: 0.38, CPU_RECOVER_DELAY: 0.70,
+        CPU_REACH: 1.32,
       },
     },
     normal: { cpu: {}, player: {} },
     hard: {
       cpu: {
         SHOT_T: 0.78, AIM_X_MIN: 1.7, AIM_X_MAX: 3.9, AIM_Z_MIN: 7.6, AIM_Z_MAX: 9.9,
-        OUT_LONG: 0.03, OUT_WIDE: 0.02, CHASE_X_LIMIT: 7.0,
-        STRETCH_OUT_LONG: 0.12, STRETCH_OUT_WIDE: 0.08,
+        OUT_LONG: 0.012, OUT_WIDE: 0.008, CHASE_X_LIMIT: 7.0,
+        STRETCH_OUT_LONG: 0.05, STRETCH_OUT_WIDE: 0.035,
       },
       player: {
-        // normal の CPU_CHASE/CPU_RECOVER 引き下げに合わせて、normal比の相対関係を保ったまま
-        // 比例して下げてある（easyのコメント参照）。
-        CPU_CHASE: 6.7, CPU_RECOVER: 3.7, CPU_REACT: 0.10, CPU_RECOVER_DELAY: 0.42,
+        CPU_CHASE: 7.2, CPU_RECOVER: 3.7, CPU_REACT: 0.05, CPU_RECOVER_DELAY: 0.42,
+        CPU_REACH: 1.6,
       },
     },
   };
 
-  // easy/hard から normal へ戻れるよう、初期値（＝normalの実値）を退避しておく
+  // easy/hard から normal へ戻れるよう、初期値（＝normalの実値）を退避しておく。
+  // 退避するキーは手で並べずプリセット定義から導出する：手書きのリストだと、プリセットに
+  // キーを足したときに載せ忘れて「normal へ戻したのにその値だけ easy/hard のまま」という
+  // バグになる（実際 CPU_REACH を足したときにやりかけた）。
   const DEFAULT_CPU = Object.assign({}, CPU);
-  const DEFAULT_PLAYER_CPU = {
-    CPU_CHASE: PLAYER.CPU_CHASE,
-    CPU_RECOVER: PLAYER.CPU_RECOVER,
-    CPU_REACT: PLAYER.CPU_REACT,
-    CPU_RECOVER_DELAY: PLAYER.CPU_RECOVER_DELAY,
-  };
+  const DEFAULT_PLAYER_CPU = Object.fromEntries(
+    [...new Set(Object.values(CPU_LEVELS).flatMap((preset) => Object.keys(preset.player)))]
+      .map((key) => [key, PLAYER[key]]),
+  );
 
   /**
    * CPU/AI の強さを切り替える。`CPU`/`PLAYER` はモジュール読み込み時に他ファイルへ参照ごと
