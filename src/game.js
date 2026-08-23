@@ -253,6 +253,9 @@
         this.tossBall();
         this.you.charging = true;
         this.you.chargeTime = 0;
+        // サーブのスピン（V/C＝スライス／トップスピン）もトスを上げた瞬間に固定する。
+        // グラウンドストロークと同じ理由で、当たる瞬間まで押し続けなくてよい。
+        this.you.chargeSpin = this.input.spin || 'flat';
         return;
       }
       if ((myServe && this.tossActive) || this.phase === 'rally') {
@@ -508,11 +511,14 @@
       // プレイヤーは「打つ」瞬間の溜め量で威力が変わる。CPU/AI（cpu・cpuMate・youMate）は
       // 溜め演出がない代わりに、常に一定のそこそこの威力（SERVE.CPU_T）で打つ。
       const flightT = who === 'you' ? lerp(SERVE.T, SERVE.CHARGE_T, this.you.swingCharge) : SERVE.CPU_T;
+      // 人間はトスを上げた瞬間に固定したスピン（V/C。chargeStart() 参照）でスライスサーブ・
+      // スピンサーブが打てる。グラウンドストロークと同じ SPIN 設定（実効重力・バウンドの
+      // 弾み方）がそのまま乗る。CPU/AI は他の打球と同じく常にフラット固定。
+      const spin = who === 'you' ? this.you.chargeSpin : 'flat';
 
       ball.y = from.y;
-      // サーブはスピン選択の対象外（フラット固定）。既にバランス調整済みのため据え置く。
-      Object.assign(ball, solveShot(from, target, flightT, SERVE.CLEARANCE, 'flat'));
-      ball.spin = 'flat';
+      Object.assign(ball, solveShot(from, target, flightT, SERVE.CLEARANCE, spin));
+      ball.spin = spin;
       ball.live = true;
       ball.bounces = 0;
       ball.last = team; // スコア判定・当たり判定はチーム単位（hit() と同じ扱い）

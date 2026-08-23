@@ -10,6 +10,11 @@
 - テスト: <tests/smoke.mjs の結果>
 ```
 
+## 2026-08-23 スライスサーブ・スピンサーブを実装する
+- ブランチ: evolve/serve-spin
+- 実施内容: グラウンドストロークの既存スピン選択（V＝トップスピン／C＝スライス）をサーブにも適用した。`chargeStart()`のサーブ用分岐（トスを上げる1回目の押下）に、グラウンドストローク側と同じ「その瞬間の入力で固定し、以降は離してよい」ロジックを追加：`this.you.chargeSpin = this.input.spin || 'flat';`。`serve(who)`は、これまで`solveShot()`/`ball.spin`に常に`'flat'`を渡していたのを、`who==='you'`のときは`this.you.chargeSpin`を使うように変更（CPU/AIのサーブは他の打球と同じく常にフラット固定のまま）。物理側（`SPIN.GRAVITY_MULT`・`BOUNCE_RESTITUTION_MULT`・`BOUNCE_FRICTION_MULT`、`physics.js`の`solveShot()`/`integrate()`）は既存のグラウンドストローク実装をそのまま再利用しており、変更していない。`input.js`のコメント・README.mdの操作表も実態に合わせて更新。
+- テスト: `node tests/smoke.mjs` — ALL PASS。既存の「サーブは常にフラット」テストを実態に合わせて更新し、新規に3ケース追加：①トスを上げている間スピンキーを押していればそのスピンでサーブされること、②トス後にキーを離しても（当たる瞬間まで押し続けなくても）固定したスピンのまま打てること、③CPU/AIのサーブは人間の入力に関わらず常にフラットのままであること。`node --check`で構文確認。ブラウザ実機（`claude-in-chrome`、`RallyOne.game`を直接操作してJS側から`serve()`を呼ぶ形で検証）で、同一の狙い先・飛翔時間で flat/top/slice を打ち比べ、バウンド後の最高到達点が top(1.251) > flat(1.034) > slice(0.671) の順になり、既存のグラウンドストロークと同じスピン特性（トップスピンは高く弾む、スライスは低く滑る）が再現されることを確認。コンソールエラーなし。code-reviewスキル（low）で確認、指摘なし。
+
 ## 2026-08-23 自分が打ったボールの軌跡表示
 - ブランチ: evolve/ball-trail
 - 実施内容: you が打った直近の球の3D軌跡を線で表示する機能を追加。`game.js`に`this.trail`（{x,y,z}の配列、three.js/DOM非依存の素のデータ）を追加し、`serve(who)`/`hit(who)`が`who==='you'`のときだけ打点の1点から描き直す（＝IN/OUTに関わらず常に最新の1本だけが残る）`updateTrailOwner()`を呼ぶようにした。`update(dt)`では、you 本人の打球が生きている間だけ毎フレーム現在のボール位置を追記し、誰かに打ち返された／ポイントが終わった瞬間から先は伸びず、その時点の軌跡がそのまま（次にyouが打つまで）残り続ける。表示側（three.js）は`scene/ball.js`に`createTrail()`/`updateTrail()`を追加：`TRAIL.MAX_POINTS`（config.jsに新設）ぶんの頂点を先に確保したBufferGeometryを使い、`setDrawRange()`で実際に使う分だけ描画することで、フレームごとにgeometryを作り直さずに済むようにした。`scene/world.js`から`sync()`のたびに`state.trail`（Gameインスタンスそのものが渡ってくるので直接参照できる）を渡して更新。

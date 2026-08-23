@@ -94,7 +94,7 @@
       return this.any(LOB);
     }
 
-    /** @returns {'top'|'slice'|null} グラウンドストロークのスピン選択。何も押していなければ null（＝フラット） */
+    /** @returns {'top'|'slice'|null} グラウンドストローク・サーブのスピン選択。何も押していなければ null（＝フラット） */
     get spin() {
       if (this.any(TOPSPIN_KEYS)) return 'top';
       if (this.any(SLICE_KEYS)) return 'slice';

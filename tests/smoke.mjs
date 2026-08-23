@@ -1547,12 +1547,29 @@ function tossAndHit(g, holdFrames = 0) {
   g.hit('cpu');
   ok(g.ball.spin === 'flat', `CPU/AI returns are always flat regardless of the human's held spin key, got ${g.ball.spin}`);
 
-  // サーブ：スピン選択の対象外（既に調整済みのバランスを崩さないためフラット固定）
+  // サーブ：トスを上げた瞬間（chargeStart()）に固定したスピンでスライスサーブ・スピンサーブが打てる
   spinInput.spin = 'slice';
   const gs = new R.Game({ input: spinInput, hooks: noHooks });
   gs.start();
   tossAndHit(gs);
-  ok(gs.ball.spin === 'flat', `serves stay flat regardless of a held spin key, got ${gs.ball.spin}`);
+  ok(gs.ball.spin === 'slice', `holding C (slice) through the toss produces a slice serve, got ${gs.ball.spin}`);
+
+  // トスを上げた後にキーを離しても（当たる瞬間まで押し続けなくても）固定したスピンのまま打てる
+  const gs2 = new R.Game({ input: spinInput, hooks: noHooks });
+  gs2.start();
+  spinInput.spin = 'top';
+  gs2.chargeStart(); // トスを上げた瞬間にスピンが固定される
+  spinInput.spin = null;
+  gs2.chargeRelease();
+  ok(gs2.ball.spin === 'top', `serve spin stays fixed to what was held at toss time, even if released before contact, got ${gs2.ball.spin}`);
+
+  // CPU/AI のサーブ：人間の入力に関わらず常にフラット
+  spinInput.spin = 'slice';
+  const gs3 = new R.Game({ input: spinInput, hooks: noHooks });
+  gs3.start();
+  gs3.serve('cpu');
+  ok(gs3.ball.spin === 'flat', `CPU/AI serves are always flat regardless of the human's held spin key, got ${gs3.ball.spin}`);
+  spinInput.spin = null;
 }
 
 // --- newPoint() は前のポイントのスピンを持ち越さない ---
