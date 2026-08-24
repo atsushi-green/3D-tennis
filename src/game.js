@@ -16,7 +16,7 @@
     hitsNet, integrate, predictWindow, reflectBounce, solveShot,
   } = RallyOne.physics;
   const {
-    chasePosition, homePosition, cpuShot, isResponder, coverPosition,
+    chasePosition, homePosition, cpuShot, isResponder, coverPosition, reactReach,
   } = RallyOne.ai;
   const { Match } = RallyOne.scoring;
 
@@ -121,6 +121,7 @@
         impact: 0,      // 打った瞬間の演出（着弾フラッシュ・膨張）の残り時間
         impactPower: 0, // その打球の溜め量(0〜1)。演出の派手さに使う
         spin: 'flat',   // 'flat'|'top'|'slice'。飛翔中の実効重力とバウンドの弾み方に効く
+        age: 0,         // 最後に打たれてからの経過時間(秒)。CPU/AIが「反応する時間」に使う（ai.reactReach）
         wind: 0,        // 横風（m/s²、vxに継続的に加算）。サーブの飛翔中は常に0、返球後だけ this.wind になる
       };
       this.you = {
@@ -556,6 +557,7 @@
       ball.spin = spin;
       ball.live = true;
       ball.bounces = 0;
+      ball.age = 0;
       ball.last = team; // スコア判定・当たり判定はチーム単位（hit() と同じ扱い）
       this.resetTrail();
 
@@ -675,6 +677,7 @@
       ball.wind = this.wind;
       ball.last = TEAM_OF[who]; // スコア判定はチーム単位。誰が打ったかは player.stroke 側で個別に持つ
       ball.bounces = 0;
+      ball.age = 0; // ここから相手の「反応に使える時間」を数え直す
       ball.impact = FX.IMPACT_DURATION * lerp(1, FX.CHARGE_TIME_BOOST, charge);
       ball.impactPower = charge; // フラッシュの大きさに使う
       this.resetTrail();
@@ -1207,6 +1210,7 @@
       }
 
       integrate(ball, dt);
+      ball.age += dt;
 
       if (hitsNet(ball)) {
         ball.vz *= -0.18;
@@ -1337,7 +1341,7 @@
         && this.doublesResponder('you') === 'youMate') {
         const inRange = ball.y < PLAYER.CPU_REACH_Y && ball.y > PLAYER.CPU_REACH_Y_MIN;
         const canReturn = ball.bounces >= 1 || Math.abs(this.youMate.z) <= PLAYER.VOLLEY_Z;
-        if (canReturn && reaches(ball, this.youMate, PLAYER.CPU_REACH) && inRange) this.hit('youMate');
+        if (canReturn && reaches(ball, this.youMate, reactReach(ball.age)) && inRange) this.hit('youMate');
       }
 
       // CPU は届く範囲なら自動で振る。ダブルスでは応答すべき側（doublesResponder）だけが
@@ -1349,9 +1353,12 @@
           && (ball.bounces >= 1 || Math.abs(this.cpu.z) <= PLAYER.VOLLEY_Z);
         const cpuMateCanReturn = this.doubles && responder === 'cpuMate'
           && (ball.bounces >= 1 || Math.abs(this.cpuMate.z) <= PLAYER.VOLLEY_Z);
-        if (cpuCanReturn && reaches(ball, this.cpu, PLAYER.CPU_REACH) && inRange) {
+        // 反応に使える時間ぶんに狭めた守備範囲で判定する（ai.reactReach 参照）。
+        // 打たれてすぐ届く球（スマッシュ・至近距離のボレー）は体の近くしか触れない。
+        const reach = reactReach(ball.age);
+        if (cpuCanReturn && reaches(ball, this.cpu, reach) && inRange) {
           this.hit('cpu');
-        } else if (cpuMateCanReturn && reaches(ball, this.cpuMate, PLAYER.CPU_REACH) && inRange) {
+        } else if (cpuMateCanReturn && reaches(ball, this.cpuMate, reach) && inRange) {
           this.hit('cpuMate');
         }
       }

@@ -2250,6 +2250,46 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   }
 }
 
+// --- CPU/AI の守備範囲は「反応に使える時間」で決まる（速い球・至近距離の球は反射でしか触れない） ---
+{
+  const { reactReach } = R.ai;
+  const DOUBLES = R.config.DOUBLES;
+  const {
+    CPU_REACH, CPU_REFLEX_REACH, CPU_REFLEX_T_MIN, CPU_REFLEX_T_MAX,
+  } = PLAYER;
+
+  ok(reactReach(0) === CPU_REFLEX_REACH, `no time at all leaves only the reflex reach, got ${reactReach(0)}`);
+  ok(reactReach(CPU_REFLEX_T_MIN) === CPU_REFLEX_REACH, 'at T_MIN it is still the reflex reach');
+  ok(reactReach(CPU_REFLEX_T_MAX) === CPU_REACH, 'at T_MAX the full reach is available again');
+  ok(reactReach(5) === CPU_REACH, 'plenty of time is still just the full reach (no bonus)');
+  ok(reactReach(undefined) === CPU_REFLEX_REACH, 'a ball with no age recorded is treated as the strictest case');
+  const mid = reactReach((CPU_REFLEX_T_MIN + CPU_REFLEX_T_MAX) / 2);
+  ok(mid > CPU_REFLEX_REACH && mid < CPU_REACH, `it ramps in between, got ${mid}`);
+
+  // 実際の当たり判定：打たれた直後に届く球（＝スマッシュやネット際のボレー）は取りこぼす
+  const netPlayerTry = (age) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(true); // ダブルス
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    // cpuMate をネット際に置き、その 1.0m 横をノーバウンドで通す
+    Object.assign(g.cpuMate, { x: 0, z: DOUBLES.NET_Z_CPU });
+    Object.assign(g.cpu, { x: 0, z: HALF_L - 0.5 });
+    Object.assign(g.ball, {
+      x: 1.0, y: 1.2, z: DOUBLES.NET_Z_CPU, px: 1.0, py: 1.2, pz: DOUBLES.NET_Z_CPU,
+      vx: 0, vy: 0, vz: 6, bounces: 0, last: 'you', live: true, age, wind: 0, spin: 'flat',
+    });
+    g.checkSwings();
+    return g.ball.last === 'cpu'; // 返された＝ボールの持ち主がCPU側に変わる
+  };
+  ok(reactReach(0.05) < 1.0 && reactReach(CPU_REFLEX_T_MAX) > 1.0,
+    'precondition: 1.0m is outside the reflex reach but inside the full reach');
+  ok(netPlayerTry(0.05) === false,
+    'a ball that arrives right after it was struck slips past the net player');
+  ok(netPlayerTry(CPU_REFLEX_T_MAX + 0.1) === true,
+    'the same ball is reached when there was time to read it');
+}
+
 // --- CPU/AI の移動：斜めでも設定速度を超えない（x/z 別々に step を足すと √2 倍速くなる） ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });

@@ -53,6 +53,16 @@
     CPU_REACH: 1.45,
     CPU_REACH_Y: 2.4,
     CPU_REACH_Y_MIN: 0.15, // CPU は地を這う球を拾えない
+    // 反射での守備範囲。CPU/AI は打たれた瞬間から軌道を知っているので、そのままだと
+    // 「反応する時間」という概念が無く、スマッシュでも至近距離のボレーでも CPU_REACH の
+    // 円をまるごと使えてしまう（ダブルスの前衛が高確率で拾ってくる、というユーザー報告の
+    // 原因）。打たれてからボールが自分に届くまでの時間（ball.age）が短いほど、実際に
+    // 触れる範囲を CPU_REFLEX_REACH まで狭める。1バウンドを挟む普通のラリー球は
+    // 打たれてから1秒以上経って届くので、従来どおり CPU_REACH のまま（＝シングルスの
+    // バランスは変わらない）。
+    CPU_REFLEX_REACH: 0.5,  // 反応時間ゼロ＝その場で反射するしかないときの範囲(m)
+    CPU_REFLEX_T_MIN: 0.35, // これ以下の反応時間では CPU_REFLEX_REACH まで狭まる(秒)
+    CPU_REFLEX_T_MAX: 0.80, // これ以上あれば CPU_REACH をフルに使える(秒)
     // 実際に打てる距離より広めに取った「テイクバックを構え始める」距離。
     // 打つ瞬間にいきなり振るのではなく、ボールが近づいてきた時点でラケットを
     // 引いておく（フォア/バックが事前に見分けられるようにする）。
@@ -555,7 +565,7 @@
       },
       player: {
         CPU_CHASE: 6.1, CPU_RECOVER: 2.3, CPU_REACT: 0.38, CPU_RECOVER_DELAY: 0.70,
-        CPU_REACH: 1.32,
+        CPU_REACH: 1.32, CPU_REFLEX_REACH: 0.34,
       },
     },
     normal: { cpu: {}, player: {} },
@@ -567,7 +577,7 @@
       },
       player: {
         CPU_CHASE: 10.2, CPU_RECOVER: 3.7, CPU_REACT: 0.05, CPU_RECOVER_DELAY: 0.42,
-        CPU_REACH: 1.6,
+        CPU_REACH: 1.6, CPU_REFLEX_REACH: 0.72,
       },
     },
   };

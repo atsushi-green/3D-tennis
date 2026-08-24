@@ -16,6 +16,23 @@
   } = RallyOne.physics;
 
   /**
+   * その球に対して CPU/AI が実際に使える守備範囲(m)。
+   * 打たれてからボールが届くまでの時間（＝反応に使える時間）が短いほど狭くなり、
+   * PLAYER.CPU_REFLEX_T_MIN 以下では反射で触れるだけの CPU_REFLEX_REACH まで落ちる。
+   * CPU/AI は打たれた瞬間から軌道を知っているので、この制限が無いとスマッシュや至近距離の
+   * ボレーでも CPU_REACH(1.45m) の円をまるごと使えてしまう。1バウンドを挟む普通のラリー球は
+   * 1秒以上かけて届くので、従来どおり CPU_REACH のまま。
+   * @param {number} age ボールが打たれてからの経過時間(秒)。game.js の ball.age。
+   */
+  function reactReach(age) {
+    const t = clamp(
+      ((age || 0) - PLAYER.CPU_REFLEX_T_MIN) / (PLAYER.CPU_REFLEX_T_MAX - PLAYER.CPU_REFLEX_T_MIN),
+      0, 1,
+    );
+    return lerp(PLAYER.CPU_REFLEX_REACH, PLAYER.CPU_REACH, t);
+  }
+
+  /**
    * 「その深さ(z)でボールを迎える」と決めたときの、弾道上の x。
    * バウンド1回ぶんは跨いで追う（速い球は打点が必ずバウンドの後になるため）。
    * そこまで届かない／高すぎて打てないなら fallbackX をそのまま返す。
@@ -79,7 +96,7 @@
    */
   function inReachOf(player, ball) {
     return ball.y < PLAYER.CPU_REACH_Y
-      && Math.hypot(player.x - ball.x, player.z - ball.z) <= PLAYER.CPU_REACH;
+      && Math.hypot(player.x - ball.x, player.z - ball.z) <= reactReach(ball.age);
   }
 
   /**
@@ -195,7 +212,9 @@
     if (ball.bounces > 0 || Math.abs(player.z) > PLAYER.VOLLEY_Z) return false;
     const at = predictAtZ(ball, player.z);
     if (!at) return false;
-    return Math.abs(at.x - player.x) <= PLAYER.CPU_REACH
+    // 通過するのは at.t 秒後なので、そのときの反応時間は「今までの経過＋これから」。
+    // 今の age だけで判断すると、まだ余裕があるのに反射扱いになって前衛が出て行かない。
+    return Math.abs(at.x - player.x) <= reactReach((ball.age || 0) + at.t)
       && at.y < PLAYER.CPU_REACH_Y && at.y > PLAYER.CPU_REACH_Y_MIN;
   }
 
@@ -227,6 +246,6 @@
   }
 
   RallyOne.ai = {
-    chasePosition, homePosition, shotTarget, cpuShot, isResponder, coverPosition,
+    chasePosition, homePosition, shotTarget, cpuShot, isResponder, coverPosition, reactReach,
   };
 })(window.RallyOne = window.RallyOne || {});
