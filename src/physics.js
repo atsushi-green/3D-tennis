@@ -193,10 +193,14 @@
    * ダブルスの前衛が「まだ着地していないボールが自分の目の前を素通りするか（＝ポーチできるか）」
    * を判定するのに使う（isResponder が着地点だけで判断すると、前衛の近くを通る球でも
    * 着地点が深い相方任せになってしまうため）。
+   * @param {number} [maxBounces] この回数までのバウンドは跨いで追い続ける。既定0＝
+   *   ノーバウンドで通過する場合だけ（ポーチ判定はこちら）。1 を渡すと「1回バウンドした後、
+   *   自分の深さを通過する瞬間」が取れる＝速い球を迎え撃つ位置の計算に使える。
    * @returns {{x:number, y:number, t:number}|null}
    */
-  function predictAtZ(b, targetZ, maxT) {
+  function predictAtZ(b, targetZ, maxT, maxBounces) {
     const limit = maxT === undefined ? 5 : maxT;
+    const allowed = maxBounces === undefined ? 0 : maxBounces;
     const startSign = Math.sign(targetZ - b.z);
     if (startSign === 0) return { x: b.x, y: b.y, t: 0 };
     const s = {
@@ -207,10 +211,17 @@
       wind: b.wind,
     };
     const dt = 1 / 120;
+    let bounced = 0;
     for (let t = 0; t < limit; t += dt) {
       integrate(s, dt);
       if (hitsNet(s)) return null;
-      if (s.y <= BALL_R && s.vy < 0) return null; // 通過する前に着地する
+      if (s.y <= BALL_R && s.vy < 0) {
+        if (bounced >= allowed) return null; // 通過する前に着地する
+        // reflectBounce() は x/z を「本当の接地点」に戻すだけで、直前位置(px/pz)との間に
+        // 収まるので、この下の線形補間はそのまま成り立つ。
+        reflectBounce(s);
+        bounced++;
+      }
       if (Math.sign(targetZ - s.z) !== startSign) {
         const span = s.z - s.pz;
         const tt = span === 0 ? 1 : (targetZ - s.pz) / span;

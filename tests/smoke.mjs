@@ -2030,5 +2030,97 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `the smash window is tight enough to need timing (<= SWING_WINDOW), got ${window && window.dur}s`);
 }
 
+// --- CPU/AI の移動：斜めでも設定速度を超えない（x/z 別々に step を足すと √2 倍速くなる） ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  const speed = PLAYER.CPU_CHASE;
+  const dt = 1 / 60;
+  const before = { x: 0, z: 0 };
+  Object.assign(g.cpu, { x: 0, z: 0, speed: 0, chaseDist: 0 });
+  g.moveTowards(g.cpu, before, { x: 100, z: 100 }, speed, dt); // 真斜め（45度）へ全力
+  const moved = Math.hypot(g.cpu.x, g.cpu.z);
+  ok(Math.abs(moved - speed * dt) < 1e-9,
+    `diagonal movement covers exactly speed*dt, got ${moved} want ${speed * dt}`);
+  ok(Math.abs(g.cpu.speed - speed) < 1e-9, `recorded speed never exceeds CPU_CHASE, got ${g.cpu.speed}`);
+  ok(Math.abs(g.cpu.chaseDist - moved) < 1e-9, `the move is accumulated into chaseDist, got ${g.cpu.chaseDist}`);
+
+  // 目標を通り過ぎない（残り距離が step より短いときはぴったり止まる）
+  Object.assign(g.cpu, { x: 0, z: 0, chaseDist: 0 });
+  g.moveTowards(g.cpu, { x: 0, z: 0 }, { x: 0.01, z: 0 }, speed, dt);
+  ok(g.cpu.x === 0.01 && g.cpu.z === 0, `stops exactly on the target, got (${g.cpu.x}, ${g.cpu.z})`);
+}
+
+// --- CPU/AI の返球の強さ（stretch）は「その球を追って走った距離」で決まる ---
+{
+  const CPU = R.config.CPU;
+  const setup = (chaseDist) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.cpu.x = 0; g.cpu.z = HALF_L - 2;
+    Object.assign(g.ball, {
+      x: 0, y: 1.0, z: HALF_L - 2, live: true, bounces: 1, last: 'you',
+    });
+    g.cpu.chaseDist = chaseDist;
+    // ロブと「わざとのアウト」を止めてから打たせる（どちらも乱数で入るため比較にならない）
+    const saved = { ...CPU };
+    Object.assign(CPU, {
+      LOB_VS_NET: 0, LOB_BASE: 0, LOB_VS_STRETCH: 0,
+      OUT_LONG: 0, OUT_WIDE: 0, STRETCH_OUT_LONG: 0, STRETCH_OUT_WIDE: 0,
+    });
+    g.hit('cpu');
+    Object.assign(CPU, saved);
+    return g.ball;
+  };
+  // 走っていない＝余裕がある返球：速くて深い
+  const comfy = setup(0);
+  // 大きく走らされた返球：山なりで浅い
+  const stretched = setup(CPU.STRETCH_DIST_MAX + 1);
+  const landing = (b) => R.physics.predictLanding(b);
+  ok(Math.hypot(comfy.vx, comfy.vy, comfy.vz) > Math.hypot(stretched.vx, stretched.vy, stretched.vz),
+    'a return hit without running is faster than one hit after a long chase');
+  ok(Math.abs(landing(comfy).z) > Math.abs(landing(stretched).z),
+    `the comfortable return lands deeper, got ${landing(comfy).z} vs ${landing(stretched).z}`);
+
+  // 走った距離は新しい打球のたびにリセットされる（前の球の疲労を持ち越さない）
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.cpu.chaseDist = 99;
+  g.resetChase();
+  ok(g.cpu.chaseDist === 0, 'resetChase() clears the accumulated chase distance');
+}
+
+// --- CPU/AI の追跡目標は必ずボールの弾道の上に乗る（深さを手前に寄せたら横位置も取り直す） ---
+{
+  const CPU = R.config.CPU;
+  const { solveShot, predictApex, predictAtZ, integrate, reflectBounce } = R.physics;
+  const { BALL_R, STEP } = R.config.PHYSICS;
+  // フル溜めのフラットサーブ相当。バウンド後も水平40m/s近くで飛ぶので、打点（頂点）は
+  // ベースラインの遥か後方＝CPUがどう頑張っても立てない場所になる。
+  const from = { x: -SERVE.STANCE_X, y: SERVE.TOSS_Y, z: -HALF_L };
+  const v = solveShot(from, { x: 2.0, y: BALL_R, z: COURT.SERVICE - 1.4 }, SERVE.CHARGE_T, SERVE.CLEARANCE, 'flat');
+  const ball = { ...from, px: from.x, py: from.y, pz: from.z, ...v, spin: 'flat', wind: 0, bounces: 0 };
+  for (let t = 0; t < 3; t += STEP) { // バウンドの直後まで進める
+    integrate(ball, STEP);
+    if (ball.y <= BALL_R && ball.vy < 0) { reflectBounce(ball); ball.bounces = 1; break; }
+  }
+  ok(ball.bounces === 1 && ball.vy > 0, 'precondition: the ball has just bounced and is rising');
+
+  const apex = predictApex(ball);
+  const target = R.ai.chasePosition(ball, 1);
+  ok(target.z < apex.z,
+    `precondition: the apex is too far ahead to chase, so the target depth is pulled in (${target.z} < ${apex.z})`);
+
+  // 目標が本当に弾道の上にあるか（＝その深さを通過する瞬間のボールの x と一致するか）
+  const at = predictAtZ(ball, target.z, undefined, 1);
+  ok(!!at, 'the ball does cross the target depth');
+  ok(at && Math.abs(target.x - at.x) < 0.01,
+    `the chase target sits on the ball's actual path: want x=${at && at.x}, got ${target.x}`);
+  // x と z を別々にクランプしていた頃は頂点の x をそのまま使っていた＝弾道上にない点だった
+  ok(Math.abs(apex.x - target.x) > 0.3,
+    `and that is meaningfully different from the old per-axis clamp (apex x=${apex.x}), ${Math.abs(apex.x - target.x).toFixed(2)}m apart`);
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);

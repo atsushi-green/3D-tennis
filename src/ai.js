@@ -15,12 +15,28 @@
     predictLanding, predictBounceApex, predictApex, predictAtZ,
   } = RallyOne.physics;
 
-  /** target を、anchor から CPU.CHASE_APEX_LEAD_MAX 以上は離れないように引き寄せる。 */
-  function leadFrom(anchor, target) {
-    return {
-      x: anchor.x + clamp(target.x - anchor.x, -CPU.CHASE_APEX_LEAD_MAX, CPU.CHASE_APEX_LEAD_MAX),
-      z: anchor.z + clamp(target.z - anchor.z, -CPU.CHASE_APEX_LEAD_MAX, CPU.CHASE_APEX_LEAD_MAX),
-    };
+  /**
+   * 「その深さ(z)でボールを迎える」と決めたときの、弾道上の x。
+   * バウンド1回ぶんは跨いで追う（速い球は打点が必ずバウンドの後になるため）。
+   * そこまで届かない／高すぎて打てないなら fallbackX をそのまま返す。
+   */
+  function pathXAt(ball, z, fallbackX) {
+    const at = predictAtZ(ball, z, undefined, 1);
+    return at && at.y < PLAYER.CPU_REACH_Y ? at.x : fallbackX;
+  }
+
+  /**
+   * target（弾道上の打点）を、anchor から CPU.CHASE_APEX_LEAD_MAX 以上は離れないように引き寄せる。
+   * z を引き寄せたときは、横位置もその深さでの弾道の x に取り直す：x と z を別々にクランプすると
+   * 「深さは手前、横位置はずっと奥のもの」という、弾道上のどこにも存在しない点が目標になる。
+   * フル溜めのフラットサーブのようにバウンド後も速い球ではこのずれが2m以上に達し、CPU は
+   * ボールが自分の横を通り抜けるのに真横へ走って離れていく（＝立っていれば届いた球を自分から
+   * 避ける）挙動になっていた。ボディへのフルパワーサーブが実測27.6%もエースになっていた原因。
+   */
+  function leadFrom(ball, anchor, target) {
+    const z = anchor.z + clamp(target.z - anchor.z, -CPU.CHASE_APEX_LEAD_MAX, CPU.CHASE_APEX_LEAD_MAX);
+    if (z === target.z) return { x: target.x, z };
+    return { x: pathXAt(ball, z, target.x), z };
   }
 
   /**
@@ -44,8 +60,8 @@
    * 追わせる（頂点はもう過ぎているので、これ以上先読みする意味がない）。
    */
   function chaseTarget(ball) {
-    if (ball.bounces === 0) return leadFrom(predictLanding(ball), predictBounceApex(ball));
-    if (ball.vy > 0) return leadFrom(ball, predictApex(ball));
+    if (ball.bounces === 0) return leadFrom(ball, predictLanding(ball), predictBounceApex(ball));
+    if (ball.vy > 0) return leadFrom(ball, ball, predictApex(ball));
     return { x: ball.x, z: ball.z };
   }
 
@@ -93,9 +109,13 @@
     const landing = chaseTarget(ball);
     const zMin = side > 0 ? CPU.CHASE_Z_MIN : -CPU.CHASE_Z_MAX;
     const zMax = side > 0 ? CPU.CHASE_Z_MAX : -CPU.CHASE_Z_MIN;
+    // 打点が後方限界（CHASE_Z_MAX）より奥＝そこで待つことは物理的にできない。leadFrom() と
+    // 同じ理由で、深さを手前へ寄せたら横位置もその深さでの弾道の x に取り直す。
+    const z = clamp(landing.z, zMin, zMax);
+    const x = z === landing.z ? landing.x : pathXAt(ball, z, landing.x);
     return {
-      x: clamp(landing.x, -CPU.CHASE_X_LIMIT, CPU.CHASE_X_LIMIT),
-      z: clamp(landing.z, zMin, zMax),
+      x: clamp(x, -CPU.CHASE_X_LIMIT, CPU.CHASE_X_LIMIT),
+      z,
     };
   }
 

@@ -10,7 +10,7 @@
     TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND,
   } = RallyOne.config;
   const {
-    approach, approach2D, clamp, lerp, rand, signOr,
+    approach2D, clamp, lerp, rand, signOr,
   } = RallyOne.math;
   const {
     hitsNet, integrate, reflectBounce, solveShot,
@@ -105,14 +105,14 @@
         chargeSpin: 'flat', // chargeStart() の瞬間に固定するスピン（B/V/C）。実際に当たるまで押し続けなくてよい
       };
       this.cpu = {
-        x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, stroke: 'forehand', prep: null,
+        x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, chaseDist: 0, stroke: 'forehand', prep: null,
       };
       // ダブルス（this.doubles === true）のときだけ動く AI パートナー。シングルスでは未使用のまま。
       this.youMate = {
-        x: 0, z: DOUBLES.NET_Z_YOU, anim: 0, speed: 0, stroke: 'forehand', prep: null,
+        x: 0, z: DOUBLES.NET_Z_YOU, anim: 0, speed: 0, chaseDist: 0, stroke: 'forehand', prep: null,
       };
       this.cpuMate = {
-        x: 0, z: DOUBLES.NET_Z_CPU, anim: 0, speed: 0, stroke: 'forehand', prep: null,
+        x: 0, z: DOUBLES.NET_Z_CPU, anim: 0, speed: 0, chaseDist: 0, stroke: 'forehand', prep: null,
       };
 
       this.phase = 'idle';
@@ -526,6 +526,7 @@
       this.tossActive = false;
       this.serveInFlight = true; // 一度も返球されていない＝ノーバウンドで打ち返してはいけない
       this.phase = 'rally';
+      this.resetChase(); // レシーバーが「このサーブを追った距離」を数え始める
       const server = this.actor(who);
       server.anim = PLAYER.SERVE_ANIM;
       server.stroke = 'serve';
@@ -589,9 +590,17 @@
       // AI（cpu/cpuMate は人間の逆をつきつつ you 陣地(z<0)へ、youMate はダブルスで唯一の
       // AI仲間なので相手チームの主力 cpu の逆をつきつつ cpu 陣地(z>0)へ）。
       // 人間の 'you' だけ playerShot() で自分の入力を使う。
-      // AI は「打点での実速度 / CPU_CHASE」を stretch(0〜1) として使う：全力疾走のまま
-      // ぎりぎり追いついた球ほど、山なりで浅く・中央寄りの弱気な返球になる。
-      const stretch = who === 'you' ? 0 : clamp(player.speed / PLAYER.CPU_CHASE, 0, 1);
+      // AI は「この球を追い始めてから実際に走った距離」を stretch(0〜1) として使う：
+      // 大きく走らされた球ほど、山なりで浅く・中央寄りの弱気な返球になる。
+      // 以前は打点での実速度(player.speed / CPU_CHASE)で測っていたが、それだと
+      // 「打つ瞬間にまだ動いていたか」という実質2値の判定にしかならず、余裕をもって
+      // 1歩詰めただけの球まで最弱の返球になっていた（実測：サーブリターンの stretch は
+      // ほぼ全て 1.00＝ユーザー報告「返球が全体的に弱い」の主因）。走った距離なら
+      // 「どれだけ苦しかったか」が連続量として出る。
+      const stretch = who === 'you'
+        ? 0
+        : clamp((player.chaseDist - CPU.STRETCH_DIST_MIN)
+          / (CPU.STRETCH_DIST_MAX - CPU.STRETCH_DIST_MIN), 0, 1);
       const shot = who === 'you'
         ? this.playerShot(stroke, ball.z - player.z)
         : TEAM_OF[who] === 'cpu'
@@ -605,6 +614,7 @@
         ? this.you.chargeSpin
         : 'flat';
 
+      this.resetChase(); // ここから相手側の「この球を追った距離」を数え直す
       Object.assign(ball, solveShot(from, shot.target, shot.flight, undefined, spin));
       ball.spin = spin;
       // サーブの返球も含め、ここで打たれた球は以降このポイントの風(this.wind)にさらされる
@@ -1017,12 +1027,38 @@
       this.moveTowards(actor, before, target, speed, dt);
     }
 
-    /** cpu/cpuMate/youMate 共通の移動：目標位置へ一定速度で寄せ、実速度も記録する（歩行アニメ用）。 */
+    /**
+     * 新しい球が打たれた瞬間に、AI が「その球を追って走った距離」の積算を0に戻す。
+     * hit()・serve()・newPoint() から呼ぶ。打った直後の定位置戻り（recover）も同じ
+     * moveTowards() を通って積算されるが、次に相手が打った時点でここが0に戻すので、
+     * 実際に stretch を読む hit() の時点では常に「この球を追った距離」だけが入っている。
+     */
+    resetChase() {
+      this.cpu.chaseDist = 0;
+      this.youMate.chaseDist = 0;
+      this.cpuMate.chaseDist = 0;
+    }
+
+    /**
+     * cpu/cpuMate/youMate 共通の移動：目標位置へ一定速度で寄せ、実速度も記録する（歩行アニメ用）。
+     * x と z に別々に step を割り振ると斜めが √2 倍速くなってしまうので、人間の移動
+     * （movePlayers() の `len = Math.hypot(mx, mz)` による正規化）と同じく、進む向きの
+     * 長さで割ってから進める。これを直すまで CPU の斜め移動は 5.8→8.2m/s と設定値を
+     * 超えており、実速度から求める stretch（＝ぎりぎり度）が斜めに動いた瞬間に必ず
+     * 1（＝最弱の返球）へ振り切れていた。
+     */
     moveTowards(actor, before, target, speed, dt) {
-      const step = speed * dt;
-      actor.x = approach(actor.x, target.x, step);
-      actor.z = approach(actor.z, target.z, step);
-      actor.speed = Math.hypot(actor.x - before.x, actor.z - before.z) / dt;
+      const dx = target.x - actor.x;
+      const dz = target.z - actor.z;
+      const dist = Math.hypot(dx, dz);
+      const step = Math.min(speed * dt, dist);
+      if (dist > 0) {
+        actor.x += (dx / dist) * step;
+        actor.z += (dz / dist) * step;
+      }
+      const moved = Math.hypot(actor.x - before.x, actor.z - before.z);
+      actor.speed = moved / dt;
+      actor.chaseDist += moved;
     }
 
     stepBall(dt) {
