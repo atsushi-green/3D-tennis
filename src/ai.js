@@ -131,6 +131,40 @@
   }
 
   /**
+   * CPU/AI の返球1本ぶんの狙い（着地点と飛翔時間）。通常は shotTarget() の低い弾道だが、
+   * 一定確率でロブ（山なりの返球）を選ぶ。ロブを選ぶのは実際のテニスと同じ2つの場面：
+   *   1. 相手がネットに詰めている（CPU.NET_Z 以内）＝頭を越す攻めのロブ
+   *   2. 自分がぎりぎりで追いついた（stretch が大きい）＝時間を稼ぐ逃げのロブ
+   * ロブが無いと PLAYER.SMASH_MIN_Y を満たす高い球が来ず、人間がスマッシュを打つ機会が
+   * シングルスでほぼ発生しなかった。
+   * @param {{x:number, z:number}} opponent 返球を受ける側（逆をつく相手）
+   * @param {1|-1} dir 打ち込む方向（shotTarget と同じ）
+   * @param {number} stretch 0〜1。ぎりぎり追いついて打った度合い
+   * @returns {{target:{x:number,y:number,z:number}, flight:number, lob:boolean}}
+   */
+  function cpuShot(opponent, dir, stretch) {
+    // 相手が自陣のどのあたりにいるかはネットからの距離で見る（dir の符号に依存させない）
+    const atNet = Math.abs(opponent.z) <= CPU.NET_Z;
+    const chance = atNet ? CPU.LOB_VS_NET : CPU.LOB_BASE + CPU.LOB_VS_STRETCH * stretch;
+    if (Math.random() < chance) {
+      return {
+        target: {
+          x: -signOr(opponent.x, Math.random() - 0.5) * rand(0, CPU.LOB_X),
+          y: PHYSICS.BALL_R,
+          z: dir * rand(CPU.LOB_Z_MIN, CPU.LOB_Z_MAX),
+        },
+        flight: CPU.LOB_T,
+        lob: true,
+      };
+    }
+    return {
+      target: shotTarget(opponent.x, dir, stretch),
+      flight: lerp(CPU.SHOT_T, CPU.STRETCH_T, stretch),
+      lob: false,
+    };
+  }
+
+  /**
    * ネット際にいる選手が、まだ着地していないボールを待たずに横取り（ポーチ）できるか。
    * isResponder() を着地点までの距離だけで決めると、前衛の目の前を素通りする球でも
    * 着地点は後衛側（深い場所）になるため常に後衛任せになり、前衛が全くボレーしない
@@ -173,6 +207,6 @@
   }
 
   RallyOne.ai = {
-    chasePosition, homePosition, shotTarget, isResponder, coverPosition,
+    chasePosition, homePosition, shotTarget, cpuShot, isResponder, coverPosition,
   };
 })(window.RallyOne = window.RallyOne || {});

@@ -1979,5 +1979,56 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `the trail's recorded landing point agrees with inServiceBox()'s fault ruling, got ${JSON.stringify(bouncePoint)}`);
 }
 
+// --- CPU/AI のロブ：相手がネットに詰めていたら山なりで頭を越し、そうでなければ通常の弾道 ---
+{
+  const { cpuShot } = R.ai;
+  const CPU = R.config.CPU;
+  const saved = { ...CPU };
+  const restore = () => Object.assign(CPU, saved);
+
+  // ロブを必ず選ぶ設定にして、狙いと飛翔時間がロブのものになることを確認する
+  Object.assign(CPU, { LOB_VS_NET: 1, LOB_BASE: 1, LOB_VS_STRETCH: 0 });
+  const lob = cpuShot({ x: 2, z: -1 }, -1, 0); // 相手はネット際（z=-1）
+  ok(lob.lob === true, 'a net-rushing opponent draws a lob');
+  ok(lob.flight === CPU.LOB_T, `the lob uses the lob flight time, got ${lob.flight}`);
+  ok(lob.target.z <= -CPU.LOB_Z_MIN && lob.target.z >= -CPU.LOB_Z_MAX,
+    `the lob lands deep on the opponent's side, got z=${lob.target.z}`);
+  ok(Math.abs(lob.target.z) <= HALF_L, `the lob still lands inside the court, got z=${lob.target.z}`);
+  ok(Math.abs(lob.target.x) <= CPU.LOB_X, `the lob stays central, got x=${lob.target.x}`);
+
+  // ロブを絶対に選ばない設定なら従来どおりの低い弾道に戻る（＝既存のバランスは無変更）
+  Object.assign(CPU, saved, { LOB_VS_NET: 0, LOB_BASE: 0, LOB_VS_STRETCH: 0 });
+  const drive = cpuShot({ x: 2, z: -1 }, -1, 0);
+  ok(drive.lob === false, 'with the lob chance at zero the shot stays a normal drive');
+  ok(drive.flight === CPU.SHOT_T, `the drive keeps the normal flight time, got ${drive.flight}`);
+  restore();
+}
+
+// --- CPU/AI のロブは、人間がスマッシュを打てる高さ・場所を通る（この項目の目的そのもの） ---
+{
+  const CPU = R.config.CPU;
+  const { solveShot, integrate } = R.physics;
+  const BALL_R = R.config.PHYSICS.BALL_R;
+  // CPU がベースライン付近から、ロブの一番浅い狙いへ返した場合（一番厳しい条件）
+  const from = { x: 0, y: 1.0, z: HALF_L - 1 };
+  const v = solveShot(from, { x: 0, y: BALL_R, z: -CPU.LOB_Z_MIN }, CPU.LOB_T, undefined, 'flat');
+  const b = { ...from, px: from.x, py: from.y, pz: from.z, ...v, spin: 'flat', wind: 0 };
+
+  let window = null;
+  for (let t = 0; t < 6 && b.y > BALL_R; t += R.config.PHYSICS.STEP) {
+    integrate(b, R.config.PHYSICS.STEP);
+    // 落ちてくる途中でスマッシュの高さ帯を通る区間（ノーバウンドで叩ける場所）
+    if (b.vy < 0 && b.y >= PLAYER.SMASH_MIN_Y && b.y < PLAYER.REACH_Y) {
+      if (!window) window = { z: b.z, dur: 0 };
+      window.dur += R.config.PHYSICS.STEP;
+    }
+  }
+  ok(!!window, 'the lob passes through the smash height band on its way down');
+  ok(window && window.z < PLAYER.Z_NEAR && window.z > -(HALF_L + PLAYER.Z_FAR_MARGIN),
+    `the smash contact point is somewhere the human can actually stand, got z=${window && window.z}`);
+  ok(window && window.dur <= PLAYER.SWING_WINDOW,
+    `the smash window is tight enough to need timing (<= SWING_WINDOW), got ${window && window.dur}s`);
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);

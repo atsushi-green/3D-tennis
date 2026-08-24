@@ -16,7 +16,7 @@
     hitsNet, integrate, reflectBounce, solveShot,
   } = RallyOne.physics;
   const {
-    chasePosition, homePosition, shotTarget, isResponder, coverPosition,
+    chasePosition, homePosition, cpuShot, isResponder, coverPosition,
   } = RallyOne.ai;
   const { Match } = RallyOne.scoring;
 
@@ -595,8 +595,8 @@
       const shot = who === 'you'
         ? this.playerShot(stroke, ball.z - player.z)
         : TEAM_OF[who] === 'cpu'
-          ? { target: shotTarget(this.you.x, -1, stretch), flight: lerp(CPU.SHOT_T, CPU.STRETCH_T, stretch) }
-          : { target: shotTarget(this.cpu.x, 1, stretch), flight: lerp(CPU.SHOT_T, CPU.STRETCH_T, stretch) };
+          ? cpuShot(this.you, -1, stretch)
+          : cpuShot(this.cpu, 1, stretch);
 
       // スピン選択は人間の通常グラウンドストローク限定（スマッシュ・ボレー・CPU/AIはフラット固定）。
       // C＝スライス／V＝トップスピン。chargeStart() の瞬間に固定した値を使う（当たる瞬間まで
