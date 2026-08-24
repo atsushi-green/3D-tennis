@@ -21,6 +21,7 @@
         start: $('start'),
         charge: $('charge'),
         chargeFill: $('chargeFill'),
+        smashTip: $('smashTip'),
         diffOpts: [$('diffEasy'), $('diffNormal'), $('diffHard')],
       };
     }
@@ -84,6 +85,23 @@
 
     hideStartScreen() {
       this.el.start.style.display = 'none';
+    }
+
+    /**
+     * スマッシュの先回りヒントの文言（コート上のマーカーと対で出す）。マーカーは
+     * 「どこへ」を示すが、スマッシュにもう一つ要る「止まって溜める」までは伝わらないので、
+     * 状態に応じてそこを言葉で補う。
+     * @param {{ready:boolean, inTime:boolean}|null} hint RallyOne.Game#smashHint。null なら非表示。
+     */
+    setSmashTip(hint) {
+      const el = this.el.smashTip;
+      el.classList.toggle('on', !!hint);
+      if (!hint) return;
+      el.classList.toggle('ready', hint.ready);
+      el.classList.toggle('late', !hint.ready && !hint.inTime);
+      el.textContent = hint.ready
+        ? '⚡ スマッシュ！ 止まって溜め、印の高さで離す'
+        : hint.inTime ? '⚡ スマッシュのチャンス — 印まで先回り' : '⚡ スマッシュ — 急げば届く！';
     }
 
     /** @param {number} fraction 溜め量 0〜1。0以下なら非表示。 */

@@ -7,13 +7,13 @@
 
   const {
     BOUNDS, CHARGE, COURT, CPU, DOUBLES, DROP, FX, HALF_L, HALF_W, PHYSICS, PLAYER, RETURN, SERVE,
-    SHOT, TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND,
+    SHOT, SMASH_HINT, TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND,
   } = RallyOne.config;
   const {
     approach2D, clamp, lerp, rand, signOr,
   } = RallyOne.math;
   const {
-    hitsNet, integrate, reflectBounce, solveShot,
+    hitsNet, integrate, predictWindow, reflectBounce, solveShot,
   } = RallyOne.physics;
   const {
     chasePosition, homePosition, cpuShot, isResponder, coverPosition,
@@ -74,6 +74,33 @@
     return RACKET_SIDE[who] * (x - player.x) >= 0 ? 'forehand' : 'backhand';
   }
 
+  /**
+   * 打てる区間（physics.predictWindow() の結果）から、立つべき地点と間に合うかどうかを作る。
+   * 立つ場所は区間の真ん中（両端は帯のふちなので、少しずれると打てなくなる）。
+   * @param {{mid:object, exit:object}} hitWindow
+   * @param {{x:number, z:number}} you
+   * @param {(x:number) => number} standX コート内（動ける範囲）へ丸める
+   * @param {(z:number) => number} standZ
+   */
+  function smashHintFrom(hitWindow, you, standX, standZ) {
+    const { mid, exit } = hitWindow;
+    const x = standX(mid.x);
+    const z = standZ(mid.z);
+    // 走る時間（加速は無視した楽観値）＋着いてから溜める時間。走っている間は溜まらない
+    // （CHARGE.MOVE_CAP_FLOOR=0）ので、この2つは重ならず足し算になる。帯を抜けきる
+    // 時刻(exit.t)までに済むなら間に合う。
+    const needT = Math.hypot(x - you.x, z - you.z) / PLAYER.SPEED
+      + CHARGE.MAX_TIME * PLAYER.SMASH_MIN_CHARGE;
+    return {
+      x,
+      y: mid.y,
+      z,
+      t: mid.t,
+      ready: Math.hypot(you.x - mid.x, you.z - mid.z) <= SMASH_HINT.READY_DIST,
+      inTime: needT <= exit.t,
+    };
+  }
+
   /** phase: idle → serve → rally → over → (serve …) */
   class Game {
     /**
@@ -116,6 +143,11 @@
       };
 
       this.phase = 'idle';
+      /**
+       * スマッシュの先回りヒント。毎フレーム smashSpot() が入れ直す（打てる球が来ていなければ null）。
+       * 表示専用の値なので、ゲームの判定はここを一切読まない（scene/hint.js と hud.js だけが使う）。
+       */
+      this.smashHint = null;
       /** 現在サーブする「チーム」。'you' | 'cpu'。個人は servingPlayer() で解決する。 */
       this.server = 'you';
       /**
@@ -830,6 +862,7 @@
       if (swingBefore > 0 && this.you.swing === 0) this.missSwing();
 
       this.updatePrep();
+      this.smashHint = this.smashSpot();
 
       // トスの自動リセットなど、このフレームの stepBall() の結果を見てから
       // 溜めを継続してよいか判定する（先に判定すると1フレーム遅れてしまう）。
@@ -869,6 +902,56 @@
       this.cpu.prep = this.computePrep('cpu', PLAYER.CPU_PREP_REACH);
       this.youMate.prep = this.doubles ? this.computePrep('youMate', PLAYER.CPU_PREP_REACH) : null;
       this.cpuMate.prep = this.doubles ? this.computePrep('cpuMate', PLAYER.CPU_PREP_REACH) : null;
+    }
+
+    /**
+     * スマッシュで打てる球が来ているとき、「どこに先回りして立てばよいか」を返す（表示専用）。
+     *
+     * スマッシュの条件は hit() 側にある通り「打点が PLAYER.SMASH_MIN_Y 以上」＋「溜めが
+     * PLAYER.SMASH_MIN_CHARGE 以上」の2つ。溜めは足を止めていないと貯まらない
+     * （CHARGE.MOVE_CAP_FLOOR=0）ので、打点まで走ってから溜め始めたのでは間に合わず、
+     * 「打点の場所へ早めに着いて止まっておく」必要がある。これが難しさの正体なので、
+     * 打てる高さの帯（SMASH_MIN_Y〜REACH_Y）をボールが通る区間を先読みし、その真ん中を
+     * 立つべき地点として返す（帯の両端はふちなので、少しずれると打てなくなる）。
+     *
+     * 帯を通っていても、そこがコートの外＝人間が立てない場所（youBounds() の外）なら
+     * ヒントは出さない。ボールの位置そのものではなく「立てる場所からラケットが届くか」で
+     * 判定するので、ライン際でも実際に打てるならちゃんと出る。
+     *
+     * 対象は「ノーバウンドで叩ける球」だけ。ルール上はバウンド後に高く弾んだ球も溜めれば
+     * スマッシュになるが、それを案内するとベースラインのはるか後ろに立たせることになり、
+     * 「決めにいくスマッシュ」の案内としては役に立たない（実際そうなっていた）。
+     * ノーバウンド限定にしたことで、サーブ（1バウンドするまで返せない）にも自動的に
+     * ヒントは出なくなる。ベースライン付近（SMASH_HINT.HIDE_BASELINE_Z 以内）に
+     * 立っている間も出さない＝前に詰めているときだけの案内になる。
+     *
+     * @returns {{x:number, z:number, y:number, t:number, ready:boolean, inTime:boolean}|null}
+     *   x/z＝立つべき地点、y＝そこでの打点の高さ、t＝打点までの残り時間、
+     *   ready＝もう届く位置にいる（あとは溜めて離すだけ）、inTime＝今から走っても間に合う
+     */
+    smashSpot() {
+      const ball = this.ball;
+      // 自分が打つ番の、飛んでいる球だけが対象（自分が打った直後の球にヒントを出さない）
+      if (this.phase !== 'rally' || !ball.live || ball.last === 'you') return null;
+      // ベースライン付近に立っている間は出さない（そこからでは走る時間だけで滞空時間を
+      // 使い切ってしまい、どのみち溜めが間に合わない。SMASH_HINT.HIDE_BASELINE_Z 参照）
+      if (this.you.z <= -(HALF_L - SMASH_HINT.HIDE_BASELINE_Z)) return null;
+
+      const bounds = this.youBounds();
+      const standX = (x) => clamp(x, bounds.xMin, bounds.xMax);
+      const standZ = (z) => clamp(z, bounds.zMin, bounds.zMax);
+      /** その瞬間のボールが「ノーバウンドでスマッシュできる球」か */
+      const smashable = (at) => (
+        at.bounces === 0                                       // 落ちる前に叩ける球だけ
+        && at.y >= PLAYER.SMASH_MIN_Y && at.y < PLAYER.REACH_Y // 打てる高さの帯（下は溜めても通常打になる高さ、上は届かない高さ）
+        && at.z < PLAYER.NET_MARGIN                            // 自陣に入ってから
+        // 立てる場所（コート内へ丸めた位置）からラケットが届くか
+        && Math.hypot(at.x - standX(at.x), at.z - standZ(at.z)) < PLAYER.REACH
+      );
+
+      // maxBounces=0：最初の着地でシミュレーションを打ち切る（バウンド後は対象外なので追わない）
+      const window = predictWindow(ball, smashable, SMASH_HINT.LEAD_T, 0);
+      return window && smashHintFrom(window, this.you, standX, standZ);
     }
 
     /** @returns {'forehand'|'backhand'|null} 圏内かつ自分が拾うべき球なら見込みのストロークを返す */

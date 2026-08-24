@@ -81,6 +81,17 @@ canvas{display:block}
 }
 #charge.on{opacity:1}
 #chargeFill{height:100%;width:0%;background:var(--ball)}
+
+/* スマッシュが打てる球が来ている間だけ出る一言（コート上のマーカーと対） */
+#smashTip{
+  position:absolute;left:50%;bottom:72px;transform:translateX(-50%);
+  font-size:12px;letter-spacing:.08em;white-space:nowrap;
+  background:rgba(9,20,34,.7);padding:5px 12px;border-radius:2px;
+  color:#4ad9f2;opacity:0;transition:opacity .12s
+}
+#smashTip.on{opacity:1}
+#smashTip.ready{color:#ffe14a}
+#smashTip.late{color:#ef6b5a}
 #chargeFill.full{background:#fff;box-shadow:0 0 10px 2px var(--ball)}
 
 #start{

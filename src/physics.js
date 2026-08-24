@@ -189,6 +189,64 @@
   }
 
   /**
+   * これから通る軌道のうち、条件を満たす「ひとつながりの区間」を最初のひとつだけ探す。
+   * predict*() 群と同じ前向きシミュレーションだが、何を探すかは呼び出し側の述語に任せる
+   * （スマッシュの先回り地点＝「打てる高さの帯を通り、かつ人間が立てる場所」のように、
+   * 物理だけでは決まらない条件を game.js 側に書けるようにするため）。
+   * バウンドも maxBounces 回まで跨いで追う（高く弾んだ球をスマッシュする場合があるため）。
+   * @param {object} b ボール（{x,y,z,vx,vy,vz,spin,wind}）
+   * @param {(sample:{x:number,y:number,z:number,t:number,bounces:number}) => boolean} accept
+   * @param {number} [maxT] 何秒先まで探すか（既定3秒）
+   * @param {number} [maxBounces] この回数までのバウンドを跨いで追い続ける（既定1）
+   * @returns {{enter:object, exit:object, mid:{x:number,y:number,z:number,t:number}}|null}
+   */
+  function predictWindow(b, accept, maxT, maxBounces) {
+    const limit = maxT === undefined ? 3 : maxT;
+    const allowed = maxBounces === undefined ? 1 : maxBounces;
+    const s = {
+      x: b.x, y: b.y, z: b.z,
+      px: b.x, py: b.y, pz: b.z,
+      vx: b.vx, vy: b.vy, vz: b.vz,
+      spin: b.spin,
+      wind: b.wind,
+    };
+    const dt = 1 / 120;
+    let bounces = b.bounces || 0;
+    let enter = null;
+    let exit = null;
+    for (let t = 0; t < limit; t += dt) {
+      integrate(s, dt);
+      if (hitsNet(s)) break;
+      if (s.y <= BALL_R && s.vy < 0) {
+        if (bounces - (b.bounces || 0) >= allowed) break; // これ以上は追わない
+        reflectBounce(s);
+        bounces++;
+      }
+      const sample = {
+        x: s.x, y: s.y, z: s.z, t: t + dt, bounces,
+      };
+      if (accept(sample)) {
+        if (!enter) enter = sample;
+        exit = sample;
+      } else if (enter) {
+        break; // 一度満たしてから外れたら、そこで区間はおしまい
+      }
+    }
+    if (!enter) return null;
+    return {
+      enter,
+      exit,
+      // 区間の真ん中＝一番余裕をもって打てる点（両端は帯のふちで、少しずれると打てない）
+      mid: {
+        x: (enter.x + exit.x) / 2,
+        y: (enter.y + exit.y) / 2,
+        z: (enter.z + exit.z) / 2,
+        t: (enter.t + exit.t) / 2,
+      },
+    };
+  }
+
+  /**
    * ボールが指定した z 平面を通過する瞬間の位置。通過する前に着地／ネットしてしまうなら null。
    * ダブルスの前衛が「まだ着地していないボールが自分の目の前を素通りするか（＝ポーチできるか）」
    * を判定するのに使う（isResponder が着地点だけで判断すると、前衛の近くを通る球でも
@@ -272,6 +330,7 @@
     predictApex,
     predictBounceApex,
     predictAtZ,
+    predictWindow,
     solveShot,
     spinGravity,
   };

@@ -847,7 +847,6 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     Math.random = origRandom;
   }
 
-
   ok(sweetSpeed > tapSpeed,
     `sweet-spot serve is faster than releasing immediately: sweet=${sweetSpeed.toFixed(2)} tap=${tapSpeed.toFixed(2)}`);
   ok(sweetSpeed > tooLongSpeed,
@@ -2044,6 +2043,152 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `the smash contact point is somewhere the human can actually stand, got z=${window && window.z}`);
   ok(window && window.dur <= PLAYER.SWING_WINDOW,
     `the smash window is tight enough to need timing (<= SWING_WINDOW), got ${window && window.dur}s`);
+}
+
+// --- physics.predictWindow()：条件を満たすひとつながりの区間を最初のひとつだけ返す ---
+{
+  const { predictWindow } = R.physics;
+  // 真上に打ち上げて落ちてくるだけの球（水平にも少し進む）
+  const ball = {
+    x: 0, y: 1, z: -4, px: 0, py: 1, pz: -4, vx: 0.5, vy: 7, vz: -0.5,
+    spin: 'flat', wind: 0, bounces: 0,
+  };
+  const band = (lo, hi) => predictWindow(ball, (at) => at.y >= lo && at.y <= hi, 3);
+
+  const w = band(2.0, 2.4);
+  ok(!!w, 'a window is found when the trajectory passes through the band');
+  ok(w && w.enter.y >= 2.0 && w.enter.y <= 2.4 && w.exit.y >= 2.0 && w.exit.y <= 2.4,
+    'both ends of the window are inside the band');
+  ok(w && w.enter.t < w.exit.t, 'the window runs forward in time');
+  ok(w && w.mid.t > w.enter.t && w.mid.t < w.exit.t, 'mid sits between the two ends');
+  // 上昇中に最初に帯へ入った区間だけを返す（落ちてくるときの2回目は含めない）
+  ok(w && w.exit.t < 0.6, `only the first pass is returned, got exit t=${w && w.exit.t.toFixed(2)}`);
+  ok(band(20, 30) === null, 'a band the ball never reaches yields null');
+}
+
+// --- スマッシュの先回りヒント：ロブが来たとき「立つべき地点」を返す ---
+{
+  const { solveShot, predictLanding } = R.physics;
+  const { STEP, BALL_R } = R.config.PHYSICS;
+  const CPU = R.config.CPU;
+  const { SMASH_MIN_Y, SMASH_MIN_CHARGE, REACH, REACH_Y, X_LIMIT, Z_FAR_MARGIN } = PLAYER;
+
+  /** CPU がベースラインから打ったロブが飛んでいる最中の局面を作る */
+  const lobIncoming = () => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    const from = { x: 0, y: 1.0, z: HALF_L - 1 };
+    const v = solveShot(from, { x: 0, y: BALL_R, z: -CPU.LOB_Z_MIN }, CPU.LOB_T, undefined, 'flat');
+    Object.assign(g.ball, {
+      x: from.x, y: from.y, z: from.z, px: from.x, py: from.y, pz: from.z,
+      vx: v.vx, vy: v.vy, vz: v.vz,
+      spin: 'flat', wind: 0, bounces: 0, live: true, last: 'cpu',
+    });
+    // ベースライン付近ではヒントを出さない仕様なので、前に詰めた位置を既定にする
+    g.you.x = 0; g.you.z = -COURT.SERVICE - 1;
+    return g;
+  };
+
+  {
+    const g = lobIncoming();
+    const hint = g.smashSpot();
+    ok(!!hint, 'an incoming lob produces a smash hint');
+    ok(hint && hint.y >= SMASH_MIN_Y && hint.y < REACH_Y,
+      `the hinted contact height is inside the smash band, got y=${hint && hint.y}`);
+    ok(hint && Math.abs(hint.x) <= X_LIMIT && hint.z <= PLAYER.Z_NEAR && hint.z >= -(HALF_L + Z_FAR_MARGIN),
+      `the hinted spot is somewhere the human can stand, got (${hint && hint.x}, ${hint && hint.z})`);
+    ok(hint && hint.t > 0 && hint.t < R.config.SMASH_HINT.LEAD_T,
+      `the hint counts down to the contact, got t=${hint && hint.t}`);
+    // 立つべき地点は「打点そのもの」ではなく「そこに立てば届く場所」。着地点とは別物
+    // （着地点で待つとボールは頭上を越えてから落ちてくる）ことを確かめておく。
+    const landing = predictLanding(g.ball);
+    ok(hint && Math.abs(hint.z - landing.z) > 0.5,
+      `the hint is not just the landing spot, hint z=${hint && hint.z} landing z=${landing.z}`);
+  }
+
+  // 先回りしていれば ready、遠くにいれば「間に合わない」になる
+  {
+    const g = lobIncoming();
+    const hint = g.smashSpot();
+    ok(hint && !hint.ready, 'standing back in mid-court is not yet in position');
+    g.you.x = hint.x; g.you.z = hint.z;
+    ok(g.smashSpot().ready, 'standing on the hinted spot flips the hint to ready');
+
+    const far = lobIncoming();
+    far.you.x = X_LIMIT; far.you.z = PLAYER.Z_NEAR; // コートの逆の隅
+    const farHint = far.smashSpot();
+    ok(farHint && !farHint.inTime,
+      'from the far corner there is no time left to run and charge');
+  }
+
+  // 本番の判定と一致する：ヒントの位置で待って溜めて振ると、実際にスマッシュになる
+  {
+    const g = lobIncoming();
+    const hint = g.smashSpot();
+    g.you.x = hint.x; g.you.z = hint.z; // 先回りして待つ
+    let elapsed = 0;
+    while (elapsed < hint.t - STEP) {
+      g.stepBall(STEP);
+      elapsed += STEP;
+    }
+    g.you.swingCharge = SMASH_MIN_CHARGE; // 止まって溜めておいた分（ぎりぎり最低限）
+    g.you.swing = PLAYER.SWING_WINDOW;
+    g.checkSwings();
+    ok(g.you.stroke === 'smash',
+      `waiting on the hinted spot really yields a smash, got ${g.you.stroke}`);
+    ok(Math.hypot(g.ball.x - hint.x, g.ball.z - hint.z) < REACH,
+      'the ball is within reach of the hinted spot at the hinted moment');
+  }
+
+  // ベースライン付近に立っている間はヒントを出さない（そこからでは走る時間だけで滞空を使い切る）
+  {
+    const { HIDE_BASELINE_Z } = R.config.SMASH_HINT;
+    const at = (z) => {
+      const g = lobIncoming();
+      g.you.z = z;
+      return g.smashSpot();
+    };
+    ok(at(-HALF_L) === null, 'standing on the baseline shows no hint');
+    ok(at(-HALF_L - PLAYER.Z_FAR_MARGIN) === null, 'standing behind the baseline shows no hint either');
+    ok(at(-(HALF_L - HIDE_BASELINE_Z) - 0.01) === null,
+      'just inside the hide zone still shows no hint');
+    ok(at(-(HALF_L - HIDE_BASELINE_Z) + 0.3) !== null,
+      'stepping in past the hide zone brings the hint back');
+  }
+
+  // バウンド後にしか打てない球にはヒントを出さない（ノーバウンドで叩ける球だけが対象）
+  {
+    // ロブをバウンド直前まで進めてから、ノーバウンドの帯を通り過ぎさせる。
+    // この後もバウンドして高く弾む＝ルール上はスマッシュできるが、案内はしない。
+    const g = lobIncoming();
+    for (let t = 0; t < 3 && g.ball.bounces < 1; t += R.config.PHYSICS.STEP) g.stepBall(R.config.PHYSICS.STEP);
+    ok(g.ball.bounces >= 1, 'precondition: the lob has bounced');
+    // 弾んだ後も打てる高さの帯を通る＝ルール上はスマッシュできる球であることを確かめてから、
+    // それでもヒントが出ないことを確認する（＝トリビアルに null なのではない）。
+    const after = R.physics.predictWindow(
+      g.ball, (at) => at.y >= SMASH_MIN_Y && at.y < REACH_Y, 2, 1,
+    );
+    ok(!!after, 'precondition: the bounced ball still climbs back into the smash height band');
+    g.you.x = after.mid.x; g.you.z = after.mid.z; // その打点で待ち構えても…
+    ok(g.smashSpot() === null, '…a ball that can only be smashed after the bounce produces no hint');
+  }
+
+  // 低い普通の返球にはヒントを出さない／自分が打った球にも出さない
+  {
+    const g = lobIncoming();
+    Object.assign(g.ball, { y: 1.0, vy: 0.5 }); // 低い平たい球に差し替える
+    ok(g.smashSpot() === null, 'a low drive produces no hint');
+
+    const own = lobIncoming();
+    own.ball.last = 'you';
+    ok(own.smashSpot() === null, 'the ball you just hit yourself produces no hint');
+
+    const idle = lobIncoming();
+    idle.phase = 'serve';
+    ok(idle.smashSpot() === null, 'no hint outside a rally');
+  }
 }
 
 // --- CPU/AI の移動：斜めでも設定速度を超えない（x/z 別々に step を足すと √2 倍速くなる） ---

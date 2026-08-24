@@ -32,10 +32,11 @@
     };
     const impactFlash = scene3d.createImpactFlash();
     const trail = scene3d.createTrail();
+    const smashHint = scene3d.createSmashHint();
     scene.add(
       you, cpu, youMate, cpuMate, ballMesh,
       shadows.ball, shadows.you, shadows.cpu, shadows.youMate, shadows.cpuMate,
-      impactFlash, trail,
+      impactFlash, trail, smashHint,
     );
 
     addEventListener('resize', stage.resize);
@@ -82,6 +83,8 @@
       // ラリー中に出しっぱなしだと本来の目的（アウトの結果を振り返る）を超えて
       // 「次にどこへ来るか」の手がかりになってしまうため。
       scene3d.updateTrail(trail, state.phase === 'rally' ? NO_TRAIL : state.trail);
+      // スマッシュの先回り地点。打てる球が来ていないフレームは state.smashHint が null になる。
+      scene3d.placeSmashHint(smashHint, state.smashHint);
 
       syncCamera(state.you, dt);
     }

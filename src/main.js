@@ -64,6 +64,7 @@
       game.update(dt);
       world.sync(game, dt);
       hud.setCharge(game.chargeMeter());
+      hud.setSmashTip(game.smashHint);
     }
     world.render();
   }

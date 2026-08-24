@@ -420,6 +420,33 @@
   };
 
   /**
+   * スマッシュの先回りヒント。高い球が来ているとき「どこに立てばスマッシュで打てるか」を
+   * コート上のマーカーで示す（地点の計算は game.js の smashSpot()、描画は scene/hint.js）。
+   * スマッシュには PLAYER.SMASH_MIN_Y 以上の打点と SMASH_MIN_CHARGE 以上の溜めの両方が要り、
+   * しかも溜めは足を止めていないと貯まらない（CHARGE.MOVE_CAP_FLOOR=0）ので、打点の場所へ
+   * 早めに先回りして止まる必要がある。その「どこへ・あと何秒で」を可視化するのが目的。
+   */
+  const SMASH_HINT = {
+    LEAD_T: 2.4,          // 何秒先の打点まで探すか（ロブの滞空はおよそ1.5秒なので十分な先読み）
+    // ベースラインからこの距離以内（後ろ側も含む）に立っているときはヒントを出さない。
+    // そこから深いロブの打点（サービスラインの少し後ろ）まで走ると、走る時間だけで滞空時間を
+    // ほぼ使い切ってしまい、着いてから溜める時間（CHARGE.MAX_TIME × SMASH_MIN_CHARGE ＝
+    // 約0.43秒）が残らない＝どのみち間に合わない。出しても「間に合いません」と言い続ける
+    // だけの表示になるので、そもそも出さない。前に詰めた瞬間から出るようになる。
+    HIDE_BASELINE_Z: 1.0,
+    RING_R: 0.95,         // 立つべき地点を示す輪の半径(m)。PLAYER.REACH(1.55)より内側＝輪の中ならまず届く
+    LEAD_RING_SCALE: 3.4, // 打点まで LEAD_T 秒あるときの外側の輪の倍率。時間とともに RING_R まで縮む
+    READY_DIST: 1.1,      // 打点からこの距離以内に立てていれば「あとは溜めて離すだけ」の表示に変える
+    MARK_R: 0.15,         // 打点の高さに浮かべる印の大きさ(m)
+    POLE_R: 0.03,         // 打点の高さを示す細い柱の半径(m)
+    COLOR: 0x4ad9f2,      // 走れば間に合う
+    COLOR_READY: 0xffe14a,// もうその場に立てている（溜めて離すだけ）
+    COLOR_LATE: 0xef6b5a, // 全力で走っても溜める時間が足りない
+    OPACITY: 0.8,
+    LEAD_OPACITY: 0.35,   // 外側の輪は控えめに（コートの見通しを塞がない）
+  };
+
+  /**
    * ラリー中の直近1打の軌跡表示。誰が打ったか（you/cpu/youMate/cpuMate）に関わらず、
    * IN/OUTにも関わらず、常に一番新しい1本だけ残す（次に誰かが打った瞬間に描き直す）。
    * ラリー中は隠し、ポイントが決まった後にだけ見せる（world.js 参照）。落下予測マーカーを
@@ -587,6 +614,6 @@
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO,
-    CPU_LEVELS, applyCpuLevel, SPIN, WIND, TRAIL, DROP,
+    CPU_LEVELS, applyCpuLevel, SPIN, WIND, TRAIL, DROP, SMASH_HINT,
   };
 })(window.RallyOne = window.RallyOne || {});
