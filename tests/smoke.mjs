@@ -2162,5 +2162,52 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(hold(g, CHARGE.MAX_TIME + 0.2, 0) === 1, 'stopping lets the charge build again');
 }
 
+// --- サーブのコース：3コースが隣り合ってサービスボックスの幅を切れ目なく覆う ---
+{
+  ok(SERVE.AIM_T_MAX >= SERVE.AIM_BODY_MIN,
+    `T and body touch, no dead zone between them (${SERVE.AIM_T_MAX} vs ${SERVE.AIM_BODY_MIN})`);
+  ok(SERVE.AIM_BODY_MAX >= SERVE.AIM_WIDE_MIN,
+    `body and wide touch (${SERVE.AIM_BODY_MAX} vs ${SERVE.AIM_WIDE_MIN})`);
+  ok(SERVE.AIM_WIDE_MAX < HALF_W - R.config.PHYSICS.BALL_R,
+    `the widest aim still leaves room inside the sideline, got ${SERVE.AIM_WIDE_MAX}`);
+
+  // 実際に3コースを打ち分けたとき、着地がボックスの幅を満遍なく覆うこと
+  const g = new R.Game({ input: { moveX: 0, moveZ: 0, lob: false }, hooks: noHooks });
+  g.start();
+  const BINS = 8;
+  const seen = new Set();
+  for (let i = 0; i < 600; i++) {
+    g.input.moveX = [0, 1, -1][i % 3];
+    const targetSign = i % 2 === 0 ? 1 : -1;
+    const x = g.serveAimMagnitude(targetSign);
+    ok(x >= 0 && x <= SERVE.AIM_WIDE_MAX, `aim stays inside the box, got ${x}`);
+    seen.add(Math.min(BINS - 1, Math.floor(x / (HALF_W / BINS))));
+  }
+  ok(seen.size === BINS,
+    `all ${BINS} slices of the box's width get served to, got ${seen.size} (${[...seen].sort().join(',')})`);
+}
+
+// --- サーブの深さ：トス中の ↑↓ で深い／浅いを選べる（無入力なら全域） ---
+{
+  const input = { moveX: 0, moveZ: 0, lob: false };
+  const g = new R.Game({ input, hooks: noHooks });
+  g.start();
+  const sample = (mz) => {
+    input.moveZ = mz;
+    const out = [];
+    for (let i = 0; i < 200; i++) out.push(g.serveDepth());
+    return { min: Math.min(...out), max: Math.max(...out) };
+  };
+  const deep = sample(1);
+  const shallow = sample(-1);
+  const any = sample(0);
+  ok(deep.max <= SERVE.DEPTH_DEEP_MAX, `↑ keeps the serve deep, got max ${deep.max}`);
+  ok(shallow.min >= SERVE.DEPTH_SHORT_MIN, `↓ keeps the serve short, got min ${shallow.min}`);
+  ok(deep.max < shallow.min, 'the deep and short bands do not overlap');
+  ok(any.min < deep.max && any.max > shallow.min, 'no input uses the whole depth range');
+  // どの深さもサービスボックスの中（ネットとサービスラインの間）に収まる
+  ok(SERVE.DEPTH_MAX < COURT.SERVICE, `even the shortest serve clears the net side, got ${SERVE.DEPTH_MAX}`);
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);

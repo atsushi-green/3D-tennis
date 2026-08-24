@@ -433,7 +433,7 @@
       if (server === 'you') {
         this.hooks.call(
           faultReason ? 'セカンドサーブ' : 'サーブ',
-          faultReason ? `${faultReason} — もう一度` : '←→ でコース選択 ／ B/V/C 押しっぱなしで打つ',
+          faultReason ? `${faultReason} — もう一度` : '←→ 左右のコース ／ ↑↓ 深さ ／ B/V/C 押しっぱなしで打つ',
         );
       } else if (server === 'youMate') {
         // 人間のチームだが、今回は相方の番。人間は何もしなくてよい
@@ -509,7 +509,7 @@
       const target = {
         x: targetSign * magnitude,
         y: BALL_R,
-        z: dir * (COURT.SERVICE - rand(SERVE.DEPTH_MIN, SERVE.DEPTH_MAX)),
+        z: dir * (COURT.SERVICE - (who === 'you' ? this.serveDepth() : rand(SERVE.DEPTH_MIN, SERVE.DEPTH_MAX))),
       };
       // プレイヤーは「打つ」瞬間の溜め量で威力が変わる。CPU/AI（cpu・cpuMate・youMate）は
       // 溜め演出がない代わりに、常に一定のそこそこの威力（SERVE.CPU_T）で打つ。
@@ -552,6 +552,19 @@
       return aim === targetSign
         ? rand(SERVE.AIM_WIDE_MIN, SERVE.AIM_WIDE_MAX)
         : rand(SERVE.AIM_T_MIN, SERVE.AIM_T_MAX);
+    }
+
+    /**
+     * プレイヤーのサーブの深さ（サービスラインからどれだけ手前に落とすか。小さいほど深い）。
+     * トス中は移動入力が無視される（movePlayers() が tossActive の間は動かさない）ので、
+     * ↑↓ をそのまま深さの選択に使える＝新しいキーを増やさずにコースを 3→9 通りにできる。
+     * 無入力なら全域からランダム。
+     */
+    serveDepth() {
+      const aim = this.input.moveZ; // 1 = 前（＝深く）, -1 = 後ろ（＝浅く）
+      if (aim > 0) return rand(SERVE.DEPTH_MIN, SERVE.DEPTH_DEEP_MAX);
+      if (aim < 0) return rand(SERVE.DEPTH_SHORT_MIN, SERVE.DEPTH_MAX);
+      return rand(SERVE.DEPTH_MIN, SERVE.DEPTH_MAX);
     }
 
     /** CPU/AI のサーブのコース選択。プレイヤーと同じ T／ボディ／ワイドから毎回ランダムに選ぶ。 */
@@ -1074,7 +1087,7 @@
           // 打たずに落ちてきた。トスをやり直せるようにリセットする（フォルトにはしない）
           this.tossActive = false;
           this.placeServeBall();
-          this.hooks.call('サーブ', '←→ でコース選択 ／ B/V/C 押しっぱなしで打つ');
+          this.hooks.call('サーブ', '←→ 左右のコース ／ ↑↓ 深さ ／ B/V/C 押しっぱなしで打つ');
         }
         return;
       }
