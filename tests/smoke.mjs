@@ -831,9 +831,22 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 
   // 「長すぎ」はトスの自動リセット（約0.79秒）より確実に手前で、かつ CHARGE_WINDOW の
   // 下り坂の途中（威力が0まで落ちきる少し手前）になるタイミングを選ぶ。
-  const tapSpeed = speedOf(landingFor(0)); // 即リリース＝早すぎ
-  const sweetSpeed = speedOf(landingFor(Math.round(CHARGE_SWEET_T * 60))); // ちょうど良いタイミング
-  const tooLongSpeed = speedOf(landingFor(Math.round((CHARGE_SWEET_T + CHARGE_WINDOW * 0.9) * 60))); // 長すぎ
+  // サーブのコース・深さは毎回ランダム（rand()）なので、そのままだと3本の狙いがばらばらに
+  // なり、飛距離の差が溜めの差を上回って球速の比較が成立しない（実測：約10%の確率で
+  // 「長すぎのほうが速い」結果になっていた）。3本とも同じ狙いになるよう乱数を固定する。
+  const origRandom = Math.random;
+  Math.random = () => 0.5;
+  let tapSpeed;
+  let sweetSpeed;
+  let tooLongSpeed;
+  try {
+    tapSpeed = speedOf(landingFor(0)); // 即リリース＝早すぎ
+    sweetSpeed = speedOf(landingFor(Math.round(CHARGE_SWEET_T * 60))); // ちょうど良いタイミング
+    tooLongSpeed = speedOf(landingFor(Math.round((CHARGE_SWEET_T + CHARGE_WINDOW * 0.9) * 60))); // 長すぎ
+  } finally {
+    Math.random = origRandom;
+  }
+
 
   ok(sweetSpeed > tapSpeed,
     `sweet-spot serve is faster than releasing immediately: sweet=${sweetSpeed.toFixed(2)} tap=${tapSpeed.toFixed(2)}`);
