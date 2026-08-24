@@ -9,6 +9,7 @@
   'use strict';
 
   const { GAIT, PLAYER, SWING, THEME } = RallyOne.config;
+  const { clamp, lerp } = RallyOne.math;
   const scene3d = RallyOne.scene = RallyOne.scene || {};
 
   const TWO_PI = Math.PI * 2;
@@ -141,15 +142,17 @@
    *   鏡映しするので、バックハンドでもテイクバック→打点→フォロースルーが正しい前後の
    *   向きのまま、体の逆サイドで振られる。
    * - サーブ: rotation.z（縦振り）。トス中は構え、打った瞬間から真上→前へ振り下ろす。
-   * - スマッシュ: サーブと同じ rotation.z だが、トスの構えを経ずに振りかぶった位置から
-   *   鋭く振り下ろす（フォア/バックの区別はない）。
+   * - スマッシュ: 仰角(rotation.z)と前後の傾き(rotation.x)を同時に動かし、頭の後ろに
+   *   振りかぶった位置から真上（打点）を通って体の前へ振り下ろす（フォア/バックの区別は
+   *   ない）。跳んで打つので、体の浮き・脚のはさみ跳びは applySmashJump() が受け持つ。
    * - ボレー: フォア/バックと同じ rotation.y だが、テイクバックがほとんどない短いパンチ。
    * @param {THREE.Group} player
    * @param {number} anim 残り時間（秒）。0 なら構え／トスの姿勢
    * @param {'forehand'|'backhand'|'serve'|'smash'|'volley-forehand'|'volley-backhand'} [stroke]
    * @param {boolean} [tossing] トス中（打つ前）かどうか。サーブの構えを出す
-   * @param {'forehand'|'backhand'|null} [prep] 打つ前のテイクバック。まだ振っていない
-   *   （anim<=0）間、ボールがどちらの打点に来そうかに応じてラケットを引いておく。
+   * @param {'forehand'|'backhand'|'smash'|null} [prep] 打つ前のテイクバック。まだ振って
+   *   いない（anim<=0）間、ボールがどちらの打点に来そうかに応じてラケットを引いておく。
+   *   'smash' は高い球を溜めているとき＝頭の後ろに担いだ振りかぶりの構え。
    * @param {number} [chargeFrac] Space を溜めている間だけ 0〜1 で伸びる値。溜めるほど
    *   GROUND_START からさらに CHARGE_PULL だけ深くテイクバックし、離した瞬間との
    *   落差で「今しっかり溜めている」ことが分かるようにする。
@@ -167,32 +170,48 @@
       if (tossing) {
         arm.rotation.y = 0;
         arm.rotation.z = SWING.SERVE_READY_Z;
+        arm.rotation.x = 0;
+      } else if (prep === 'smash') {
+        // 高い球を溜めている間は、頭の後ろにラケットを担いだ振りかぶりの構え。
+        // 溜めるほど深く担いで、離した瞬間の振り下ろしとの落差を大きくする。
+        arm.rotation.y = 0;
+        arm.rotation.z = SWING.SMASH_READY_Z;
+        arm.rotation.x = SWING.SMASH_READY_X * (1 + (chargeFrac || 0) * 0.35);
       } else if (prep) {
         const pullBack = SWING.GROUND_START + (chargeFrac || 0) * SWING.CHARGE_PULL;
         arm.rotation.y = mirrorGroundAngle(pullBack, prep === 'backhand');
         arm.rotation.z = 0;
+        arm.rotation.x = 0;
       } else {
         arm.rotation.y = SWING.REST_Y;
         arm.rotation.z = 0;
+        arm.rotation.x = 0;
       }
       torso.rotation.y = 0;
       return;
     }
 
-    const progress = (ARM_SPAN - anim) / ARM_SPAN;
+    // スマッシュだけはモーションが長い（PLAYER.SMASH_ANIM）ので、進行度もその長さで割る。
+    // 他のストロークは従来どおり ARM_SPAN 基準（＝既存の振り付けを変えない）。
+    const span = stroke === 'smash' ? PLAYER.SMASH_ANIM : ARM_SPAN;
+    const progress = clamp((span - anim) / span, 0, 1);
 
     if (stroke === 'serve') {
       arm.rotation.y = 0;
       arm.rotation.z = SWING.SERVE_START_Z + progress * (SWING.SERVE_FOLLOW_Z - SWING.SERVE_START_Z);
+      arm.rotation.x = 0;
       torso.rotation.y = 0;
       return;
     }
 
     if (stroke === 'smash') {
-      // サーブと同じ縦振り(rotation.z)の系統。トスの構えを経ない分、振りかぶった位置から
-      // 始まり、フォア/バックの区別なく体の正面へ鋭く振り下ろす。
+      // 仰角と前後の傾きを同時に動かして、真上（打点）から体の前へ振り下ろす弧を作る。
+      // 振り始め（打点）を長く見せたいので、進行度を後半ほど速く進む曲線に乗せる
+      // （＝打った瞬間の「腕が上がりきった絵」が一瞬でも読み取れる）。
+      const swing = progress * progress;
       arm.rotation.y = 0;
-      arm.rotation.z = SWING.SMASH_START_Z + progress * (SWING.SMASH_FOLLOW_Z - SWING.SMASH_START_Z);
+      arm.rotation.z = lerp(SWING.SMASH_START_Z, SWING.SMASH_FOLLOW_Z, swing);
+      arm.rotation.x = lerp(SWING.SMASH_START_X, SWING.SMASH_FOLLOW_X, swing);
       torso.rotation.y = 0;
       return;
     }
@@ -205,6 +224,7 @@
         SWING.VOLLEY_START + progress * SWING.VOLLEY_SWEEP, backhandVolley,
       );
       arm.rotation.z = 0;
+      arm.rotation.x = 0;
       // 通常のグラウンドストロークより体幹のひねりも控えめ（コンパクトな動作のため）
       torso.rotation.y = (backhandVolley ? -1 : 1) * SWING.TORSO_TWIST * 0.5 * Math.sin(progress * Math.PI);
       return;
@@ -217,8 +237,53 @@
     const sweep = SWING.GROUND_SWEEP - (swingCharge || 0) * SWING.CHARGE_PULL;
     arm.rotation.y = mirrorGroundAngle(start + progress * sweep, backhand);
     arm.rotation.z = 0;
+    arm.rotation.x = 0;
     // sin カーブでひねって戻す（構え→打点→フォロースルーで元の向きに近づく）
     torso.rotation.y = (backhand ? -1 : 1) * SWING.TORSO_TWIST * Math.sin(progress * Math.PI);
+  };
+
+  /**
+   * スマッシュのジャンプの高さ(m)。打点の瞬間には既に跳び上がっていて
+   * （SMASH_JUMP_START の高さ）、SMASH_JUMP_PEAK の進行度で頂点、振り終わりで着地する。
+   * sin カーブに乗せているので、頂点付近でふわりと粘り、着地は滑らかに0へ収束する。
+   * 見た目だけの値で、当たり判定（PLAYER.REACH_Y）には一切影響しない。
+   */
+  function smashLift(anim, stroke) {
+    if (stroke !== 'smash' || anim <= 0) return 0;
+    const progress = clamp((PLAYER.SMASH_ANIM - anim) / PLAYER.SMASH_ANIM, 0, 1);
+    const rise = Math.asin(clamp(SWING.SMASH_JUMP_START, 0, 1)); // 打点の瞬間の位相
+    const peak = SWING.SMASH_JUMP_PEAK;
+    const phase = progress < peak
+      ? lerp(rise, Math.PI / 2, progress / peak)               // 打点 → 頂点
+      : lerp(Math.PI / 2, Math.PI, (progress - peak) / (1 - peak)); // 頂点 → 着地
+    return SWING.SMASH_JUMP_H * Math.sin(phase);
+  }
+
+  /**
+   * スマッシュの「跳んでいる体」。setGaitPose() の後に呼ぶこと（歩行が同じ関節を
+   * 毎フレーム書くので、その上から浮いている量ぶんだけ上書きする）。
+   * - 体そのものを浮かせる（メッシュの y。ゲーム側の座標は動かさない＝表示だけ）
+   * - はさみ跳び：ラケット側の脚を後ろへ蹴り上げ、逆脚を前へ振り出す
+   * - 体幹：打点では反り、振り下ろしに合わせて前へ折る
+   * @returns {number} 浮いた高さ(m)。影を小さくするのに使う（world.js 参照）
+   */
+  scene3d.applySmashJump = function applySmashJump(player, anim, stroke) {
+    const lift = smashLift(anim, stroke);
+    player.position.y = lift;
+    if (lift <= 0) return 0;
+
+    const gait = player.userData.gait;
+    const air = clamp(lift / SWING.SMASH_JUMP_H, 0, 1); // 浮いているほど強くポーズを効かせる
+    const progress = clamp((PLAYER.SMASH_ANIM - anim) / PLAYER.SMASH_ANIM, 0, 1);
+    const [front, back] = gait.legs; // legs[1] がラケット側（モデルのローカル +x）
+
+    back.hip.rotation.x = lerp(back.hip.rotation.x, SWING.SMASH_LEG_SPLIT, air);
+    back.knee.rotation.x = lerp(back.knee.rotation.x, -SWING.SMASH_KNEE_TUCK, air);
+    front.hip.rotation.x = lerp(front.hip.rotation.x, -SWING.SMASH_LEG_SPLIT * 0.6, air);
+    front.knee.rotation.x = lerp(front.knee.rotation.x, -SWING.SMASH_KNEE_TUCK * 0.25, air);
+    gait.offArm.rotation.x = lerp(gait.offArm.rotation.x, -SWING.SMASH_LEG_SPLIT * 0.5, air);
+    gait.torso.rotation.x = lerp(SWING.SMASH_TORSO_ARCH, SWING.SMASH_TORSO_X, progress * progress);
+    return lift;
   };
 
   /**

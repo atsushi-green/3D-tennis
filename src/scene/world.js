@@ -56,7 +56,9 @@
       mesh.position.set(state.x, 0, state.z);
       scene3d.setSwingPose(mesh, state.anim, state.stroke, !!tossing, state.prep, state.chargeFrac, state.swingCharge);
       scene3d.setGaitPose(mesh, state.speed, maxSpeed, dt);
-      scene3d.placeGroundShadow(shadow, state);
+      // スマッシュのジャンプは歩行の後（同じ関節を上書きするため）。浮いた高さは影に渡す。
+      const lift = scene3d.applySmashJump(mesh, state.anim, state.stroke);
+      scene3d.placeGroundShadow(shadow, state, lift);
     }
 
     /** @param {{ball:object, you:object, cpu:object, youMate:object, cpuMate:object, doubles:boolean}} state */

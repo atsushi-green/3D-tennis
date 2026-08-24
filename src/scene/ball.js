@@ -2,7 +2,7 @@
 (function (RallyOne) {
   'use strict';
 
-  const { PHYSICS, THEME, TRAIL } = RallyOne.config;
+  const { PHYSICS, SWING, THEME, TRAIL } = RallyOne.config;
   const scene3d = RallyOne.scene = RallyOne.scene || {};
 
   const GROUND_Y = 0.012; // 影はコート面より少し上に置いて Z ファイティングを避ける
@@ -92,9 +92,14 @@
     shadow.material.opacity = Math.min(Math.max(0.34 - ball.y * 0.02, 0.06), 0.34);
   };
 
-  scene3d.placeGroundShadow = function placeGroundShadow(shadow, actor) {
+  /**
+   * @param {number} [lift] スマッシュのジャンプで浮いている高さ(m)。浮いているほど
+   *   影を小さくして、跳んでいることが真上からでなくても分かるようにする。
+   */
+  scene3d.placeGroundShadow = function placeGroundShadow(shadow, actor, lift) {
+    const air = Math.min(Math.max((lift || 0) / SWING.SMASH_JUMP_H, 0), 1);
     shadow.position.set(actor.x, GROUND_Y, actor.z);
-    shadow.scale.setScalar(0.34);
+    shadow.scale.setScalar(0.34 * (1 - (1 - SWING.SMASH_SHADOW_SHRINK) * air));
   };
 
   /**

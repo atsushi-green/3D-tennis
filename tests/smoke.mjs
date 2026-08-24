@@ -2191,6 +2191,65 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   }
 }
 
+// --- スマッシュのモーション：長めのアニメと、溜め中の「振りかぶり」の構え ---
+{
+  const { solveShot } = R.physics;
+  const { BALL_R } = R.config.PHYSICS;
+  const CPU = R.config.CPU;
+
+  ok(PLAYER.SMASH_ANIM > PLAYER.SWING_ANIM,
+    `the smash animation is longer than a normal swing (跳ぶ分だけ見せる時間が要る), got ${PLAYER.SMASH_ANIM}`);
+
+  // 打った瞬間、スマッシュだけ長いモーション時間が入る
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.you.x = 0; g.you.z = -5;
+    g.ball.x = 0.3; g.ball.y = PLAYER.SMASH_MIN_Y + 0.2; g.ball.z = -5;
+    g.you.swingCharge = PLAYER.SMASH_MIN_CHARGE + 0.1;
+    g.hit('you');
+    ok(g.you.stroke === 'smash', 'precondition: this hit is a smash');
+    ok(g.you.anim === PLAYER.SMASH_ANIM, `a smash uses SMASH_ANIM, got ${g.you.anim}`);
+
+    g.ball.y = 1.0; g.ball.bounces = 1; g.ball.last = 'cpu';
+    g.you.chargeStroke = null;
+    g.hit('you');
+    ok(g.you.stroke !== 'smash' && g.you.anim === PLAYER.SWING_ANIM,
+      `a normal groundstroke still uses SWING_ANIM, got ${g.you.stroke}/${g.you.anim}`);
+  }
+
+  // スマッシュで打てる位置に立って溜めている間は、構えが 'smash'（頭の後ろへ担ぐ振りかぶり）になる
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    const from = { x: 0, y: 1.0, z: HALF_L - 1 };
+    const v = solveShot(from, { x: 0, y: BALL_R, z: -CPU.LOB_Z_MIN }, CPU.LOB_T, undefined, 'flat');
+    Object.assign(g.ball, {
+      x: from.x, y: from.y, z: from.z, px: from.x, py: from.y, pz: from.z,
+      vx: v.vx, vy: v.vy, vz: v.vz, spin: 'flat', wind: 0, bounces: 0, live: true, last: 'cpu',
+    });
+    g.you.x = 0; g.you.z = -COURT.SERVICE - 1; // ベースライン付近はヒントを出さないので前に詰めておく
+
+    const hint = g.smashSpot();
+    g.you.x = hint.x; g.you.z = hint.z; // ヒントの地点で待つ
+    g.chargeStart('flat');
+    g.smashHint = g.smashSpot();
+    g.updatePrep();
+    ok(g.smashHint.ready && g.you.prep === 'smash',
+      `charging on the hinted spot shows the wind-up pose, got ${g.you.prep}`);
+
+    // 同じ溜めでも、スマッシュで打てる位置にいなければ従来どおりフォア/バックのテイクバック
+    g.you.x = PLAYER.X_LIMIT; g.you.z = PLAYER.Z_NEAR;
+    g.smashHint = g.smashSpot();
+    g.updatePrep();
+    ok(g.you.prep === 'forehand' || g.you.prep === 'backhand',
+      `away from the spot the takeback stays a normal groundstroke, got ${g.you.prep}`);
+  }
+}
+
 // --- CPU/AI の移動：斜めでも設定速度を超えない（x/z 別々に step を足すと √2 倍速くなる） ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });

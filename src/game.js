@@ -679,7 +679,8 @@
       ball.impactPower = charge; // フラッシュの大きさに使う
       this.resetTrail();
 
-      player.anim = PLAYER.SWING_ANIM;
+      // スマッシュだけは跳んで打つぶんモーションが長い（scene/player.js 参照）。
+      player.anim = stroke === 'smash' ? PLAYER.SMASH_ANIM : PLAYER.SWING_ANIM;
       player.stroke = stroke;
       this.hooks.sound('hit', TEAM_OF[who], stroke, charge); // 音程はチーム単位（誰が打っても同じ）
     }
@@ -861,8 +862,9 @@
       // 見た目でも分かるよう、空振りでもスイングモーションだけは再生する。
       if (swingBefore > 0 && this.you.swing === 0) this.missSwing();
 
-      this.updatePrep();
+      // 構えの決定（updatePrep）が「スマッシュで打てる位置にいるか」を見るので、先に更新する。
       this.smashHint = this.smashSpot();
+      this.updatePrep();
 
       // トスの自動リセットなど、このフレームの stepBall() の結果を見てから
       // 溜めを継続してよいか判定する（先に判定すると1フレーム遅れてしまう）。
@@ -895,10 +897,16 @@
         this.cpuMate.prep = null;
         return;
       }
-      // 溜めている間は chargeStart() で固定した向きを使い続ける（毎フレーム判定し直さない）
-      this.you.prep = this.you.charging
-        ? this.you.chargeStroke
-        : this.computePrep('you', PLAYER.PREP_REACH);
+      // 溜めている間は chargeStart() で固定した向きを使い続ける（毎フレーム判定し直さない）。
+      // ただし、スマッシュで打てる位置に立って溜めているときだけは、フォア/バックの
+      // テイクバックではなく「頭の後ろに担ぐ振りかぶり」の構えにする（そのまま離せば
+      // スマッシュになる、ということが構えの時点で見て分かる）。
+      const windUpSmash = this.you.charging && !!this.smashHint && this.smashHint.ready;
+      this.you.prep = windUpSmash
+        ? 'smash'
+        : this.you.charging
+          ? this.you.chargeStroke
+          : this.computePrep('you', PLAYER.PREP_REACH);
       this.cpu.prep = this.computePrep('cpu', PLAYER.CPU_PREP_REACH);
       this.youMate.prep = this.doubles ? this.computePrep('youMate', PLAYER.CPU_PREP_REACH) : null;
       this.cpuMate.prep = this.doubles ? this.computePrep('cpuMate', PLAYER.CPU_PREP_REACH) : null;
