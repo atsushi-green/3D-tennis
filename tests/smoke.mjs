@@ -2122,5 +2122,45 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `and that is meaningfully different from the old per-axis clamp (apex x=${apex.x}), ${Math.abs(apex.x - target.x).toFixed(2)}m apart`);
 }
 
+// --- ラリーの溜め：走っている間は溜まらず、既に溜めた分も抜けていく ---
+{
+  const CHARGE = R.config.CHARGE;
+  const charging = () => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    Object.assign(g.you, { charging: true, chargeTime: 0, speed: 0 });
+    return g;
+  };
+  const hold = (g, seconds, speed) => {
+    for (let i = 0; i < Math.round(seconds * 60); i++) {
+      g.you.speed = speed;
+      g.tickCharge(1 / 60);
+    }
+    return g.chargeMeter();
+  };
+
+  ok(charging().you && true, 'setup');
+  // 足を止めていればこれまで通りフル溜めできる
+  ok(hold(charging(), CHARGE.MAX_TIME + 0.2, 0) === 1, 'standing still still reaches a full charge');
+  // 全力で走っている間はまったく溜まらない
+  ok(hold(charging(), 2, PLAYER.SPEED) === 0, 'sprinting builds no charge at all');
+  // 歩く程度なら途中まで溜まる（0 でも満タンでもない）
+  const jog = hold(charging(), 2, PLAYER.SPEED / 2);
+  ok(jog > 0 && jog < 1, `jogging caps the charge partway, got ${jog}`);
+
+  // 止まって溜め切ってから走り出すと、溜めた分が抜けていく（＝フル溜めを持ち運べない）
+  const g = charging();
+  ok(hold(g, CHARGE.MAX_TIME + 0.2, 0) === 1, 'precondition: fully charged while stationary');
+  const afterStep = hold(g, 0.2, PLAYER.SPEED);
+  ok(afterStep > 0 && afterStep < 1, `one step bleeds some charge but not all of it, got ${afterStep}`);
+  ok(hold(g, 1, PLAYER.SPEED) === 0, 'running any distance drains the charge completely');
+  // 抜ける速さは溜まる速さより速い（走りながら溜め直せない）
+  ok(CHARGE.MOVE_DECAY > 1, `the drain outruns the build rate, got ${CHARGE.MOVE_DECAY}`);
+
+  // 走るのをやめれば溜め直せる
+  ok(hold(g, CHARGE.MAX_TIME + 0.2, 0) === 1, 'stopping lets the charge build again');
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);

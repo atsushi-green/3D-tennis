@@ -331,8 +331,12 @@
         return;
       }
       const capTime = CHARGE.MAX_TIME * this.chargeSpeedCap(this.you.speed);
-      // 速度キャップを超えて増やさないが、既に到達した溜め量は（移動でキャップが下がっても）減らさない
-      this.you.chargeTime = Math.min(this.you.chargeTime + dt, Math.max(capTime, this.you.chargeTime));
+      // 動き出してキャップが今の溜め量を下回ったら、溜めた分はキャップまで抜けていく。
+      // 以前は「減らさない」仕様だったため、止まって溜め切ってから走り出せばフル溜めを
+      // そのまま持ち運べ、移動によるキャップが実質的に効いていなかった。
+      this.you.chargeTime = this.you.chargeTime > capTime
+        ? Math.max(capTime, this.you.chargeTime - CHARGE.MOVE_DECAY * dt)
+        : Math.min(this.you.chargeTime + dt, capTime);
     }
 
     /** 移動速度から溜め上限（0〜1、MAX_TIMEに対する割合）を求める。動くほど溜めにくくなる。 */
