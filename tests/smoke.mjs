@@ -2290,6 +2290,100 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     'the same ball is reached when there was time to read it');
 }
 
+// --- ポイントが決まったとき、取った側が最後に放った球種を出す ---
+{
+  const CHARGE = R.config.CHARGE;
+  const label = (setup, input = fakeInput) => {
+    const g = new R.Game({ input, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.you.x = 0; g.you.z = -HALF_L;
+    Object.assign(g.ball, {
+      x: 0.3, y: 1.0, z: -HALF_L + 0.5, bounces: 1, last: 'cpu', live: true, wind: 0,
+    });
+    setup(g);
+    g.hit('you');
+    return g.lastShotBy.you;
+  };
+
+  ok(label((g) => { g.you.chargeSpin = 'flat'; g.you.swingCharge = 1; }) === 'フラットショット',
+    'a plain drive is reported as a flat shot');
+  ok(label((g) => { g.chargeStart('top'); g.chargeRelease(); }) === 'スピンショット',
+    'topspin is reported as a spin shot');
+  ok(label((g) => { g.chargeStart('slice'); g.you.chargeTime = CHARGE.MAX_TIME; g.chargeRelease(); }) === 'スライスショット',
+    'a charged slice is reported as a slice shot');
+  ok(label((g) => { g.chargeStart('slice'); g.chargeRelease(); }) === 'ドロップショット',
+    'an uncharged slice (= drop shot) is reported as a drop shot');
+  ok(label((g) => { g.you.swingCharge = 1; }, { moveX: 0, moveZ: 0, lob: true }) === 'ロブ',
+    'a lob is reported as a lob, not as the spin it was hit with');
+  ok(label((g) => {
+    g.you.z = -1.5; g.ball.z = -1.6; g.ball.bounces = 0; // サービスラインより前＋ノーバウンド＝ボレー
+    g.ball.x = 0.55;
+  }) === 'ボレー', 'a volley is reported as a volley');
+  ok(label((g) => {
+    g.ball.y = PLAYER.SMASH_MIN_Y + 0.3;
+    g.you.swingCharge = PLAYER.SMASH_MIN_CHARGE + 0.1;
+  }) === 'スマッシュ', 'a smash is reported as a smash');
+
+  // サーブ（エースはこれで決まる）
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.chargeStart('flat');   // トス
+    g.chargeStart('flat');   // 溜め始め
+    g.chargeRelease();       // 打つ
+    ok(g.lastShotBy.you === 'サービス', `a serve is reported as a serve, got ${g.lastShotBy.you}`);
+  }
+
+  // CPU のロブもロブとして記録される
+  {
+    const CPU = R.config.CPU;
+    const saved = { ...CPU };
+    Object.assign(CPU, { LOB_VS_NET: 1, LOB_BASE: 1, LOB_VS_STRETCH: 0 });
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.cpu.x = 0; g.cpu.z = HALF_L - 0.5;
+    Object.assign(g.ball, { x: 0, y: 1.0, z: HALF_L - 1, bounces: 1, last: 'you', live: true, wind: 0 });
+    g.hit('cpu');
+    ok(g.lastShotBy.cpu === 'ロブ', `a CPU lob is reported as a lob, got ${g.lastShotBy.cpu}`);
+    Object.assign(CPU, saved);
+  }
+
+  // ポイントが決まったら、取った側の最後の1本がコールと一緒に渡る
+  {
+    const calls = [];
+    const hooks = {
+      sound() {}, call(big, sub, shot) { calls.push({ big, sub, shot }); }, clearCall() {}, score() {}, wind() {},
+    };
+    const g = new R.Game({ input: fakeInput, hooks });
+    g.start();
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.you.x = 0; g.you.z = -5;
+    Object.assign(g.ball, { x: 0.3, y: PLAYER.SMASH_MIN_Y + 0.3, z: -5, bounces: 1, last: 'cpu', live: true, wind: 0 });
+    g.you.swingCharge = 1;
+    g.hit('you'); // スマッシュで決める
+    calls.length = 0;
+    g.endPoint('you', 'ツーバウンド');
+    ok(calls.length > 0 && calls[0].shot === 'スマッシュ',
+      `the winning side's last shot is reported with the call, got ${calls.length && calls[0].shot}`);
+
+    // 相手のミス（ネット）で取ったときは「その1本前に自分が打った球」が出る
+    calls.length = 0;
+    g.phase = 'rally'; // endPoint() は 'over' のままだと二重に走らないので戻す
+    g.endPoint('you', 'ネット');
+    ok(calls.length > 0 && calls[0].shot === 'スマッシュ',
+      'a point won on the opponent\'s error still reports the winner\'s own last shot');
+
+    // 次のポイントでは消える（前のポイントの球種を引きずらない）
+    g.newPoint();
+    ok(g.lastShotBy.you === null && g.lastShotBy.cpu === null,
+      'the record is cleared for the next point');
+  }
+}
+
 // --- CPU/AI の移動：斜めでも設定速度を超えない（x/z 別々に step を足すと √2 倍速くなる） ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });

@@ -101,6 +101,31 @@
     };
   }
 
+  /**
+   * ポイントが決まったときに「何で決めたか」を出すための球種名。
+   * 打ち方（stroke）とスピン（spin）とロブかどうかの組み合わせを、観戦者から見た
+   * 呼び名ひとつに畳む。スマッシュ・ボレー・ロブ・サーブは打ち方そのものが球種なので
+   * スピンより優先し（実際これらは常にフラット固定）、通常のグラウンドストロークだけ
+   * スピンで呼び分ける。
+   * @param {'forehand'|'backhand'|'smash'|'serve'|'volley-forehand'|'volley-backhand'} stroke
+   * @param {'flat'|'top'|'slice'|'drop'} spin
+   * @param {boolean} [lob]
+   */
+  const SPIN_LABELS = {
+    top: 'スピンショット',
+    slice: 'スライスショット',
+    drop: 'ドロップショット',
+    flat: 'フラットショット',
+  };
+
+  function shotLabel(stroke, spin, lob) {
+    if (stroke === 'smash') return 'スマッシュ';
+    if (stroke === 'serve') return 'サービス';
+    if (typeof stroke === 'string' && stroke.startsWith('volley-')) return 'ボレー';
+    if (lob) return 'ロブ';
+    return SPIN_LABELS[spin] || SPIN_LABELS.flat;
+  }
+
   /** phase: idle → serve → rally → over → (serve …) */
   class Game {
     /**
@@ -144,6 +169,12 @@
       };
 
       this.phase = 'idle';
+      /**
+       * 各チームがこのポイントで最後に打った球種の名前（shotLabel()）。ポイントが決まったとき、
+       * 取った側が何で決めた（あるいは何で相手のミスを誘った）かを表示するのに使う。
+       * newPoint() で毎ポイント消す。
+       */
+      this.lastShotBy = { you: null, cpu: null };
       /**
        * スマッシュの先回りヒント。毎フレーム smashSpot() が入れ直す（打てる球が来ていなければ null）。
        * 表示専用の値なので、ゲームの判定はここを一切読まない（scene/hint.js と hud.js だけが使う）。
@@ -386,6 +417,7 @@
 
     newPoint() {
       this.serveNumber = 1;
+      this.lastShotBy = { you: null, cpu: null };
       // 風は毎ポイント、前のポイントの風から WIND.DRIFT_ACCEL の範囲だけ変える（無関係な
       // 値へ決め直すと点ごとに向きが唐突に入れ替わって見えるため）。フォールトによる
       // セカンドサーブ（beginServe の再実行）をまたいでも同じポイント中は吹き続ける
@@ -559,6 +591,7 @@
       ball.bounces = 0;
       ball.age = 0;
       ball.last = team; // スコア判定・当たり判定はチーム単位（hit() と同じ扱い）
+      this.lastShotBy[team] = shotLabel('serve', spin);
       this.resetTrail();
 
       this.tossActive = false;
@@ -685,6 +718,7 @@
       // スマッシュだけは跳んで打つぶんモーションが長い（scene/player.js 参照）。
       player.anim = stroke === 'smash' ? PLAYER.SMASH_ANIM : PLAYER.SWING_ANIM;
       player.stroke = stroke;
+      this.lastShotBy[TEAM_OF[who]] = shotLabel(stroke, spin, shot.lob);
       this.hooks.sound('hit', TEAM_OF[who], stroke, charge); // 音程はチーム単位（誰が打っても同じ）
     }
 
@@ -769,6 +803,7 @@
           z: lob ? SHOT.LOB_Z : rand(depth, depth + SHOT.DRIVE_Z_SPREAD),
         },
         flight,
+        lob,
       };
     }
 
@@ -824,7 +859,9 @@
       const sub = result.type === 'game'
         ? `ゲーム — ${mine ? 'YOU' : 'CPU'}${result.tiebreak ? '（6-6 タイブレーク！）' : ''}`
         : reason === 'ツーバウンド' ? twoBounceCall : reason;
-      this.hooks.call(mine ? 'ポイント' : '失点', sub);
+      // 取った側がこのポイントで最後に放ったショット（決め球、または相手のミスを誘った球）。
+      // 相手のネット／アウトで決まった場合は「その1本前に自分が打った球」になる。
+      this.hooks.call(mine ? 'ポイント' : '失点', sub, this.lastShotBy[winner]);
       this.hooks.score();
       this.after(TIMING.NEXT_POINT, () => this.newPoint());
     }

@@ -16,7 +16,7 @@
     input,
     hooks: {
       sound: (name, ...args) => sfx[name](...args),
-      call: (big, sub) => hud.showCall(big, sub),
+      call: (big, sub, shot) => hud.showCall(big, sub, shot),
       clearCall: () => hud.hideCall(),
       score: () => hud.renderScore(game.match, game.server, game.stats),
       wind: (accel) => hud.setWind(accel),

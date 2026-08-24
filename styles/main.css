@@ -63,6 +63,13 @@ canvas{display:block}
 }
 #call .big{font-size:34px;font-weight:700;letter-spacing:.02em}
 #call .sub{font-size:13px;color:var(--dim);margin-top:4px;letter-spacing:.06em}
+/* 決めた側が最後に放った球種。無いポイントもあるので .on のときだけ出す */
+#call .shot{
+  display:none;margin-top:9px;font-size:12px;letter-spacing:.14em;
+  color:var(--ball);border:1px solid var(--ball);border-radius:2px;
+  padding:3px 10px
+}
+#call .shot.on{display:inline-block}
 #call.on{opacity:1}
 
 #keys{

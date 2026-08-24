@@ -18,6 +18,7 @@
         call: $('call'),
         callBig: $('callBig'),
         callSub: $('callSub'),
+        callShot: $('callShot'),
         start: $('start'),
         charge: $('charge'),
         chargeFill: $('chargeFill'),
@@ -73,9 +74,17 @@
       this.el.doubleFaults.cpu.textContent = stats.cpu.doubleFaults;
     }
 
-    showCall(big, sub) {
+    /**
+     * @param {string} big 大きい方の文字（'ポイント'・'失点'・コール）
+     * @param {string} [sub] 補足（'ウィナー！'・'ゲーム — YOU' など）
+     * @param {string} [shot] 決めた側が最後に放った球種（'スマッシュ' など）。
+     *   無いポイント（ダブルフォルト直後など）は空にして行ごと隠す。
+     */
+    showCall(big, sub, shot) {
       this.el.callBig.textContent = big;
       this.el.callSub.textContent = sub || '';
+      this.el.callShot.textContent = shot || '';
+      this.el.callShot.classList.toggle('on', !!shot);
       this.el.call.classList.add('on');
     }
 
