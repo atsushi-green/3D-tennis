@@ -1665,6 +1665,9 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   g.ball.x = 1.5; g.ball.y = 1; g.ball.z = -2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
   g.chargeStart('slice'); // C
   g.chargeRelease();
+  // 溜めずに離したスライスはドロップショット（別の球種）になるので、ここでは
+  // しっかり溜めた「通常のスライス」として検証する
+  g.you.swingCharge = R.config.DROP.MAX_CHARGE + 0.1;
   g.hit('you');
   ok(g.ball.spin === 'slice', `C (slice) at chargeStart() is applied to a groundstroke, got ${g.ball.spin}`);
 
@@ -2207,6 +2210,65 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(any.min < deep.max && any.max > shallow.min, 'no input uses the whole depth range');
   // どの深さもサービスボックスの中（ネットとサービスラインの間）に収まる
   ok(SERVE.DEPTH_MAX < COURT.SERVICE, `even the shortest serve clears the net side, got ${SERVE.DEPTH_MAX}`);
+}
+
+// --- ドロップショット：溜めずに離したスライスはネット際に落ちて、そこで死ぬ ---
+{
+  const DROP = R.config.DROP;
+  const { predictLanding, integrate, reflectBounce, netHeightAt } = R.physics;
+  const { BALL_R, STEP } = R.config.PHYSICS;
+
+  const shoot = (spin, charge, fromZ) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.you.x = 0; g.you.z = fromZ;
+    Object.assign(g.ball, { x: 0, y: 0.8, z: fromZ, live: true, bounces: 1, last: 'cpu', wind: 0 });
+    g.you.chargeSpin = spin;
+    g.you.swingCharge = charge;
+    g.you.chargeStroke = 'forehand';
+    g.hit('you');
+    return g.ball;
+  };
+  // 1バウンド目と2バウンド目の位置（＝どこまで転がるか）
+  const bounces = (ball) => {
+    const s = { ...ball, px: ball.x, py: ball.y, pz: ball.z };
+    const out = [];
+    for (let t = 0; t < 6 && out.length < 2; t += STEP) {
+      integrate(s, STEP);
+      if (s.y <= BALL_R && s.vy < 0) { reflectBounce(s); out.push(s.z); }
+    }
+    return out;
+  };
+
+  const drop = shoot('slice', 0, -HALF_L);            // 溜めなしのスライス
+  ok(drop.spin === 'drop', `an uncharged slice becomes a drop shot, got spin=${drop.spin}`);
+  const dropLand = predictLanding({ ...drop, px: drop.x, py: drop.y, pz: drop.z });
+  ok(dropLand.z >= DROP.Z_MIN - 0.2 && dropLand.z <= DROP.Z_MAX + 0.2,
+    `the drop lands right behind the net, got z=${dropLand.z}`);
+  ok(dropLand.z > 0, 'and it still clears the net (lands on the far side)');
+
+  // 溜めたスライスは従来どおりの深いスライス
+  const slice = shoot('slice', 1, -HALF_L);
+  ok(slice.spin === 'slice', `a charged slice stays a normal slice, got spin=${slice.spin}`);
+  const sliceLand = predictLanding({ ...slice, px: slice.x, py: slice.y, pz: slice.z });
+  ok(sliceLand.z > dropLand.z + 5,
+    `the charged slice lands far deeper than the drop, got ${sliceLand.z} vs ${dropLand.z}`);
+  // 溜めなしでもフラット/トップならドロップにはならない
+  ok(shoot('flat', 0, -HALF_L).spin === 'flat', 'an uncharged flat shot is not a drop');
+  ok(shoot('top', 0, -HALF_L).spin === 'top', 'an uncharged topspin shot is not a drop');
+
+  // ドロップはバウンドしてから死ぬ（2バウンド目までの距離が通常のスライスよりずっと短い）
+  const dropRun = bounces(drop);
+  const sliceRun = bounces(slice);
+  ok(dropRun.length === 2 && sliceRun.length === 2, 'both shots bounce twice within the sim window');
+  const dropSpan = dropRun[1] - dropRun[0];
+  const sliceSpan = sliceRun[1] - sliceRun[0];
+  ok(dropSpan < sliceSpan / 2,
+    `the drop dies after the bounce: ${dropSpan.toFixed(2)}m vs the slice's ${sliceSpan.toFixed(2)}m`);
+  ok(dropRun[1] < COURT.SERVICE,
+    `the drop's second bounce is still inside the service box, got z=${dropRun[1]}`);
 }
 
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);

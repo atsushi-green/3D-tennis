@@ -6,8 +6,8 @@
   'use strict';
 
   const {
-    BOUNDS, CHARGE, COURT, CPU, DOUBLES, FX, HALF_L, HALF_W, PHYSICS, PLAYER, RETURN, SERVE, SHOT,
-    TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND,
+    BOUNDS, CHARGE, COURT, CPU, DOUBLES, DROP, FX, HALF_L, HALF_W, PHYSICS, PLAYER, RETURN, SERVE,
+    SHOT, TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND,
   } = RallyOne.config;
   const {
     approach2D, clamp, lerp, rand, signOr,
@@ -627,12 +627,16 @@
       // スピン選択は人間の通常グラウンドストローク限定（スマッシュ・ボレー・CPU/AIはフラット固定）。
       // C＝スライス／V＝トップスピン。chargeStart() の瞬間に固定した値を使う（当たる瞬間まで
       // 押し続けなくてよい。詳細はchargeStart()のコメント参照）。何も押していなければフラット。
-      const spin = (who === 'you' && (stroke === 'forehand' || stroke === 'backhand'))
+      // ドロップショットだけは playerShot() が専用の spin('drop') を返す（弾道・バウンドとも
+      // 通常のスライスとは別扱いにするため）。それ以外は従来どおり chargeStart() で固定した値。
+      const spin = shot.spin || ((who === 'you' && (stroke === 'forehand' || stroke === 'backhand'))
         ? this.you.chargeSpin
-        : 'flat';
+        : 'flat');
 
       this.resetChase(); // ここから相手側の「この球を追った距離」を数え直す
-      Object.assign(ball, solveShot(from, shot.target, shot.flight, undefined, spin));
+      // shot.clearance を返すのはドロップショットだけ（ネットぎりぎりを狙う）。
+      // 他は undefined ＝ solveShot() の既定の余裕を使う。
+      Object.assign(ball, solveShot(from, shot.target, shot.flight, shot.clearance, spin));
       ball.spin = spin;
       // サーブの返球も含め、ここで打たれた球は以降このポイントの風(this.wind)にさらされる
       // （サーブ自体の飛翔だけは beginServe() が ball.wind=0 にしているので無風のまま）。
@@ -693,6 +697,20 @@
             z: lerp(VOLLEY.BLOCK_Z, VOLLEY.ANGLE_Z, sharpness) + rand(0, SHOT.DRIVE_Z_SPREAD),
           },
           flight: lerp(VOLLEY.BLOCK_T, VOLLEY.ANGLE_T, sharpness),
+        };
+      }
+
+      // 弱いスライス（Cで溜めずに離す）はドロップショット。深さを溜めで選ぶ通常の
+      // グラウンドストロークとは別枠にして、狙いをネット際へ完全に移す。
+      // スピンは chargeStart() の瞬間に固定した値をそのまま使う（hit() が ball.spin に
+      // 入れるのと同じ値なので、弾道の計算と実際の飛翔がずれない）。
+      if (!lob && this.you.chargeSpin === 'slice' && charge <= DROP.MAX_CHARGE) {
+        const dir = aim !== 0 ? Math.sign(aim) : -signOr(this.you.x, 1);
+        return {
+          target: { x: dir * rand(DROP.X_MIN, DROP.X_MAX), y: BALL_R, z: rand(DROP.Z_MIN, DROP.Z_MAX) },
+          flight: DROP.T,
+          clearance: DROP.CLEARANCE,
+          spin: 'drop',
         };
       }
 

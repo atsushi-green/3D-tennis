@@ -113,6 +113,26 @@
   };
 
   /**
+   * ドロップショット：スライス（C）でほとんど溜めずに離したときの、ネット際へ落とす短い球。
+   * 通常のスライスは溜め量で SHOT.TAP_Z〜CHARGE_Z の深さを選ぶが、こちらは狙いを完全に
+   * ネット際へ移す別枠の球種にしてある（＝「弱いスライス＝つなぎの浅い球」ではなく
+   * 「弱いスライス＝ドロップ」というはっきりした使い分けになる）。
+   * スライスは実効重力が軽く（GRAVITY_MULT 0.72）バウンドも弾まない（0.78）ので、
+   * 落ちてから伸びず、そのまま止まるように見える。
+   */
+  const DROP = {
+    MAX_CHARGE: 0.25, // これ以下の溜めで離したスライスだけドロップになる
+    Z_MIN: 1.2,       // ネットからの着地距離
+    Z_MAX: 2.4,
+    X_MIN: 0.8,       // 左右の振り幅。ネット際なので大きく振らなくても十分角度がつく
+    X_MAX: 2.6,
+    // ネットをぎりぎり越えて落とす球なので、通常のショット（既定0.30）より余裕を詰める。
+    // これを詰めないと solveShot() がネット回避で滞空を伸ばし、ただの浅い山なりになる。
+    CLEARANCE: 0.12,
+    T: 1.15,          // 飛翔時間の初期値。ネットに掛かるなら solveShot() が伸ばして解き直す
+  };
+
+  /**
    * ボレー（サービスラインより前で、ノーバウンドの球を打ち返すとき）。
    * 溜め時間ではなく、ボールとプレイヤーの左右距離で威力・角度が決まる：真正面（距離0）や
    * 伸びきり（距離が SWEET_DIST+WINDOW を超える）は普通のブロック返球に、フォア/バック側に
@@ -536,9 +556,13 @@
     // トップスピンの倍率は当初1.35/1.20だったが、「効きすぎて不安定（アウトしやすく感じる）」
     // というフィードバックを受けて弱めた。同じ目標に着地させるため実効重力が強いほど初速も
     // 上がる（=山なりに高く速く飛ぶ）ので、倍率が大きいほど弾道が「暴れて」見えやすい。
-    GRAVITY_MULT: { flat: 1, top: 1.18, slice: 0.72 },
-    BOUNCE_RESTITUTION_MULT: { flat: 1, top: 1.10, slice: 0.78 },
-    BOUNCE_FRICTION_MULT: { flat: 1, top: 0.98, slice: 1.05 },
+    // 'drop' はドロップショット（DROP 参照）専用。スライスは「滑って伸びる」球なので
+    // 水平方向の減衰がフラットより小さい(1.05)が、ドロップは逆に強い逆回転で前へ進む力を
+    // 殺すのが持ち味なので、反発・水平減衰とも大きく落とす。これが無いと、ネット際に
+    // 落としても2バウンド目までに8m以上転がってしまい「ただの浅い球」になる。
+    GRAVITY_MULT: { flat: 1, top: 1.18, slice: 0.72, drop: 1 },
+    BOUNCE_RESTITUTION_MULT: { flat: 1, top: 1.10, slice: 0.78, drop: 0.45 },
+    BOUNCE_FRICTION_MULT: { flat: 1, top: 0.98, slice: 1.05, drop: 0.45 },
   };
 
   /**
@@ -563,6 +587,6 @@
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO,
-    CPU_LEVELS, applyCpuLevel, SPIN, WIND, TRAIL,
+    CPU_LEVELS, applyCpuLevel, SPIN, WIND, TRAIL, DROP,
   };
 })(window.RallyOne = window.RallyOne || {});
