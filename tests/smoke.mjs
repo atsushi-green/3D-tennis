@@ -101,7 +101,7 @@ const {
 } = R.config;
 const fakeInput = { moveX: 0, moveZ: 0, lob: false };
 const noHooks = {
-  sound() {}, call() {}, clearCall() {}, score() {}, wind() {},
+  sound() {}, call() {}, clearCall() {}, score() {}, wind() {}, serveSpeed() {},
 };
 
 /**
@@ -148,6 +148,43 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     if (!L.net && Math.abs(L.x) <= HALF_W && L.z > 0 && L.z <= COURT.SERVICE) inBox++;
   }
   ok(inBox === 200, `serves in the service box: ${inBox}/200`);
+}
+
+// --- サーブの初速をkm/hに換算してHUDへ出す（hooks.serveSpeed） ---
+{
+  const { mpsToKmh } = R.math;
+  ok(Math.abs(mpsToKmh(10) - 36) < 1e-9, 'mpsToKmh: 10m/s -> 36km/h');
+  ok(mpsToKmh(0) === 0, 'mpsToKmh: 0m/s -> 0km/h');
+
+  const SWEET_FRAMES = Math.round(SERVE.CHARGE_SWEET_T * 60);
+  const serveSpeedsFor = (holdFrames) => {
+    const speeds = [];
+    const g = new R.Game({
+      input: fakeInput,
+      hooks: { ...noHooks, serveSpeed: (kmh) => { if (kmh != null) speeds.push(kmh); } },
+    });
+    g.started = true;
+    g.newPoint();
+    tossAndHit(g, holdFrames);
+    ok(Math.abs(speeds[speeds.length - 1] - mpsToKmh(Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz))) < 1e-9,
+      'reported km/h matches the actual initial speed of the served ball');
+    return speeds;
+  };
+  // コース・深さは毎回ランダムなので、狙いのばらつきが溜めの差を上回らないよう
+  // 2本とも同じ狙いになるよう乱数を固定する（三角形カーブのテストと同じ手当て）。
+  const origRandom = Math.random;
+  Math.random = () => 0.5;
+  let full;
+  let soft;
+  try {
+    full = serveSpeedsFor(SWEET_FRAMES); // ちょうど良いタイミング＝フルパワーのフラットサーブ
+    soft = serveSpeedsFor(0); // 即離し＝タップ＝セカンド相当の緩いサーブ
+  } finally {
+    Math.random = origRandom;
+  }
+  ok(full.length === 1, `serveSpeed hook fires exactly once per serve, got ${full.length}`);
+  ok(full[0] > soft[0] * 1.3,
+    `full-power serve reads clearly faster than a tap serve: full=${full[0].toFixed(0)} soft=${soft[0].toFixed(0)}`);
 }
 
 // --- ワイド×フル溜めのサーブは、フォールトにならずサイドラインまで十分な余白を残す ---
@@ -2355,7 +2392,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   {
     const calls = [];
     const hooks = {
-      sound() {}, call(big, sub, shot) { calls.push({ big, sub, shot }); }, clearCall() {}, score() {}, wind() {},
+      sound() {}, call(big, sub, shot) { calls.push({ big, sub, shot }); }, clearCall() {}, score() {}, wind() {}, serveSpeed() {},
     };
     const g = new R.Game({ input: fakeInput, hooks });
     g.start();

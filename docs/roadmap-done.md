@@ -10,6 +10,12 @@
 - テスト: <tests/smoke.mjs の結果>
 ```
 
+## 2026-08-26 サービスの速度(km/h)を表示する
+- ブランチ: なし（ユーザー指示によりROADMAPを上から順にmain上で直接実装）
+- 実施内容: `math.js` に純関数 `mpsToKmh(mps)` を追加。`game.js#serve()` が `solveShot()` 直後の `Math.hypot(ball.vx, ball.vy, ball.vz)` を km/h に換算して新設の `hooks.serveSpeed(kmh)` を呼ぶ（人間・CPU/AIどちらのサーブでも）。`newPoint()` は `hooks.serveSpeed(null)` を呼んで前のポイントの表示を消す＝次のポイントが始まるまで残る。DOM操作は `hud.js` の新メソッド `setServeSpeed()` に閉じ、`index.html` に `#serveSpeed`（`#wind` と同じスコアボード脇の並び）、`styles/main.css` に `#stats` 相当の控えめなスタイルを追加。
+- テスト: `node tests/smoke.mjs` — ALL PASS。新規テスト：`mpsToKmh` の換算値、フルパワー（スイートスポットで離す）とタップ（即離し＝セカンド相当）でHUDに渡る値が明確に違うこと、渡された値が実際の初速と一致すること。コースがランダムなので `Math.random` を固定して2本の狙いを揃えてから比較（既存の三角形カーブのテストと同じ手当て）。
+- 備考: 実行中、既存の無関係なテスト「the drop lands right behind the net」が確率的にFAILすることを確認した（`main` 上でも再現、私の変更とは無関係）。ドロップショットの着地判定が境界値ぎりぎりのケースを稀に踏む既存の不安定さと思われる。今回は対象外としたが、次に気になったら別項目としてROADMAPに積む価値あり。
+
 ## 2026-08-24 ドロップショットを実装する（弱いスライスでネット際に落とす）
 - ブランチ: なし（ユーザー指示によりROADMAPを上から順にmain上で直接実装）
 - 実施内容: スライス（C）をほとんど溜めずに離したとき（溜め <= `DROP.MAX_CHARGE`=0.25）だけ、`playerShot()` が通常のグラウンドストロークとは別枠の狙いを返すようにした：着地はネットから 1.2〜2.4m、左右は 0.8〜2.6m、飛翔 1.15秒、ネットの余裕は `DROP.CLEARANCE`=0.12（通常は0.30）。余裕を詰めないと `solveShot()` のネット回避ループが滞空を伸ばしてしまい、ただの浅い山なりになる。`playerShot()` が `clearance` を返すのはこの球種だけで、他は従来どおり既定値を使う。

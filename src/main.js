@@ -20,6 +20,7 @@
       clearCall: () => hud.hideCall(),
       score: () => hud.renderScore(game.match, game.server, game.stats),
       wind: (accel) => hud.setWind(accel),
+      serveSpeed: (kmh) => hud.setServeSpeed(kmh),
     },
   });
 

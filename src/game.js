@@ -10,7 +10,7 @@
     SHOT, SMASH_HINT, TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND,
   } = RallyOne.config;
   const {
-    approach2D, clamp, lerp, rand, signOr,
+    approach2D, clamp, lerp, mpsToKmh, rand, signOr,
   } = RallyOne.math;
   const {
     hitsNet, integrate, predictWindow, reflectBounce, solveShot,
@@ -424,6 +424,7 @@
       // （beginServe() 側では ball.wind を0に戻すだけ）。
       this.wind = clamp(this.wind + rand(-WIND.DRIFT_ACCEL, WIND.DRIFT_ACCEL), -WIND.MAX_ACCEL, WIND.MAX_ACCEL);
       this.hooks.wind(this.wind);
+      this.hooks.serveSpeed(null); // 前のポイントのサーブ速度表示を消す
       this.beginServe();
     }
 
@@ -587,6 +588,8 @@
       ball.y = from.y;
       Object.assign(ball, solveShot(from, target, flightT, SERVE.CLEARANCE, spin));
       ball.spin = spin;
+      // 打った瞬間の初速をそのままスコアボード脇に出す（次のポイントが始まるまで残す）
+      this.hooks.serveSpeed(mpsToKmh(Math.hypot(ball.vx, ball.vy, ball.vz)));
       ball.live = true;
       ball.bounces = 0;
       ball.age = 0;

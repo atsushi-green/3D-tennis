@@ -15,6 +15,7 @@
         aces: { you: $('ace1'), cpu: $('ace2') },
         doubleFaults: { you: $('df1'), cpu: $('df2') },
         wind: $('wind'),
+        serveSpeed: $('serveSpeed'),
         call: $('call'),
         callBig: $('callBig'),
         callSub: $('callSub'),
@@ -45,6 +46,14 @@
       }
       const arrow = accel > 0 ? '←' : '→';
       this.el.wind.textContent = `風 ${arrow} ${abs.toFixed(1)}`;
+    }
+
+    /**
+     * サーブの初速表示（次のポイントが始まるまで残る）。
+     * @param {number|null} kmh null なら非表示（次のポイントが始まった直後）。
+     */
+    setServeSpeed(kmh) {
+      this.el.serveSpeed.textContent = kmh == null ? '' : `サーブ ${Math.round(kmh)}km/h`;
     }
 
     /**

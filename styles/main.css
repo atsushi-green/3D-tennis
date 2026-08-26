@@ -51,6 +51,15 @@ canvas{display:block}
 }
 #wind:empty{display:none}
 
+/* サーブ速度。風と同じスコアバー脇の並びだが、控えめな #stats 寄りの主張の弱さにする */
+#serveSpeed{
+  margin-top:6px;padding:4px 10px;
+  background:rgba(9,20,34,.6);border-radius:2px;
+  font-size:11px;letter-spacing:.04em;color:var(--dim);
+  font-variant-numeric:tabular-nums;
+}
+#serveSpeed:empty{display:none}
+
 #head{
   position:absolute;top:14px;right:14px;text-align:right;
   font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)

@@ -25,6 +25,11 @@
     return a + (b - a) * t;
   }
 
+  /** m/s → km/h（HUDの球速表示に使う） */
+  function mpsToKmh(mps) {
+    return mps * 3.6;
+  }
+
   /**
    * (cx,cz) から (tx,tz) へ、大きさ maxDelta を超えない範囲で2Dベクトルとして近づける。
    * 加速度で速度を目標値に寄せるのに使う（軸ごとに clamp すると斜め方向だけ
@@ -39,5 +44,7 @@
     return { x: cx + dx * t, z: cz + dz * t };
   }
 
-  RallyOne.math = { clamp, rand, signOr, approach, approach2D, lerp };
+  RallyOne.math = {
+    clamp, rand, signOr, approach, approach2D, lerp, mpsToKmh,
+  };
 })(window.RallyOne = window.RallyOne || {});
