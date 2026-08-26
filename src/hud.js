@@ -3,7 +3,7 @@
   'use strict';
 
   const { pointLabel } = RallyOne.scoring;
-  const { WIND } = RallyOne.config;
+  const { WIND, STAMINA } = RallyOne.config;
   const $ = (id) => document.getElementById(id);
 
   class Hud {
@@ -16,6 +16,7 @@
         doubleFaults: { you: $('df1'), cpu: $('df2') },
         wind: $('wind'),
         serveSpeed: $('serveSpeed'),
+        staminaFill: $('staminaFill'),
         call: $('call'),
         callBig: $('callBig'),
         callSub: $('callSub'),
@@ -30,6 +31,12 @@
           $('styleNone'), $('styleServeVolley'), $('styleRetriever'), $('styleBaseliner'),
         ],
       };
+    }
+
+    /** @param {number} fraction 0〜1。自分（you）の残量だけを表示する。 */
+    setStamina(fraction) {
+      this.el.staminaFill.style.width = `${Math.max(0, Math.min(1, fraction)) * 100}%`;
+      this.el.staminaFill.classList.toggle('low', fraction < STAMINA.LOW_THRESHOLD);
     }
 
     /** スタート画面のCPUの強さ表示を切り替える（実際の適用は config.applyCpuLevel が行う）。 */

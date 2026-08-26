@@ -10,6 +10,13 @@
 - テスト: <tests/smoke.mjs の結果>
 ```
 
+## 2026-08-27 スタミナを入れる
+- ブランチ: なし（ユーザー指示によりROADMAPを上から順にmain上で直接実装）
+- 実施内容: `config.js` に `STAMINA`（`DRAIN_PER_M`=0.006／`RECOVER_PER_POINT`=0.35／`SPEED_FLOOR`=0.85／`CHARGE_FLOOR`=0.75／`LOW_THRESHOLD`=0.35）を追加。4人全員（`you`/`cpu`/`youMate`/`cpuMate`）に `stamina`(0〜1、初期値1) を持たせ、実際に走った距離ぶんだけ減らす（`game.js#drainStamina()`）。移動系のコードは1箇所に集約されている：人間は `movePlayers()`、CPU/AI（cpu・cpuMate・youMate）は共通の `moveTowards()` を必ず通るので、そこに `staminaSpeedMult(stamina)`（`PLAYER.SPEED`/`CPU_CHASE`/`CPU_RECOVER` に掛ける、下限 `SPEED_FLOOR`）を掛けるだけで4人全員に同じルールが効く。人間だけが持つ「溜め」（`tickCharge()` の `capTime`）にも同様に `staminaChargeMult(stamina)`（下限 `CHARGE_FLOOR`）を掛けた（CPU/AI には溜めの概念自体が無いのでここは人間のみ）。回復は `newPoint()` で4人全員に `RECOVER_PER_POINT` ぶん（上限1）。HUDには自分（you）の残量バーをスコアボード脇に常時表示し、`STAMINA.LOW_THRESHOLD` を下回ると赤系の警告色になる。
+- テスト: `node tests/smoke.mjs` — ALL PASS（既知の無関係な既存フレーク「the drop lands right behind the net」を除く）。新規テスト：走った距離ぶんスタミナが減ること、`movePlayers()`/`moveTowards()` を実際に通しても人間・CPU/AI 双方に同じ `SPEED_FLOOR` が効くこと、溜め速度も `CHARGE_FLOOR` で頭打ちになること（人間のみ）、ポイント間で回復し満タンを超えないこと。既存の「加速度ベースの移動」テストは、走った直後にスタミナがわずかに減る影響でトップ速度の許容誤差を広げる形で更新（0.01→0.1、コメントで理由を明記）。
+  - **実測（受け入れ条件）**：20本ぶんのラリー（1本あたり平均3m走ったとみなす想定＝合計60m）を走った直後の移動速度低下率は **5.4%**。効き幅は控えめ（スタミナが完全に尽きても速度は最大15%減、`SPEED_FLOOR`=0.85 で下げ止まる＝操作不能にはならない）。
+- 備考: `claude-in-chrome` で実機確認。スタミナバーが常時表示され、`game.you.stamina` を書き換えて `Hud#setStamina()` を呼ぶと幅とバーの色（`LOW_THRESHOLD` 未満で赤）が正しく切り替わることを確認した。コンソールエラーなし。セルフレビューでも問題は見つからなかった。
+
 ## 2026-08-26 ポイントが決まった後にリプレイを流す
 - ブランチ: なし（ユーザー指示によりROADMAPを上から順にmain上で直接実装）
 - 実施内容: `scene/world.js` に、毎フレーム直近 `REPLAY.WINDOW_SEC`(3.5秒) ぶんのボール・選手4人の位置をリングバッファ(`history`)に録り続ける仕組みを追加。`main.js` のフレームループが `game.phase` の `'rally'→'over'` 遷移（＝ポイントが決まった瞬間）を検知して `world.startReplay()` を呼び、その時点の `history` を固定コピー(`reel`)して再生を始める。`game.js` には一切触れていない（`game.phase` を読むだけ）。

@@ -7,7 +7,7 @@
 
   const {
     BOUNDS, CHARGE, COURT, CPU, DOUBLES, DROP, FX, HALF_L, HALF_W, PHYSICS, PLAYER, RETURN, SERVE,
-    SHOT, SMASH_HINT, TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND,
+    SHOT, SMASH_HINT, STAMINA, TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND,
   } = RallyOne.config;
   const {
     approach2D, clamp, lerp, mpsToKmh, rand, signOr,
@@ -156,16 +156,17 @@
         chargeFrac: 0, // 溜めている間だけ 0〜1 で増える、テイクバックの深さ用（chargeTime のポーズ表示版）
         chargeStroke: null, // chargeStart() の瞬間に固定するフォア/バック。溜めている間は変えない
         chargeSpin: 'flat', // chargeStart() の瞬間に固定するスピン（B/V/C）。実際に当たるまで押し続けなくてよい
+        stamina: 1, // 0〜1。長いラリーで走るほど減り、ポイント間で少し回復する（newPoint()参照）
       };
       this.cpu = {
-        x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, chaseDist: 0, stroke: 'forehand', prep: null,
+        x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, chaseDist: 0, stroke: 'forehand', prep: null, stamina: 1,
       };
       // ダブルス（this.doubles === true）のときだけ動く AI パートナー。シングルスでは未使用のまま。
       this.youMate = {
-        x: 0, z: DOUBLES.NET_Z_YOU, anim: 0, speed: 0, chaseDist: 0, stroke: 'forehand', prep: null,
+        x: 0, z: DOUBLES.NET_Z_YOU, anim: 0, speed: 0, chaseDist: 0, stroke: 'forehand', prep: null, stamina: 1,
       };
       this.cpuMate = {
-        x: 0, z: DOUBLES.NET_Z_CPU, anim: 0, speed: 0, chaseDist: 0, stroke: 'forehand', prep: null,
+        x: 0, z: DOUBLES.NET_Z_CPU, anim: 0, speed: 0, chaseDist: 0, stroke: 'forehand', prep: null, stamina: 1,
       };
 
       this.phase = 'idle';
@@ -394,7 +395,7 @@
         this.you.chargeTime += dt;
         return;
       }
-      const capTime = CHARGE.MAX_TIME * this.chargeSpeedCap(this.you.speed);
+      const capTime = CHARGE.MAX_TIME * this.chargeSpeedCap(this.you.speed) * this.staminaChargeMult(this.you.stamina);
       // 動き出してキャップが今の溜め量を下回ったら、溜めた分はキャップまで抜けていく。
       // 以前は「減らさない」仕様だったため、止まって溜め切ってから走り出せばフル溜めを
       // そのまま持ち運べ、移動によるキャップが実質的に効いていなかった。
@@ -413,6 +414,21 @@
       return 1 - t * (1 - MOVE_CAP_FLOOR);
     }
 
+    /** スタミナ(0〜1)から移動速度の倍率を求める。尽きても STAMINA.SPEED_FLOOR までしか落ちない。 */
+    staminaSpeedMult(stamina) {
+      return lerp(STAMINA.SPEED_FLOOR, 1, stamina);
+    }
+
+    /** スタミナ(0〜1)から溜め速度（CHARGE.MAX_TIME に対する倍率）を求める。人間の溜めにだけ効く。 */
+    staminaChargeMult(stamina) {
+      return lerp(STAMINA.CHARGE_FLOOR, 1, stamina);
+    }
+
+    /** 実際に走った距離ぶん、その選手のスタミナを減らす（0未満にはしない）。 */
+    drainStamina(actor, moved) {
+      actor.stamina = Math.max(0, actor.stamina - moved * STAMINA.DRAIN_PER_M);
+    }
+
     /* ------------------------------------------------------ ポイント進行 */
 
     newPoint() {
@@ -425,6 +441,12 @@
       this.wind = clamp(this.wind + rand(-WIND.DRIFT_ACCEL, WIND.DRIFT_ACCEL), -WIND.MAX_ACCEL, WIND.MAX_ACCEL);
       this.hooks.wind(this.wind);
       this.hooks.serveSpeed(null); // 前のポイントのサーブ速度表示を消す
+      // スタミナはポイント間で少し回復する（フルには戻らないこともある＝長いゲームの
+      // 終盤ほど効いてくる）。4人全員に同じルールで効く。
+      this.you.stamina = Math.min(1, this.you.stamina + STAMINA.RECOVER_PER_POINT);
+      this.cpu.stamina = Math.min(1, this.cpu.stamina + STAMINA.RECOVER_PER_POINT);
+      this.youMate.stamina = Math.min(1, this.youMate.stamina + STAMINA.RECOVER_PER_POINT);
+      this.cpuMate.stamina = Math.min(1, this.cpuMate.stamina + STAMINA.RECOVER_PER_POINT);
       this.beginServe();
     }
 
@@ -1064,8 +1086,9 @@
         // 目標速度（入力なしなら0）へ、加速度で少しずつ近づける。
         // 急停止・瞬間方向転換にならないので、コート上で滑るような自然さが出る。
         const hasInput = mx !== 0 || mz !== 0;
-        const desiredVx = hasInput ? (mx / len) * PLAYER.SPEED : 0;
-        const desiredVz = hasInput ? (mz / len) * PLAYER.SPEED : 0;
+        const maxSpeed = PLAYER.SPEED * this.staminaSpeedMult(this.you.stamina);
+        const desiredVx = hasInput ? (mx / len) * maxSpeed : 0;
+        const desiredVz = hasInput ? (mz / len) * maxSpeed : 0;
         const rate = (hasInput ? PLAYER.ACCEL : PLAYER.DECEL) * dt;
         const v = approach2D(this.you.vx, this.you.vz, desiredVx, desiredVz, rate);
         this.you.vx = v.x;
@@ -1075,7 +1098,9 @@
         this.you.z = clamp(this.you.z + this.you.vz * dt, bounds.zMin, bounds.zMax);
         // 歩行/走行アニメーションが参照する実速度。壁際でクランプされた分は含めない
         // （実際に動いていないのに走って見えるのを防ぐ）。
-        this.you.speed = Math.hypot(this.you.x - youBefore.x, this.you.z - youBefore.z) / dt;
+        const moved = Math.hypot(this.you.x - youBefore.x, this.you.z - youBefore.z);
+        this.you.speed = moved / dt;
+        this.drainStamina(this.you, moved);
       } else {
         this.you.vx = 0;
         this.you.vz = 0;
@@ -1232,7 +1257,8 @@
       const dx = target.x - actor.x;
       const dz = target.z - actor.z;
       const dist = Math.hypot(dx, dz);
-      const step = Math.min(speed * dt, dist);
+      const cappedSpeed = speed * this.staminaSpeedMult(actor.stamina);
+      const step = Math.min(cappedSpeed * dt, dist);
       if (dist > 0) {
         actor.x += (dx / dist) * step;
         actor.z += (dz / dist) * step;
@@ -1240,6 +1266,7 @@
       const moved = Math.hypot(actor.x - before.x, actor.z - before.z);
       actor.speed = moved / dt;
       actor.chaseDist += moved;
+      this.drainStamina(actor, moved);
     }
 
     stepBall(dt) {

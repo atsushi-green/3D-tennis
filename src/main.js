@@ -69,6 +69,7 @@
   });
 
   hud.renderScore(game.match, game.server, game.stats);
+  hud.setStamina(game.you.stamina);
   world.sync(game, 0); // スタート画面の後ろにも正しい配置で映しておく
 
   // 開発用：コンソールから RallyOne.game で状態を覗ける
@@ -91,6 +92,7 @@
       world.sync(game, dt);
       hud.setCharge(game.chargeMeter());
       hud.setSmashTip(game.smashHint);
+      hud.setStamina(game.you.stamina);
     }
     world.render();
   }

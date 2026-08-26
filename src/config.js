@@ -570,6 +570,24 @@
   };
 
   /**
+   * スタミナ。長いラリーで消耗し、移動速度（PLAYER.SPEED／CPU_CHASE 等）と
+   * 溜まる速さ（CHARGE.MAX_TIME 相当）が落ちる。ドロップとロブを「相手を走らせる道具」
+   * として意味のあるものにするのが狙い。人間・CPU/AI・ダブルスの4人全員に同じルールで
+   * 効く（game.js#drainStamina()/staminaSpeedMult()/staminaChargeMult() 参照）。
+   * ポイント間（newPoint()）に RECOVER_PER_POINT ぶんだけ回復する（フルには戻らないことも
+   * ある＝長いゲームの終盤ほど効いてくる）。効き幅は控えめに：実測（tests/smoke.mjs の
+   * 「ラリー20本」テスト参照）で、スタミナが尽きた状態でも移動速度は SPEED_FLOOR
+   * （元の85%）までしか落とさない。
+   */
+  const STAMINA = {
+    DRAIN_PER_M: 0.006,     // 1m走るごとに減る量（0〜1のうち）
+    RECOVER_PER_POINT: 0.35, // ポイント間で回復する量
+    SPEED_FLOOR: 0.85,      // stamina=0のときの移動速度倍率の下限
+    CHARGE_FLOOR: 0.75,     // stamina=0のときの溜め速度倍率の下限（人間のみ、溜め自体があるため）
+    LOW_THRESHOLD: 0.35,    // HUDでの残量警告表示に使う閾値
+  };
+
+  /**
    * 打点のタイミングによるコースのずれ。
    * ボールを体の前（遠い位置）で捉えるほど「引っ張り」、引きつけて体の近くで
    * 打つほど「流れる」。実プレイでの打点 (ball.z - player.z) はおよそ
@@ -779,6 +797,6 @@
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT,
-    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, REPLAY,
+    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, REPLAY, STAMINA,
   };
 })(window.RallyOne = window.RallyOne || {});

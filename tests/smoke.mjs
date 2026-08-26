@@ -657,7 +657,9 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 
   for (let i = 0; i < 60; i++) g.movePlayers(1 / 60); // 加速しきるのに十分な時間
   const cruiseSpeed = Math.hypot(g.you.vx, g.you.vz);
-  ok(Math.abs(cruiseSpeed - PLAYER.SPEED) < 0.01, `eventually reaches full speed: ${cruiseSpeed}`);
+  // 走った分だけスタミナがわずかに減っている（STAMINA.DRAIN_PER_M）ので、
+  // 1秒弱走った後の上限速度は PLAYER.SPEED よりほんの少しだけ低い。
+  ok(Math.abs(cruiseSpeed - PLAYER.SPEED) < 0.1, `eventually reaches (near) full speed: ${cruiseSpeed}`);
 
   input.moveZ = 0; // 入力を離す
   g.movePlayers(1 / 60);
@@ -2783,6 +2785,88 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 
   // 走るのをやめれば溜め直せる
   ok(hold(g, CHARGE.MAX_TIME + 0.2, 0) === 1, 'stopping lets the charge build again');
+}
+
+// --- スタミナ：長いラリーで消耗し、移動速度と溜め速度が落ちる。ポイント間で回復する ---
+{
+  const { STAMINA } = R.config;
+
+  // 走った距離ぶんスタミナが減り、その分だけ最高速度が落ちる（効き幅は控えめに）
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    ok(g.you.stamina === 1 && g.cpu.stamina === 1, 'precondition: stamina starts full for everyone');
+
+    // 20本ぶんのラリー、1本あたり平均3m走ったとみなす（CPU.STRETCH_DIST_MAX=6.5mが
+    // 「ぎりぎり」の目安なので、平均的なラリーはそれより手前という想定）
+    const METERS_PER_SHOT = 3;
+    for (let i = 0; i < 20; i++) g.drainStamina(g.you, METERS_PER_SHOT);
+    const staminaAfter20 = g.you.stamina;
+    const speedMultAfter20 = g.staminaSpeedMult(staminaAfter20);
+    const dropPct = (1 - speedMultAfter20) * 100;
+    ok(staminaAfter20 < 1 && staminaAfter20 > 0, `20 shots of a grueling rally drain some stamina, got ${staminaAfter20}`);
+    // 実測：20本(合計60m)走った直後の速度低下率。控えめ（10%未満）だが0でもない。
+    ok(dropPct < 10, `after 20 shots (~${METERS_PER_SHOT * 20}m) speed drops by less than 10%, got ${dropPct.toFixed(1)}%`);
+    ok(dropPct > 1, `but the drain is still noticeable, not a no-op, got ${dropPct.toFixed(1)}%`);
+  }
+
+  // スタミナが尽きても移動速度は STAMINA.SPEED_FLOOR までしか落ちない（操作不能にはならない）
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    ok(Math.abs(g.staminaSpeedMult(0) - STAMINA.SPEED_FLOOR) < 1e-9,
+      `fully drained stamina floors the speed multiplier at SPEED_FLOOR, got ${g.staminaSpeedMult(0)}`);
+    ok(STAMINA.SPEED_FLOOR > 0.7, `the floor keeps movement clearly usable, got ${STAMINA.SPEED_FLOOR}`);
+  }
+
+  // 実際に movePlayers()/moveTowards() を通しても効く。人間・CPU/AI 両方に同じルール
+  {
+    const input = { moveX: 0, moveZ: 1, lob: false };
+    const g = new R.Game({ input, hooks: noHooks });
+    g.start();
+    g.serve('you'); // rally phase にしてフットフォルト制限の狭い可動域を外す
+    g.you.x = 0; g.you.z = -5; g.you.vx = 0; g.you.vz = 0;
+    g.you.stamina = 0; // 尽きた状態から
+    for (let i = 0; i < 60; i++) g.movePlayers(1 / 60); // 加速しきるのに十分な時間
+    const cruiseSpeed = Math.hypot(g.you.vx, g.you.vz);
+    ok(Math.abs(cruiseSpeed - PLAYER.SPEED * STAMINA.SPEED_FLOOR) < 0.1,
+      `a fully drained human cruises at SPEED_FLOOR of PLAYER.SPEED, got ${cruiseSpeed}`);
+
+    const g2 = new R.Game({ input: fakeInput, hooks: noHooks });
+    Object.assign(g2.cpu, { x: 0, z: 0, stamina: 0 });
+    g2.moveTowards(g2.cpu, { x: 0, z: 0 }, { x: 100, z: 0 }, PLAYER.CPU_CHASE, 1 / 60);
+    ok(Math.abs(g2.cpu.speed - PLAYER.CPU_CHASE * STAMINA.SPEED_FLOOR) < 1e-9,
+      `a fully drained CPU is capped at SPEED_FLOOR of CPU_CHASE too (the same rule as the human), got ${g2.cpu.speed}`);
+  }
+
+  // 溜め（人間のみ、CPU/AIには溜めの概念自体が無い）：スタミナが尽きているとフル溜めしても
+  // CHARGE.MAX_TIME いっぱいまでは溜まらず、STAMINA.CHARGE_FLOOR までで頭打ちになる
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.you.stamina = 0;
+    Object.assign(g.you, { charging: true, chargeTime: 0, speed: 0 });
+    for (let i = 0; i < 60; i++) g.tickCharge(1 / 60); // 1秒、MAX_TIMEより長く保持
+    ok(Math.abs(g.you.chargeTime - R.config.CHARGE.MAX_TIME * STAMINA.CHARGE_FLOOR) < 1e-9,
+      `fully drained stamina caps the charge at CHARGE_FLOOR of MAX_TIME, got ${g.you.chargeTime}`);
+  }
+
+  // ポイント間で回復する（人間・CPU/AI とも同じ量。満タンを超えては増えない）
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.you.stamina = 0.3;
+    g.cpu.stamina = 0.3;
+    g.newPoint();
+    const expected = Math.min(1, 0.3 + STAMINA.RECOVER_PER_POINT);
+    ok(Math.abs(g.you.stamina - expected) < 1e-9, `stamina recovers by RECOVER_PER_POINT between points, got ${g.you.stamina}`);
+    ok(g.cpu.stamina === g.you.stamina, 'the same recovery rule applies to CPU/AI too');
+
+    g.you.stamina = 0.9; // 満タンに近い状態からはそれ以上増えずキャップされる
+    g.newPoint();
+    ok(g.you.stamina === 1, `recovery is capped at full, got ${g.you.stamina}`);
+  }
 }
 
 // --- サーブのコース：3コースが隣り合ってサービスボックスの幅を切れ目なく覆う ---
