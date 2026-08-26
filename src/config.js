@@ -530,6 +530,22 @@
   };
 
   /**
+   * ポイントが決まった後のリプレイ（表示側のみ。ゲームロジックには一切触れない）。
+   * world.js が毎フレーム直近 WINDOW_SEC 秒ぶんのボール・選手4人の位置をリングバッファに
+   * 録り続け、ポイントが決まった瞬間（main.js が game.phase の 'rally'→'over' 遷移を見て
+   * 検知する）にその内容を固定して再生する。低いサイドの視点（ローアングル）で見せる。
+   */
+  const REPLAY = {
+    WINDOW_SEC: 3.5,   // リングバッファに残しておく長さ
+    MAX_PLAY_SEC: 3.0, // 実際に再生する長さの上限（WINDOW_SECより短くてもよい）
+    SPEED: 0.7,        // 再生速度（1未満＝スロー。等速にしたければ1）
+    CAM_X: 10,          // コート脇（ダブルスサイドラインの外）の固定x
+    CAM_HEIGHT: 0.9,    // ローアングルの高さ
+    CAM_LOOK_Y: 1.0,    // 見上げる先の高さ（ネットの高さ相当）
+    CAM_LERP: 3.5,      // カメラがボールの深さへ追従する速さ
+  };
+
+  /**
    * Space を押しっぱなしにしている間のテイクバック（溜め）。
    * ラリー中もサーブの「打つ」瞬間も共通で使う。離した瞬間の溜め量(0〜1)で
    * SHOT.TAP_T〜CHARGE_T / SERVE.T〜CHARGE_T を補間する。
@@ -763,6 +779,6 @@
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT,
-    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS,
+    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, REPLAY,
   };
 })(window.RallyOne = window.RallyOne || {});

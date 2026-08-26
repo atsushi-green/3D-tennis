@@ -10,6 +10,20 @@
 - テスト: <tests/smoke.mjs の結果>
 ```
 
+## 2026-08-26 ポイントが決まった後にリプレイを流す
+- ブランチ: なし（ユーザー指示によりROADMAPを上から順にmain上で直接実装）
+- 実施内容: `scene/world.js` に、毎フレーム直近 `REPLAY.WINDOW_SEC`(3.5秒) ぶんのボール・選手4人の位置をリングバッファ(`history`)に録り続ける仕組みを追加。`main.js` のフレームループが `game.phase` の `'rally'→'over'` 遷移（＝ポイントが決まった瞬間）を検知して `world.startReplay()` を呼び、その時点の `history` を固定コピー(`reel`)して再生を始める。`game.js` には一切触れていない（`game.phase` を読むだけ）。
+  - 選手の姿勢再現は既存の `syncPlayer()` をそのまま再利用（`applyFrame()` として生の state / 録画コマのどちらからも呼べるよう共通化）。カメラだけ専用のローアングル（コート脇の固定x=`REPLAY.CAM_X`、低い高さ=`REPLAY.CAM_HEIGHT`、ボールの深さを追う）に切り替え、再生中は軌跡(`trail`)とスマッシュヒントを隠す。
+  - 再生は `REPLAY.SPEED`(0.7＝スロー)・`REPLAY.MAX_PLAY_SEC`(3.0秒) の上限で自動的に終わり、通常表示（追従カメラ）へ戻る。裏では `game.update()` が止まらず進み続けるので、次のポイントの開始が再生によってブロックされることはない。
+  - スキップは `input.js` に新設した `onAnyKey` フック（試合開始後の全キー入力で発火。既存のB/V/C等の判定はその後段のまま）経由で `world.skipReplay()` を呼ぶだけ。
+  - セルフレビューで「再生中は録画(`recordFrame`)を止めていたため、再生直後に次のポイントがすぐ終わるとhistoryが足りずそのポイントのリプレイだけ出せなくなりうる」と指摘があり、`recordFrame()` を再生中も止めずに毎フレーム呼ぶよう修正した（現在の生の `state` は再生中も引数として渡ってきているので、録るだけなら副作用はない）。
+- テスト: `node tests/smoke.mjs` — ALL PASS（既知の無関係な既存フレーク「the drop lands right behind the net」を除く、game.jsを一切変更していないので新規のロジックテストは無し）。表示専用の機能でsmoke.mjsのFILES(three.js/DOMを使わない範囲)では検証できないため、`claude-in-chrome`（`http.server`経由）で実機確認した：
+  - ポイントが決まった瞬間、通常の追従カメラとは明確に違うローアングル・コート脇からの視点に切り替わること（スクリーンショットで確認）。
+  - リプレイが自動的に終わり、通常カメラ・次のポイントの「サーブ」画面へ戻ること。
+  - `world.skipReplay()` を呼ぶと1フレームで即座に通常カメラへ戻ること。
+  - 自動プレイで16ポイント連続（`game.phase`の`'over'`遷移16回）を回しても、毎回 `startReplay()` が例外なく呼べ、コンソールエラーが出ないこと（録画継続の修正が効いていることの再現確認）。
+- 備考: 自動化ツールでの検証中、ブラウザタブが `document.hidden===true`（バックグラウンド扱い）になると `requestAnimationFrame` がほぼ止まり、壁時計の `wait` では画面が進まないことが分かった。これは環境側の挙動であり実装のバグではないため、`javascript_tool` で `game.update()`/`world.sync()` を直接ループさせて検証した。
+
 ## 2026-08-26 CPU に「プレースタイル」を持たせる
 - ブランチ: なし（ユーザー指示によりROADMAPを上から順にmain上で直接実装）
 - 実施内容: `config.js` に `CPU_LEVELS` と同じ `{cpu:{...}, player:{...}}` の上書きプリセット構造で `CPU_STYLES`（`none`／`serveAndVolley`／`retriever`／`aggressiveBaseliner`）と `applyCpuStyle(name)` を追加。**必ず `applyCpuLevel()` の後に呼ぶこと**（`applyCpuLevel()` は CPU を `DEFAULT_CPU` から作り直すので、順序を逆にするとスタイルの上書きが消える。`none` は空の上書きなので、呼んでも呼ばなくても現状と完全に一致する）。

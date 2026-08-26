@@ -47,7 +47,7 @@
      * @param {{onStart:Function, onStartDoubles:Function, onChargeStart:Function,
      *   onChargeRelease:Function, onFormationNet:Function, onFormationBack:Function,
      *   onSelectDifficulty:Function, onSelectSurface:Function, onSelectStyle:Function,
-     *   isStarted:Function}} handlers
+     *   onAnyKey:Function, isStarted:Function}} handlers
      */
     attach(handlers) {
       addEventListener('keydown', (e) => {
@@ -60,7 +60,12 @@
           else if (SURFACE_KEYS[e.code]) handlers.onSelectSurface(SURFACE_KEYS[e.code]);
           else if (STYLE_KEYS[e.code]) handlers.onSelectStyle(STYLE_KEYS[e.code]);
           else handlers.onStart();
-        } else if (SWING[e.code] && !this.chargeKey) {
+          return;
+        }
+        // ポイント間のリプレイをスキップするための合図。ラリー中の操作にも毎回飛ぶが、
+        // リプレイ中でなければ何もしないので実害はない（world.js#skipReplay() 参照）。
+        handlers.onAnyKey();
+        if (SWING[e.code] && !this.chargeKey) {
           this.chargeKey = e.code;
           handlers.onChargeStart(SWING[e.code]);
         } else if (FORMATION_NET.indexOf(e.code) !== -1) {

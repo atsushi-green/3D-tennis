@@ -65,6 +65,7 @@
       cpuStyle = name;
       hud.setStyle(name);
     },
+    onAnyKey: () => world.skipReplay(),
   });
 
   hud.renderScore(game.match, game.server, game.stats);
@@ -75,6 +76,7 @@
   RallyOne.world = world;
 
   let prev = performance.now();
+  let prevPhase = game.phase;
   function frame(now) {
     requestAnimationFrame(frame);
     const dt = Math.min((now - prev) / 1000, PHYSICS.MAX_DT);
@@ -82,6 +84,10 @@
 
     if (game.started) {
       game.update(dt);
+      // ポイントが決まった瞬間（'rally'→'over'）を検知してリプレイを始める。game.js には
+      // 一切手を入れず、公開済みの game.phase を読むだけ（表示側で完結させる）。
+      if (game.phase === 'over' && prevPhase !== 'over') world.startReplay();
+      prevPhase = game.phase;
       world.sync(game, dt);
       hud.setCharge(game.chargeMeter());
       hud.setSmashTip(game.smashHint);
