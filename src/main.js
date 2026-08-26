@@ -84,11 +84,17 @@
     prev = now;
 
     if (game.started) {
-      game.update(dt);
-      // ポイントが決まった瞬間（'rally'→'over'）を検知してリプレイを始める。game.js には
-      // 一切手を入れず、公開済みの game.phase を読むだけ（表示側で完結させる）。
-      if (game.phase === 'over' && prevPhase !== 'over') world.startReplay();
-      prevPhase = game.phase;
+      // リプレイ中は試合の進行を止める（＝「再生ぶんだけ待つ」）。止めないと裏で次の
+      // ポイントが決まってしまい、再生中に startReplay() がもう一度呼ばれて今の再生が
+      // 途中で上書きされる（＝「次のプレーが勝手に始まる」「再生が途中で途切れる」）。
+      // game.js 自体には触れず、main.js が update() を呼ぶかどうかだけで制御する。
+      if (!world.isReplaying()) {
+        game.update(dt);
+        // ポイントが決まった瞬間（'rally'→'over'）を検知してリプレイを始める。game.js には
+        // 一切手を入れず、公開済みの game.phase を読むだけ（表示側で完結させる）。
+        if (game.phase === 'over' && prevPhase !== 'over') world.startReplay();
+        prevPhase = game.phase;
+      }
       world.sync(game, dt);
       hud.setCharge(game.chargeMeter());
       hud.setSmashTip(game.smashHint);

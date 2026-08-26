@@ -154,6 +154,15 @@
       replaying = false;
     }
 
+    /**
+     * 再生中かどうか。main.js はこれが true の間 `game.update()` を止める
+     * （＝裏で次のポイントが進んでしまい、再生中に startReplay() が再び呼ばれて
+     * 今の再生が途中で上書きされる、という事故を防ぐ）。
+     */
+    function isReplaying() {
+      return replaying;
+    }
+
     /** @param {{ball:object, you:object, cpu:object, youMate:object, cpuMate:object, doubles:boolean}} state */
     function sync(state, dt) {
       // 録画は再生中も止めない：裏では game.update() が実際の試合を進め続けているので、
@@ -192,7 +201,7 @@
     }
 
     return {
-      sync, render: stage.render, scene, camera, setSurface, startReplay, skipReplay,
+      sync, render: stage.render, scene, camera, setSurface, startReplay, skipReplay, isReplaying,
     };
   };
 })(window.RallyOne = window.RallyOne || {});
