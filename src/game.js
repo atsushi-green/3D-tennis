@@ -176,6 +176,8 @@
        * newPoint() で毎ポイント消す。
        */
       this.lastShotBy = { you: null, cpu: null };
+      /** このポイントで何本打たれたか（サーブも1本に数える）。beginServe() で数え直す。 */
+      this.rallyShots = 0;
       /**
        * スマッシュの先回りヒント。毎フレーム smashSpot() が入れ直す（打てる球が来ていなければ null）。
        * 表示専用の値なので、ゲームの判定はここを一切読まない（scene/hint.js と hud.js だけが使う）。
@@ -470,6 +472,7 @@
       this.phase = 'serve';
       this.tossActive = false;
       this.serveInFlight = false;
+      this.rallyShots = 0; // このサーブ（フォールトからのやり直しも含む）から数え直す
 
       const ball = this.ball;
       ball.live = false;
@@ -622,6 +625,7 @@
       this.tossActive = false;
       this.serveInFlight = true; // 一度も返球されていない＝ノーバウンドで打ち返してはいけない
       this.phase = 'rally';
+      this.rallyShots++; // サーブも1本に数える（観客の歓声・実況の盛り上がりに使う）
       this.resetChase(); // レシーバーが「このサーブを追った距離」を数え始める
       const server = this.actor(who);
       server.anim = PLAYER.SERVE_ANIM;
@@ -680,6 +684,7 @@
       const player = this.actor(who);
       const from = { x: ball.x, y: Math.max(ball.y, 0.5), z: ball.z };
       this.serveInFlight = false; // 一度でも打ち返されたら「ノーバウンド禁止」の制約は解除
+      this.rallyShots++; // 観客の歓声・実況の盛り上がりに使う（ラリーが長いほど盛り上がる）
 
       // 打った直後は（人間も含めて）すぐには動けない。フォロースルー中は追加入力があっても
       // 動き出せないはず、という想定（CPU/AIはすぐにミドルへ戻れるほど強くない、という意味も兼ねる）。
@@ -852,7 +857,12 @@
       }
       this.phase = 'over';
       this.ball.live = false;
-      this.hooks.sound('point', winner);
+      // 観客の歓声（sfx.point）用の決まり方。エース／ウィナーは相手の非（凡ミス）とは
+      // 違う盛り上がり方をする。ラリーの本数（rallyShots）も渡し、長引くほど盛り上げる。
+      const outcome = reason === 'ダブルフォルト' ? 'doubleFault'
+        : isAce ? 'ace'
+          : reason === 'ツーバウンド' ? 'winner' : 'error';
+      this.hooks.sound('point', winner, outcome, this.rallyShots);
 
       const result = this.match.awardPoint(winner);
       const mine = winner === 'you';

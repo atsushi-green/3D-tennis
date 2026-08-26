@@ -10,6 +10,12 @@
 - テスト: <tests/smoke.mjs の結果>
 ```
 
+## 2026-08-27 観客の歓声を入れる
+- ブランチ: なし（ユーザー指示によりROADMAPを上から順にmain上で直接実装）
+- 実施内容: `game.js` に `rallyShots`（このポイントで何本打たれたか。サーブも1本に数える。`beginServe()` で数え直し、`serve()`/`hit()` で加算）を追加。`endPoint()` で決まり方を `'ace'|'winner'|'error'|'doubleFault'` に分類し、既存の `hooks.sound('point', winner)` を `hooks.sound('point', winner, outcome, this.rallyShots)` に拡張（既存の呼び出し口をそのまま使い、新しいフックは足していない）。`audio.js` に、ホワイトノイズ→バンドパスフィルタ→山なりの音量エンベロープという最小構成で `crowd(rallyShots, outcome)` を追加し、`sfx.point` から `tone()`（既存の決着音）と一緒に鳴らすようにした。音量・長さ・鳴らす条件はすべて `config.js` の `AUDIO.CROWD` に集約（`BASE_DUR`/`MAX_DUR`/`BASE_VOL`/`MAX_VOL`/`ATTACK`/`OUTCOME_VOL_MULT`/`FILTER_BASE_HZ`/`FILTER_EXCITED_HZ`/`EXCITEMENT_SHOTS`）。ラリーの本数で音量・長さが `EXCITEMENT_SHOTS`(20本) まで伸び、決まり方の倍率（エース1.35／ウィナー1.15／凡ミス0.7／ダブルフォルト0.3）を掛ける。エースは定義上サーブ1本だけのポイントなので倍率が高くてもラリーぶんの伸びが乗らず、結果として「長いラリーの末のウィナー」が音量・長さとも最大になる（実測：ウィナー×20本＝長さ2.0秒・音量0.23、対してエース＝長さ0.9秒・音量0.0945）。
+- テスト: `node tests/smoke.mjs` — ALL PASS（既知の無関係な既存フレーク「the drop lands right behind the net」を除く）。新規テスト：`hooks.sound('point', ...)` に渡る `outcome`/`rallyShots` が、エース（rallyShots=1）・ウィナー（本数どおり）・ネットでの凡ミス（'error'）・ダブルフォルトのそれぞれで正しいこと、ラリーが長引くほど `rallyShots` も伸びること。`audio.js` は `AudioContext` が要るため純ロジックテストの対象外（`tests/smoke.mjs` の `FILES` に含めていない）。
+- 備考: `claude-in-chrome` で実機確認：`sfx.point()` を4パターン（ace/winner/error/doubleFault）とも例外なく呼べること、実際にゲームループを回して1ポイント決着させても `point` 音が正確に1回だけ発火すること、コンソールエラーが出ないことを確認した。セルフレビューで「`CROWD.DUR_PER_SHOT`/`VOL_PER_SHOT` が定義されているが未使用（死んだ設定値）」という指摘があり、実装を `excitement`（本数ベースの0〜1係数）で `BASE_*`〜`MAX_*` を補間する方式に一本化していたため、この2つの設定値を削除。ラリー本数のハードコードだった `19` も `AUDIO.CROWD.EXCITEMENT_SHOTS`(20) から導出する形に直した。
+
 ## 2026-08-27 リプレイ中に次のポイントが裏で進んでしまうバグを直す
 - ブランチ: なし
 - 経緯: ユーザーから実機で「リプレイ中も次のプレーが勝手に始まる」「リプレイが最後まで流れず途中で途切れる」という報告を受けた。原因は直下の「ポイントが決まった後にリプレイを流す」の実装時の設計判断（`game.update()` を再生中も止めない＝「次のポイントの開始をブロックしない」）だった：裏で `game.update()` が進み続けるため、再生中に次のポイントまで終わってしまうと `main.js` が再度 `'rally'→'over'` 遷移を検知して `world.startReplay()` を呼び直し、再生中の `reel`/`replayClock` を上書きしてしまっていた。

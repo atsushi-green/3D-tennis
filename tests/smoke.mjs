@@ -642,6 +642,82 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(winnerCall.sub === 'ウィナー！', `a rally-ending double bounce calls out 'ウィナー！' instead of 'ツーバウンド', got ${winnerCall.sub}`);
 }
 
+// --- 観客の歓声：hooks.sound('point', ...) に決まり方(outcome)とラリーの本数(rallyShots)が渡る ---
+// (audio.js 側は AudioContext が要るので純ロジックのテストはできない。ここでは
+//  game.js が渡す引数が正しいことだけを検証する)
+{
+  const sounds = [];
+  const hooksWithSound = { ...noHooks, sound: (name, ...args) => sounds.push({ name, args }) };
+  const lastPointSound = () => sounds.filter((s) => s.name === 'point').slice(-1)[0].args;
+
+  // エース：サーブのみ（rallyShots=1）、誰も触れないまま2バウンド
+  {
+    const g = new R.Game({ input: fakeInput, hooks: hooksWithSound });
+    g.start();
+    g.serve('you');
+    Object.assign(g.ball, { bounces: 0, x: 1.0, y: 0, vy: -1, z: 3 });
+    g.bounce();
+    Object.assign(g.ball, { bounces: 1, y: 0, vy: -1 });
+    g.bounce(); // 誰も触れないまま2バウンド＝エース
+    const [winner, outcome, rallyShots] = lastPointSound();
+    ok(winner === 'you' && outcome === 'ace' && rallyShots === 1,
+      `an ace reports outcome='ace' and rallyShots=1, got winner=${winner} outcome=${outcome} rallyShots=${rallyShots}`);
+  }
+
+  // ウィナー：リターンされたラリー（サーブ+返球=2本）の末、相手が拾えず2バウンド
+  {
+    const g = new R.Game({ input: fakeInput, hooks: hooksWithSound });
+    g.start();
+    g.serve('you');
+    Object.assign(g.ball, { bounces: 0, x: 1.0, y: 0, vy: -1, z: 3 });
+    g.bounce();
+    g.hit('cpu'); // リターン（2本目）
+    Object.assign(g.ball, { bounces: 1, y: 0, vy: -1 });
+    g.bounce(); // 相手が拾えず2バウンド＝ラリーの決定打
+    const [, outcome, rallyShots] = lastPointSound();
+    ok(outcome === 'winner' && rallyShots === 2,
+      `a rally-ending double bounce reports outcome='winner' with the shot count, got outcome=${outcome} rallyShots=${rallyShots}`);
+  }
+
+  // 凡ミス（ネット／アウト）：相手のミスで決まったとき
+  {
+    const g = new R.Game({ input: fakeInput, hooks: hooksWithSound });
+    g.start();
+    g.phase = 'rally';
+    g.endPoint('you', 'ネット');
+    const [, outcome] = lastPointSound();
+    ok(outcome === 'error', `a net fault reports outcome='error', got ${outcome}`);
+  }
+
+  // ダブルフォルト：1本目・2本目とも明らかなアウトを狙って強制的にフォールトさせる
+  {
+    const g = new R.Game({ input: fakeInput, hooks: hooksWithSound });
+    g.start();
+    g.serveFault('アウト');
+    g.serveFault('アウト'); // 2本目もフォールト＝ダブルフォルト
+    const [, outcome] = lastPointSound();
+    ok(outcome === 'doubleFault', `a double fault reports outcome='doubleFault', got ${outcome}`);
+  }
+
+  // ラリーが長引くほど rallyShots も伸びる（歓声の盛り上がりの材料）
+  {
+    const g = new R.Game({ input: fakeInput, hooks: hooksWithSound });
+    g.start();
+    g.serve('you');
+    Object.assign(g.ball, { bounces: 0, x: 1.0, y: 0, vy: -1, z: 3 });
+    g.bounce();
+    for (let i = 0; i < 5; i++) {
+      g.hit(i % 2 === 0 ? 'cpu' : 'you');
+      Object.assign(g.ball, { bounces: 0, y: 1, vy: -1 });
+    }
+    g.hit('cpu');
+    Object.assign(g.ball, { bounces: 1, y: 0, vy: -1 });
+    g.bounce();
+    const [, , rallyShots] = lastPointSound();
+    ok(rallyShots === 7, `a longer rally reports a proportionally larger rallyShots, got ${rallyShots}`);
+  }
+}
+
 // --- 移動は加速度ベース：急に最高速にならず、離しても急停止しない（滑るような自然さ） ---
 {
   const input = { moveX: 0, moveZ: 1, lob: false };
