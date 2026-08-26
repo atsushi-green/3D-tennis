@@ -1684,6 +1684,82 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(R.config.COURT.W === 8.23, 'applyCpuLevel does not touch court dimensions');
 }
 
+// --- CPU/AIの「プレースタイル」：強さ(Easy/Normal/Hard)とは直交する性格を上書きする ---
+{
+  const { CPU_STYLES, applyCpuLevel, applyCpuStyle } = R.config;
+  ok(['none', 'serveAndVolley', 'retriever', 'aggressiveBaseliner'].every((k) => !!CPU_STYLES[k]),
+    `all four styles exist, got ${Object.keys(CPU_STYLES).join(',')}`);
+
+  applyCpuLevel('normal'); // 強さの基準を固定してから比べる
+  applyCpuStyle('none');
+  const baselineCpu = { ...R.config.CPU };
+  const baselinePlayer = { ...R.config.PLAYER };
+
+  // スタイル無指定なら現状と完全に一致する
+  ok(JSON.stringify(R.config.CPU) === JSON.stringify(baselineCpu), 'style "none" leaves CPU untouched');
+  ok(JSON.stringify(R.config.PLAYER) === JSON.stringify(baselinePlayer), 'style "none" leaves PLAYER untouched');
+
+  // サーブ&ボレーヤー：APPROACH_NET_AFTER_SERVE が立ち、サーブ後にネットへ詰める
+  // （実際の移動は game.js#moveSinglesCpu() が見る。ここでは homePosition() の切り替えだけ検証）
+  applyCpuLevel('normal');
+  applyCpuStyle('serveAndVolley');
+  ok(R.config.CPU.APPROACH_NET_AFTER_SERVE === true, 'serveAndVolley sets APPROACH_NET_AFTER_SERVE');
+  {
+    const { homePosition } = R.ai;
+    const normalHome = homePosition(false);
+    const netHome = homePosition(true);
+    ok(netHome.z < normalHome.z && netHome.z === R.config.CPU.NET_APPROACH_Z,
+      `approaching the net targets a shallower z than the normal home position, got net=${netHome.z} normal=${normalHome.z}`);
+  }
+  {
+    // 実際に game.js を通しても、サーブがまだ返っていない間（serveInFlight）は
+    // 通常の定位置(HOME_Z)ではなくネット際(NET_APPROACH_Z)へ歩いていく
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.server = 'cpu';
+    g.phase = 'rally';
+    g.serveInFlight = true;
+    g.ball.last = 'cpu';
+    g.cpu.x = 0; g.cpu.z = R.config.CPU.HOME_Z;
+    for (let i = 0; i < 120; i++) g.movePlayers(1 / 60);
+    ok(g.cpu.z < R.config.CPU.HOME_Z - 1,
+      `serve-and-volley CPU walks toward the net after serving, got z=${g.cpu.z} (started at ${R.config.CPU.HOME_Z})`);
+  }
+
+  // リトリーバー：ミスしにくく、ロブを多用する
+  applyCpuLevel('normal');
+  applyCpuStyle('retriever');
+  ok(R.config.CPU.OUT_LONG < baselineCpu.OUT_LONG && R.config.CPU.OUT_WIDE < baselineCpu.OUT_WIDE,
+    `retriever misses less often than no style, got LONG=${R.config.CPU.OUT_LONG} WIDE=${R.config.CPU.OUT_WIDE}`);
+  ok(R.config.PLAYER.CPU_CHASE > baselinePlayer.CPU_CHASE, 'retriever chases faster than no style');
+  {
+    const { cpuShot } = R.ai;
+    let lobs = 0;
+    const N = 300;
+    // ベースライン同士のラリー（NET_Zの外）でロブ率を比べる
+    for (let i = 0; i < N; i++) if (cpuShot({ x: 0, z: -R.config.HALF_L + 1 }, -1, 0).lob) lobs++;
+    const retrieverLobRate = lobs / N;
+    applyCpuLevel('normal'); // 必ず applyCpuLevel() の後で style を適用する（config.js のコメント参照）
+    applyCpuStyle('none');
+    lobs = 0;
+    for (let i = 0; i < N; i++) if (cpuShot({ x: 0, z: -R.config.HALF_L + 1 }, -1, 0).lob) lobs++;
+    const noneLobRate = lobs / N;
+    ok(retrieverLobRate > noneLobRate * 1.5,
+      `retriever lobs a lot more often in a baseline rally, got retriever=${retrieverLobRate} none=${noneLobRate}`);
+  }
+
+  // アグレッシブベースライナー：コースが広く、速く、その分ミスも増える
+  applyCpuLevel('normal');
+  applyCpuStyle('aggressiveBaseliner');
+  ok(R.config.CPU.AIM_X_MAX > baselineCpu.AIM_X_MAX, 'aggressive baseliner aims wider than no style');
+  ok(R.config.CPU.SHOT_T < baselineCpu.SHOT_T, 'aggressive baseliner hits flatter/faster shots than no style');
+  ok(R.config.CPU.OUT_LONG > baselineCpu.OUT_LONG && R.config.CPU.OUT_WIDE > baselineCpu.OUT_WIDE,
+    `aggressive baseliner takes more risk (misses more) than no style, got LONG=${R.config.CPU.OUT_LONG} WIDE=${R.config.CPU.OUT_WIDE}`);
+
+  // 後続のテストに影響しないよう、必ず基準状態へ戻す
+  applyCpuLevel('normal');
+  applyCpuStyle('none');
+}
+
 // --- スピン：実効重力（フラットは従来のGRAVITYと完全一致、トップスピンはより強く、スライスはより弱く） ---
 {
   const { spinGravity } = R.physics;

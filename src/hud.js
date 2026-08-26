@@ -26,6 +26,9 @@
         smashTip: $('smashTip'),
         diffOpts: [$('diffEasy'), $('diffNormal'), $('diffHard')],
         surfaceOpts: [$('surfHard'), $('surfClay'), $('surfGrass')],
+        styleOpts: [
+          $('styleNone'), $('styleServeVolley'), $('styleRetriever'), $('styleBaseliner'),
+        ],
       };
     }
 
@@ -37,6 +40,11 @@
     /** スタート画面のサーフェス表示を切り替える（実際の適用は config.applySurface が行う）。 */
     setSurface(level) {
       this.el.surfaceOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === level));
+    }
+
+    /** スタート画面のプレースタイル表示を切り替える（実際の適用は config.applyCpuStyle が行う）。 */
+    setStyle(name) {
+      this.el.styleOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === name));
     }
 
     /**

@@ -1126,7 +1126,11 @@
         this.cpu.speed = 0; // まだ反応できていない
         return;
       }
-      const target = incoming ? chasePosition(this.ball, 1, this.cpu) : homePosition();
+      // プレースタイル「サーブ&ボレーヤー」：自分のサーブがまだ返球されていない間
+      // （serveInFlight）は、通常の定位置(HOME_Z)へ戻る代わりにネット際へ詰める。
+      const approachingNet = !incoming && CPU.APPROACH_NET_AFTER_SERVE
+        && this.server === 'cpu' && this.serveInFlight;
+      const target = incoming ? chasePosition(this.ball, 1, this.cpu) : homePosition(approachingNet);
       this.moveIfRecovered('cpu', this.cpu, cpuBefore, target, incoming ? PLAYER.CPU_CHASE : PLAYER.CPU_RECOVER, dt);
     }
 

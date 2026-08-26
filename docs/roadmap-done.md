@@ -10,6 +10,16 @@
 - テスト: <tests/smoke.mjs の結果>
 ```
 
+## 2026-08-26 CPU に「プレースタイル」を持たせる
+- ブランチ: なし（ユーザー指示によりROADMAPを上から順にmain上で直接実装）
+- 実施内容: `config.js` に `CPU_LEVELS` と同じ `{cpu:{...}, player:{...}}` の上書きプリセット構造で `CPU_STYLES`（`none`／`serveAndVolley`／`retriever`／`aggressiveBaseliner`）と `applyCpuStyle(name)` を追加。**必ず `applyCpuLevel()` の後に呼ぶこと**（`applyCpuLevel()` は CPU を `DEFAULT_CPU` から作り直すので、順序を逆にするとスタイルの上書きが消える。`none` は空の上書きなので、呼んでも呼ばなくても現状と完全に一致する）。
+  - サーブ&ボレーヤー: 新設の `CPU.APPROACH_NET_AFTER_SERVE` フラグを立てる。`ai.js#homePosition(approachNet)` が第1引数で通常の定位置(`HOME_Z`)とネット際(`NET_APPROACH_Z`=1.5)を切り替えられるようにし、`game.js#moveSinglesCpu()` が「自分のサーブがまだ返っていない間（`serveInFlight`）」だけ `approachNet=true` を渡す。
+  - リトリーバー: `OUT_LONG/OUT_WIDE`・`STRETCH_OUT_*` を下げてミスしにくくし、`CPU_CHASE`/`CPU_RECOVER` を上げてよく走り、`LOB_BASE`/`LOB_VS_STRETCH`/`NET_LOB`/`NET_LOB_PRESSED` を上げてロブを多用する。
+  - アグレッシブベースライナー: `AIM_X_MIN/MAX` を広げ `SHOT_T` を短くする代わり `OUT_LONG/OUT_WIDE` を上げてリスクを取り、ネットに出た相手にも `NET_LOB`/`NET_LOB_PRESSED` を下げて（「ネットに出た相手への攻め手の多様化」で作った `netPlayShot()` の重み経由で）ロブより攻めの配球を選びやすくする。
+  - `main.js` はゲーム開始時に `applyCpuLevel(cpuLevel)` の直後に `applyCpuStyle(cpuStyle)` を呼ぶ。スタート画面に `7 なし／8 サーブ&ボレー／9 リトリーバー／0 ベースライナー` の選択行を追加（`input.js` の `STYLE_KEYS`、`hud.js` の `setStyle()`）。
+- テスト: `node tests/smoke.mjs` — ALL PASS（既知の無関係な既存フレーク「the drop lands right behind the net」を除く）。新規テスト：4スタイルすべてが存在すること、`none` はCPU/PLAYERを完全に不変のままにすること、サーブ&ボレーヤーは `homePosition(true)` が `NET_APPROACH_Z` を返しかつ通常より浅いこと、実際に `game.js` を通しても自分のサーブが返る前はCPUがネット際へ歩くこと、リトリーバーはOUT_*が下がりCPU_CHASEが上がりベースラインラリーのロブ率が明確に高いこと、アグレッシブベースライナーはAIM_Xが広くSHOT_Tが短くOUT_*が高いこと。
+- 備考: スタイルの上書きは「強さの値の上に絶対値で乗せる」方式なので、同じスタイルの数値は強さ（Easy/Normal/Hard）に関わらず同一になる（強さごとにスタイルの強度も変える、という多段合成はスコープ外にした）。`claude-in-chrome` で実機確認：スタート画面で7/8/9/0キーがそれぞれ正しくハイライトすること、`8 サーブ&ボレー` を選んで試合中に `server='cpu'`・`serveInFlight=true` を模した状態で `movePlayers()` を回すとCPUが定位置(HOME_Z≈11.0)からネット際(z≈8.0、1秒後)へ向けて実際に歩くことを確認。コンソールエラーなし。セルフレビューでも問題は見つからなかった。
+
 ## 2026-08-26 コートサーフェス（ハード／クレー／芝）を選べるようにする
 - ブランチ: なし（ユーザー指示によりROADMAPを上から順にmain上で直接実装）
 - 実施内容: `config.js` に `SURFACE`（`physics.js#reflectBounce()` が毎バウンド参照する「今効いている」倍率。`CPU`/`PLAYER` と同じ「参照を渡して中身だけ書き換える」パターン）・`SURFACE_PRESETS`（ハード=倍率1／クレー=`RESTITUTION_MULT`1.15・`FRICTION_MULT`0.90／芝=0.75・1.05）・`applySurface(name)`・`SURFACE_COLORS`（コートテクスチャの配色）を追加。`reflectBounce()` は `PHYSICS.RESTITUTION/FRICTION × スピン別倍率 × SURFACE.*_MULT` の3段掛けにした。`scene/court.js` の `courtTexture()` はサーフェス別の配色を受け取れるようにし、`createCourt()` が返すグループに `userData.surfaceMesh` を持たせて、新設の `setCourtSurface()` が試合前でもテクスチャだけ焼き直せるようにした。`scene/world.js` は `createWorld()` の戻り値に `setSurface(name)` を追加。スタート画面には CPUの強さ選択（1/2/3）と同じ見た目・パターンで `4 ハード／5 クレー／6 芝` の選択行を追加（`input.js` の `SURFACE_KEYS`、`hud.js` の `setSurface()`、`main.js` が選択のたびに `hud.setSurface()` と `world.setSurface()` を呼んで背後のコートを即座に塗り替える。実際の物理適用は `applyCpuLevel()` と同じタイミング＝`game.start()` 直前）。

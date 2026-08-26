@@ -2,7 +2,9 @@
 (function (RallyOne) {
   'use strict';
 
-  const { PHYSICS, applyCpuLevel, applySurface } = RallyOne.config;
+  const {
+    PHYSICS, applyCpuLevel, applyCpuStyle, applySurface,
+  } = RallyOne.config;
   const { sfx, unlock } = RallyOne.audio;
 
   const input = new RallyOne.Input();
@@ -13,6 +15,8 @@
   let cpuLevel = 'normal';
   /** スタート画面で選んだコートサーフェス。既定はハード（未選択のまま開始した場合）。 */
   let surface = 'hard';
+  /** スタート画面で選んだCPU/AIのプレースタイル。既定はなし（未選択のまま開始した場合）。 */
+  let cpuStyle = 'none';
 
   const game = new RallyOne.Game({
     input,
@@ -31,6 +35,7 @@
     onStart: () => {
       unlock(); // AudioContext はユーザー操作の中でしか起こせない
       applyCpuLevel(cpuLevel);
+      applyCpuStyle(cpuStyle); // 必ず applyCpuLevel() の後（config.js のコメント参照）
       applySurface(surface);
       hud.hideStartScreen();
       game.start(false);
@@ -38,6 +43,7 @@
     onStartDoubles: () => {
       unlock();
       applyCpuLevel(cpuLevel);
+      applyCpuStyle(cpuStyle);
       applySurface(surface);
       hud.hideStartScreen();
       game.start(true);
@@ -54,6 +60,10 @@
       surface = level;
       hud.setSurface(level);
       world.setSurface(level); // スタート画面の背後のコートも選択に合わせて塗り替える
+    },
+    onSelectStyle: (name) => {
+      cpuStyle = name;
+      hud.setStyle(name);
     },
   });
 

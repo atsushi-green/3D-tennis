@@ -329,6 +329,10 @@
     NET_PASS_X_MIN: 3.3, // サイドライン際（HALF_W=4.115）を狙う左右幅
     NET_PASS_X_MAX: 3.9,
     NET_PASS_T: 0.62,    // 低く速い
+    // プレースタイル「サーブ&ボレーヤー」専用（CPU_STYLES 参照）。サーブを打った直後、
+    // 通常の定位置(HOME_Z)へ戻る代わりにここ（ネット近く）へ詰める。
+    APPROACH_NET_AFTER_SERVE: false,
+    NET_APPROACH_Z: 1.5,
   };
 
   /**
@@ -639,6 +643,53 @@
   }
 
   /**
+   * CPU/AI の「プレースタイル」。強さ（Easy/Normal/Hard）とは直交する性格を、
+   * CPU_LEVELS と同じ `{cpu:{...}, player:{...}}` の上書きプリセット構造で足す。
+   * - serveAndVolley: サーブ後にネットへ詰める（APPROACH_NET_AFTER_SERVE。moveSinglesCpu()
+   *   参照）。NET_Z 圏内での勝負を好む＝ネットに出た後の配球ロジック(netPlayShot())は
+   *   ここでは変えない（そちらは相手の位置で自動的に決まるため）。
+   * - retriever: 守備型。OUT_* を下げて簡単にミスしない代わり、CPU_CHASE を上げてよく走り、
+   *   ロブ（LOB_BASE・NET_LOB 系）を多めに選んで時間を稼ぐ。
+   * - aggressiveBaseliner: AIM_X を広げ、SHOT_T を短くして速く沈める代わり、OUT_* を上げて
+   *   リスクを取る。ネットへ出た相手にもロブより攻めの配球（NET_LOB 系を下げる）を好む。
+   */
+  const CPU_STYLES = {
+    none: { cpu: {}, player: {} },
+    serveAndVolley: {
+      cpu: { APPROACH_NET_AFTER_SERVE: true },
+      player: {},
+    },
+    retriever: {
+      cpu: {
+        OUT_LONG: 0.02, OUT_WIDE: 0.015, STRETCH_OUT_LONG: 0.08, STRETCH_OUT_WIDE: 0.06,
+        LOB_BASE: 0.30, LOB_VS_STRETCH: 0.55, NET_LOB: 0.45, NET_LOB_PRESSED: 0.75,
+      },
+      player: { CPU_CHASE: 11.5, CPU_RECOVER: 4.4 },
+    },
+    aggressiveBaseliner: {
+      cpu: {
+        AIM_X_MIN: 2.2, AIM_X_MAX: 4.0, SHOT_T: 0.68, OUT_LONG: 0.15, OUT_WIDE: 0.11,
+        NET_LOB: 0.12, NET_LOB_PRESSED: 0.30,
+      },
+      player: {},
+    },
+  };
+
+  /**
+   * プレースタイルを適用する。CPU/PLAYER への上書きは applyCpuLevel() と同じ
+   * 「参照を渡して中身だけ書き換える」パターン。**必ず applyCpuLevel() の後に呼ぶこと**：
+   * applyCpuLevel() は CPU を DEFAULT_CPU から作り直す（＝前回のスタイルの上書きを消す）ので、
+   * 順序を逆にするとスタイルの上書きが消えてしまう。スタイル無指定（'none'）は空の上書きなので、
+   * 呼んでも呼ばなくても現状と完全に一致する。
+   * @param {'none'|'serveAndVolley'|'retriever'|'aggressiveBaseliner'} name
+   */
+  function applyCpuStyle(name) {
+    const preset = CPU_STYLES[name] || CPU_STYLES.none;
+    Object.assign(CPU, preset.cpu);
+    Object.assign(PLAYER, preset.player);
+  }
+
+  /**
    * コートサーフェス。`physics.js#reflectBounce()` は既に
    * `PHYSICS.RESTITUTION × スピン別倍率` の形なので、そこにサーフェス別の倍率を1枚
    * 掛けるだけで球質が変わる。ハードは倍率1＝現在の物理と完全に一致する（既存のバランスを
@@ -711,7 +762,7 @@
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO,
-    CPU_LEVELS, applyCpuLevel, SPIN, WIND, TRAIL, DROP, SMASH_HINT,
+    CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT,
     SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS,
   };
 })(window.RallyOne = window.RallyOne || {});

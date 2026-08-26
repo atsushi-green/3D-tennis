@@ -136,9 +136,14 @@
     };
   }
 
-  /** ラリーが自分に関係ないときの定位置 */
-  function homePosition() {
-    return { x: 0, z: CPU.HOME_Z };
+  /**
+   * ラリーが自分に関係ないときの定位置。
+   * @param {boolean} [approachNet] true なら通常の定位置(HOME_Z)の代わりにネット際
+   *   (NET_APPROACH_Z) を返す。プレースタイル「サーブ&ボレーヤー」がサーブを打った直後に
+   *   使う（game.js#moveSinglesCpu() 参照）。
+   */
+  function homePosition(approachNet) {
+    return { x: 0, z: approachNet ? CPU.NET_APPROACH_Z : CPU.HOME_Z };
   }
 
   /**

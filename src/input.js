@@ -28,6 +28,10 @@
   const DIFFICULTY_KEYS = { Digit1: 'easy', Digit2: 'normal', Digit3: 'hard' };
   /** スタート画面でのみ有効。コートサーフェス（ハード／クレー／芝）を選ぶ */
   const SURFACE_KEYS = { Digit4: 'hard', Digit5: 'clay', Digit6: 'grass' };
+  /** スタート画面でのみ有効。CPU/AIのプレースタイルを選ぶ（強さとは直交） */
+  const STYLE_KEYS = {
+    Digit7: 'none', Digit8: 'serveAndVolley', Digit9: 'retriever', Digit0: 'aggressiveBaseliner',
+  };
   /** ブラウザのスクロールを止めたいキー */
   const SWALLOW = MOVE_LEFT.concat(MOVE_RIGHT, MOVE_UP, MOVE_DOWN, SWING_CODES);
 
@@ -42,7 +46,8 @@
     /**
      * @param {{onStart:Function, onStartDoubles:Function, onChargeStart:Function,
      *   onChargeRelease:Function, onFormationNet:Function, onFormationBack:Function,
-     *   onSelectDifficulty:Function, onSelectSurface:Function, isStarted:Function}} handlers
+     *   onSelectDifficulty:Function, onSelectSurface:Function, onSelectStyle:Function,
+     *   isStarted:Function}} handlers
      */
     attach(handlers) {
       addEventListener('keydown', (e) => {
@@ -53,6 +58,7 @@
           if (e.code === 'KeyD') handlers.onStartDoubles();
           else if (DIFFICULTY_KEYS[e.code]) handlers.onSelectDifficulty(DIFFICULTY_KEYS[e.code]);
           else if (SURFACE_KEYS[e.code]) handlers.onSelectSurface(SURFACE_KEYS[e.code]);
+          else if (STYLE_KEYS[e.code]) handlers.onSelectStyle(STYLE_KEYS[e.code]);
           else handlers.onStart();
         } else if (SWING[e.code] && !this.chargeKey) {
           this.chargeKey = e.code;
