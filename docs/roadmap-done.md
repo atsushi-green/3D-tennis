@@ -10,6 +10,12 @@
 - テスト: <tests/smoke.mjs の結果>
 ```
 
+## 2026-08-27 リプレイ中に次のポイントが裏で進んでしまうバグを直す
+- ブランチ: なし
+- 経緯: ユーザーから実機で「リプレイ中も次のプレーが勝手に始まる」「リプレイが最後まで流れず途中で途切れる」という報告を受けた。原因は直下の「ポイントが決まった後にリプレイを流す」の実装時の設計判断（`game.update()` を再生中も止めない＝「次のポイントの開始をブロックしない」）だった：裏で `game.update()` が進み続けるため、再生中に次のポイントまで終わってしまうと `main.js` が再度 `'rally'→'over'` 遷移を検知して `world.startReplay()` を呼び直し、再生中の `reel`/`replayClock` を上書きしてしまっていた。
+- 実施内容: `scene/world.js` に `isReplaying()` を追加し、`main.js` は `world.isReplaying()` が true の間 `game.update(dt)` を呼ばない（`game.js` 自体には触れない）。これにより「あるいは再生ぶんだけ待つ」（ROADMAPの受け入れ条件がもともと許容していたもう一方の選択肢）を実装したことになる。下の「ポイントが決まった後にリプレイを流す」の記述のうち「裏では game.update() が止まらず進み続ける」は誤りになったので、この記録で訂正する。
+- テスト: `node tests/smoke.mjs` — ALL PASS。`claude-in-chrome` で実機確認：`game.update()`/`world.sync()` を直接ループさせ、`world.isReplaying()===true` の間は一度も `game.phase` が変化しないこと（10回のリプレイ全てで違反なし）、各リプレイが期待どおりの最長コマ数（`REPLAY.MAX_PLAY_SEC/REPLAY.SPEED`相当の約257フレーム）まで途切れず再生されることを確認した。コンソールエラーなし。
+
 ## 2026-08-27 スタミナを入れる
 - ブランチ: なし（ユーザー指示によりROADMAPを上から順にmain上で直接実装）
 - 実施内容: `config.js` に `STAMINA`（`DRAIN_PER_M`=0.006／`RECOVER_PER_POINT`=0.35／`SPEED_FLOOR`=0.85／`CHARGE_FLOOR`=0.75／`LOW_THRESHOLD`=0.35）を追加。4人全員（`you`/`cpu`/`youMate`/`cpuMate`）に `stamina`(0〜1、初期値1) を持たせ、実際に走った距離ぶんだけ減らす（`game.js#drainStamina()`）。移動系のコードは1箇所に集約されている：人間は `movePlayers()`、CPU/AI（cpu・cpuMate・youMate）は共通の `moveTowards()` を必ず通るので、そこに `staminaSpeedMult(stamina)`（`PLAYER.SPEED`/`CPU_CHASE`/`CPU_RECOVER` に掛ける、下限 `SPEED_FLOOR`）を掛けるだけで4人全員に同じルールが効く。人間だけが持つ「溜め」（`tickCharge()` の `capTime`）にも同様に `staminaChargeMult(stamina)`（下限 `CHARGE_FLOOR`）を掛けた（CPU/AI には溜めの概念自体が無いのでここは人間のみ）。回復は `newPoint()` で4人全員に `RECOVER_PER_POINT` ぶん（上限1）。HUDには自分（you）の残量バーをスコアボード脇に常時表示し、`STAMINA.LOW_THRESHOLD` を下回ると赤系の警告色になる。
@@ -21,7 +27,9 @@
 - ブランチ: なし（ユーザー指示によりROADMAPを上から順にmain上で直接実装）
 - 実施内容: `scene/world.js` に、毎フレーム直近 `REPLAY.WINDOW_SEC`(3.5秒) ぶんのボール・選手4人の位置をリングバッファ(`history`)に録り続ける仕組みを追加。`main.js` のフレームループが `game.phase` の `'rally'→'over'` 遷移（＝ポイントが決まった瞬間）を検知して `world.startReplay()` を呼び、その時点の `history` を固定コピー(`reel`)して再生を始める。`game.js` には一切触れていない（`game.phase` を読むだけ）。
   - 選手の姿勢再現は既存の `syncPlayer()` をそのまま再利用（`applyFrame()` として生の state / 録画コマのどちらからも呼べるよう共通化）。カメラだけ専用のローアングル（コート脇の固定x=`REPLAY.CAM_X`、低い高さ=`REPLAY.CAM_HEIGHT`、ボールの深さを追う）に切り替え、再生中は軌跡(`trail`)とスマッシュヒントを隠す。
-  - 再生は `REPLAY.SPEED`(0.7＝スロー)・`REPLAY.MAX_PLAY_SEC`(3.0秒) の上限で自動的に終わり、通常表示（追従カメラ）へ戻る。裏では `game.update()` が止まらず進み続けるので、次のポイントの開始が再生によってブロックされることはない。
+  - 再生は `REPLAY.SPEED`(0.7＝スロー)・`REPLAY.MAX_PLAY_SEC`(3.0秒) の上限で自動的に終わり、通常表示（追従カメラ）へ戻る。
+  - ~~裏では `game.update()` が止まらず進み続けるので、次のポイントの開始が再生によってブロックされることはない。~~ →
+    **【2026-08-27訂正】** この判断はバグの原因になった（上の「リプレイ中に次のポイントが裏で進んでしまうバグを直す」参照）。今は再生中 `game.update()` を止める＝次のポイントの開始は再生ぶんだけ待つ。
   - スキップは `input.js` に新設した `onAnyKey` フック（試合開始後の全キー入力で発火。既存のB/V/C等の判定はその後段のまま）経由で `world.skipReplay()` を呼ぶだけ。
   - セルフレビューで「再生中は録画(`recordFrame`)を止めていたため、再生直後に次のポイントがすぐ終わるとhistoryが足りずそのポイントのリプレイだけ出せなくなりうる」と指摘があり、`recordFrame()` を再生中も止めずに毎フレーム呼ぶよう修正した（現在の生の `state` は再生中も引数として渡ってきているので、録るだけなら副作用はない）。
 - テスト: `node tests/smoke.mjs` — ALL PASS（既知の無関係な既存フレーク「the drop lands right behind the net」を除く、game.jsを一切変更していないので新規のロジックテストは無し）。表示専用の機能でsmoke.mjsのFILES(three.js/DOMを使わない範囲)では検証できないため、`claude-in-chrome`（`http.server`経由）で実機確認した：
