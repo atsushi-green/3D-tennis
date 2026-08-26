@@ -10,6 +10,12 @@
 - テスト: <tests/smoke.mjs の結果>
 ```
 
+## 2026-08-26 ネットに出た相手への CPU の攻め手を多様化する
+- ブランチ: なし（ユーザー指示によりROADMAPを上から順にmain上で直接実装）
+- 実施内容: `ai.js#cpuShot()` は相手が `CPU.NET_Z`(4.0m) 以内にいると、新設の `netPlayShot()` に切り替わるようにした。`netPlayShot()` は「相手が `CPU.NET_PRESS_Z`(1.8m) 以内まで完全に詰め切っている」ときだけロブ率を `NET_LOB_PRESSED`(0.55) まで上げ、そうでなければ `NET_LOB`(0.22) に抑える。ロブでないときは、ネットの近さ（closeness）で「足元へ沈める短い球」（`netDropShot()`）の重みを、相手の中央寄り具合（centered）で「サイドライン際への低く速いパッシング」（`netPassShot()`）の重みを連続的に変え、正規化した確率でどちらかを選ぶ。ベースライン同士のラリー（`opponent.z` が `NET_Z` の外）は従来どおり `LOB_BASE + LOB_VS_STRETCH * stretch` のロジックのまま変更なし。旧 `CPU.LOB_VS_NET` は削除し、代わりに `CPU.NET_PRESS_Z`／`NET_LOB`／`NET_LOB_PRESSED`／`NET_DROP_*`／`NET_PASS_*` を `config.js` に追加。
+- テスト: `node tests/smoke.mjs` — ALL PASS（既知の無関係な既存フレーク「the drop lands right behind the net」を除く）。新規テスト（N=400のサンプリング）：人間がネット際（z=-2、中央）にいるとき、ロブ率が旧50%から明確に下がる（<35%）こと、足元・パッシングの両方が一定割合で出ること／完全に詰め切っている（z=-1.3）ときはロブ率がそれより上がること／相手が中央寄りなほどパッシングが増え、サイドに寄り切っているほど減ること／ベースライン同士のラリーはこのロジックの対象外のままであること。既存の「CPU/AIのロブ」テストは新しい設定キー（`NET_LOB_PRESSED`）に合わせて更新。
+- 備考: セルフレビューで `NET_PRESS_Z` の値とコメントの整合性について指摘があり、コメントを「PLAYER.Z_NEARに寄せた、NET_Zよりずっと狭い範囲」という表現に修正して明確化した（値自体は受け入れ条件を満たすことを新規テストで確認済みなので変更していない）。
+
 ## 2026-08-26 サービスの速度(km/h)を表示する
 - ブランチ: なし（ユーザー指示によりROADMAPを上から順にmain上で直接実装）
 - 実施内容: `math.js` に純関数 `mpsToKmh(mps)` を追加。`game.js#serve()` が `solveShot()` 直後の `Math.hypot(ball.vx, ball.vy, ball.vz)` を km/h に換算して新設の `hooks.serveSpeed(kmh)` を呼ぶ（人間・CPU/AIどちらのサーブでも）。`newPoint()` は `hooks.serveSpeed(null)` を呼んで前のポイントの表示を消す＝次のポイントが始まるまで残る。DOM操作は `hud.js` の新メソッド `setServeSpeed()` に閉じ、`index.html` に `#serveSpeed`（`#wind` と同じスコアボード脇の並び）、`styles/main.css` に `#stats` 相当の控えめなスタイルを追加。

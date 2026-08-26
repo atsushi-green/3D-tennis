@@ -2039,7 +2039,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const restore = () => Object.assign(CPU, saved);
 
   // ロブを必ず選ぶ設定にして、狙いと飛翔時間がロブのものになることを確認する
-  Object.assign(CPU, { LOB_VS_NET: 1, LOB_BASE: 1, LOB_VS_STRETCH: 0 });
+  // (z=-1 は NET_PRESS_Z(1.8) 以内＝完全に詰め切っている扱いなので NET_LOB_PRESSED を使う)
+  Object.assign(CPU, { NET_LOB_PRESSED: 1, LOB_BASE: 1, LOB_VS_STRETCH: 0 });
   const lob = cpuShot({ x: 2, z: -1 }, -1, 0); // 相手はネット際（z=-1）
   ok(lob.lob === true, 'a net-rushing opponent draws a lob');
   ok(lob.flight === CPU.LOB_T, `the lob uses the lob flight time, got ${lob.flight}`);
@@ -2048,12 +2049,60 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(Math.abs(lob.target.z) <= HALF_L, `the lob still lands inside the court, got z=${lob.target.z}`);
   ok(Math.abs(lob.target.x) <= CPU.LOB_X, `the lob stays central, got x=${lob.target.x}`);
 
-  // ロブを絶対に選ばない設定なら従来どおりの低い弾道に戻る（＝既存のバランスは無変更）
-  Object.assign(CPU, saved, { LOB_VS_NET: 0, LOB_BASE: 0, LOB_VS_STRETCH: 0 });
+  // ロブを絶対に選ばない設定なら、足元かパッシングのどちらか（低い弾道）に戻る
+  Object.assign(CPU, saved, { NET_LOB_PRESSED: 0, NET_LOB: 0, LOB_BASE: 0, LOB_VS_STRETCH: 0 });
   const drive = cpuShot({ x: 2, z: -1 }, -1, 0);
-  ok(drive.lob === false, 'with the lob chance at zero the shot stays a normal drive');
-  ok(drive.flight === CPU.SHOT_T, `the drive keeps the normal flight time, got ${drive.flight}`);
+  ok(drive.lob === false, 'with the lob chance at zero the shot stays a normal (non-lob) shot');
+  ok(drive.flight === CPU.NET_DROP_T || drive.flight === CPU.NET_PASS_T,
+    `the shot uses either the drop or the passing flight time, got ${drive.flight}`);
   restore();
+}
+
+// --- CPU/AI のネットに詰めた相手への配球は「足元」「パッシング」「ロブ」の3択で撃ち分ける ---
+{
+  const { cpuShot } = R.ai;
+  const CPU = R.config.CPU;
+  const N = 400;
+
+  const sample = (opponent) => {
+    let lobCount = 0;
+    let dropCount = 0;
+    let passCount = 0;
+    for (let i = 0; i < N; i++) {
+      const shot = cpuShot(opponent, -1, 0);
+      if (shot.lob) lobCount++;
+      else if (shot.flight === CPU.NET_DROP_T) dropCount++;
+      else if (shot.flight === CPU.NET_PASS_T) passCount++;
+    }
+    return { lobRate: lobCount / N, dropRate: dropCount / N, passRate: passCount / N };
+  };
+
+  // 人間がネット際（z≒-2、中央）にいる：詰め切ってはいないので、ロブ率は旧来の50%から
+  // 明確に下がり（目安2〜3割）、代わりにパッシングと沈める球が出る。
+  const atNet = sample({ x: 0, z: -2 });
+  ok(atNet.lobRate < 0.35, `lob rate drops well below the old 50% for a net-rushing (not fully pressed) opponent, got ${atNet.lobRate}`);
+  ok(atNet.dropRate > 0.05, `some shots go short to the feet, got dropRate=${atNet.dropRate}`);
+  ok(atNet.passRate > 0.05, `some shots go for the sideline passing shot, got passRate=${atNet.passRate}`);
+
+  // 前に出過ぎている（z が PLAYER.Z_NEAR=-1.2 寄り）ときだけロブの比率が上がる
+  const pressed = sample({ x: 0, z: -1.3 });
+  ok(pressed.lobRate > atNet.lobRate,
+    `a fully pressed-in opponent (near PLAYER.Z_NEAR) draws more lobs than a merely net-rushing one, got pressed=${pressed.lobRate} vs atNet=${atNet.lobRate}`);
+
+  // 相手が中央に寄っているほどパッシングが増え、サイドに寄り切っているほど減る
+  const centered = sample({ x: 0, z: -2 });
+  const wide = sample({ x: CPU.NET_PASS_X_REF + 1, z: -2 });
+  ok(centered.passRate > wide.passRate,
+    `a centered opponent draws more passing shots than one already hugging the sideline, got centered=${centered.passRate} vs wide=${wide.passRate}`);
+
+  // シングルスのベースライン同士のラリー（z がNET_Zの外）は、この配球の対象外のまま
+  // （＝LOB_BASE 経由の従来ロジックが変わらず使われる）
+  const savedLobBase = CPU.LOB_BASE;
+  Object.assign(CPU, { LOB_BASE: 0 });
+  const baseline = cpuShot({ x: 0, z: -HALF_L + 1 }, -1, 0);
+  ok(baseline.lob === false && baseline.flight === CPU.SHOT_T,
+    `baseline-to-baseline rallies are untouched by the net-play logic, got lob=${baseline.lob} flight=${baseline.flight}`);
+  Object.assign(CPU, { LOB_BASE: savedLobBase });
 }
 
 // --- CPU/AI のロブは、人間がスマッシュを打てる高さ・場所を通る（この項目の目的そのもの） ---
@@ -2377,7 +2426,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   {
     const CPU = R.config.CPU;
     const saved = { ...CPU };
-    Object.assign(CPU, { LOB_VS_NET: 1, LOB_BASE: 1, LOB_VS_STRETCH: 0 });
+    Object.assign(CPU, { LOB_BASE: 1, LOB_VS_STRETCH: 0 }); // g.you はデフォルトでベースライン付近＝NET_Zの外
     const g = new R.Game({ input: fakeInput, hooks: noHooks });
     g.start();
     g.phase = 'rally';
@@ -2457,7 +2506,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     // ロブと「わざとのアウト」を止めてから打たせる（どちらも乱数で入るため比較にならない）
     const saved = { ...CPU };
     Object.assign(CPU, {
-      LOB_VS_NET: 0, LOB_BASE: 0, LOB_VS_STRETCH: 0,
+      LOB_BASE: 0, LOB_VS_STRETCH: 0,
       OUT_LONG: 0, OUT_WIDE: 0, STRETCH_OUT_LONG: 0, STRETCH_OUT_WIDE: 0,
     });
     g.hit('cpu');

@@ -167,11 +167,72 @@
     return { x, y: PHYSICS.BALL_R, z };
   }
 
+  /** ロブ（山なりの返球）の狙い。頭を越す攻めのロブにも、時間を稼ぐ逃げのロブにも使う共通の弾道。 */
+  function lobShot(opponent, dir) {
+    return {
+      target: {
+        x: -signOr(opponent.x, Math.random() - 0.5) * rand(0, CPU.LOB_X),
+        y: PHYSICS.BALL_R,
+        z: dir * rand(CPU.LOB_Z_MIN, CPU.LOB_Z_MAX),
+      },
+      flight: CPU.LOB_T,
+      lob: true,
+    };
+  }
+
+  /** 足元へ沈める短い球。相手の現在位置（＝ネットに詰めている場所）を中心に、ネットぎりぎりの浅さで狙う。 */
+  function netDropShot(opponent, dir) {
+    return {
+      target: {
+        x: clamp(opponent.x + rand(-CPU.NET_DROP_X, CPU.NET_DROP_X), -HALF_W + 0.4, HALF_W - 0.4),
+        y: PHYSICS.BALL_R,
+        z: dir * rand(CPU.NET_DROP_Z_MIN, CPU.NET_DROP_Z_MAX),
+      },
+      flight: CPU.NET_DROP_T,
+      lob: false,
+    };
+  }
+
+  /** サイドライン際へ低く速いパッシング。相手が寄っている側と逆（＝空いている側）を狙う。 */
+  function netPassShot(opponent, dir) {
+    return {
+      target: {
+        x: -signOr(opponent.x, Math.random() - 0.5) * rand(CPU.NET_PASS_X_MIN, CPU.NET_PASS_X_MAX),
+        y: PHYSICS.BALL_R,
+        z: dir * rand(CPU.NET_PASS_Z_MIN, CPU.NET_PASS_Z_MAX),
+      },
+      flight: CPU.NET_PASS_T,
+      lob: false,
+    };
+  }
+
+  /**
+   * 相手がネットに詰めている（CPU.NET_Z 以内）ときの配球。ロブ一辺倒だと単調なので、
+   * 「足元へ沈める短い球」「サイドライン際へ低く速いパッシング」「ロブ」の3択を状況で撃ち分ける。
+   * 相手が完全に詰め切っている（CPU.NET_PRESS_Z 以内）ときだけロブの比率を上げる
+   * （意表をつく1本）。それ以外はネットの近さ（closeness）で「足元」、相手の中央寄り
+   * 具合（centered）で「パッシング」の重みを連続的に変える。
+   */
+  function netPlayShot(opponent, dir) {
+    const pressed = Math.abs(opponent.z) <= CPU.NET_PRESS_Z;
+    if (Math.random() < (pressed ? CPU.NET_LOB_PRESSED : CPU.NET_LOB)) {
+      return lobShot(opponent, dir);
+    }
+    const closeness = clamp(
+      (CPU.NET_Z - Math.abs(opponent.z)) / (CPU.NET_Z - CPU.NET_PRESS_Z), 0, 1,
+    );
+    const centered = 1 - clamp(Math.abs(opponent.x) / CPU.NET_PASS_X_REF, 0, 1);
+    const dropWeight = lerp(CPU.NET_DROP_MIN, CPU.NET_DROP_MAX, closeness);
+    const passWeight = lerp(CPU.NET_PASS_MIN, CPU.NET_PASS_MAX, centered);
+    const dropChance = dropWeight / (dropWeight + passWeight);
+    return Math.random() < dropChance ? netDropShot(opponent, dir) : netPassShot(opponent, dir);
+  }
+
   /**
    * CPU/AI の返球1本ぶんの狙い（着地点と飛翔時間）。通常は shotTarget() の低い弾道だが、
-   * 一定確率でロブ（山なりの返球）を選ぶ。ロブを選ぶのは実際のテニスと同じ2つの場面：
-   *   1. 相手がネットに詰めている（CPU.NET_Z 以内）＝頭を越す攻めのロブ
-   *   2. 自分がぎりぎりで追いついた（stretch が大きい）＝時間を稼ぐ逃げのロブ
+   * 相手がネットに詰めている（CPU.NET_Z 以内）ときは netPlayShot() の3択に切り替わる。
+   * ベースライン同士のラリーでは、一定確率でロブ（山なりの返球）を選ぶ：
+   * 自分がぎりぎりで追いついた（stretch が大きい）＝時間を稼ぐ逃げのロブ。
    * ロブが無いと PLAYER.SMASH_MIN_Y を満たす高い球が来ず、人間がスマッシュを打つ機会が
    * シングルスでほぼ発生しなかった。
    * @param {{x:number, z:number}} opponent 返球を受ける側（逆をつく相手）
@@ -181,18 +242,9 @@
    */
   function cpuShot(opponent, dir, stretch) {
     // 相手が自陣のどのあたりにいるかはネットからの距離で見る（dir の符号に依存させない）
-    const atNet = Math.abs(opponent.z) <= CPU.NET_Z;
-    const chance = atNet ? CPU.LOB_VS_NET : CPU.LOB_BASE + CPU.LOB_VS_STRETCH * stretch;
-    if (Math.random() < chance) {
-      return {
-        target: {
-          x: -signOr(opponent.x, Math.random() - 0.5) * rand(0, CPU.LOB_X),
-          y: PHYSICS.BALL_R,
-          z: dir * rand(CPU.LOB_Z_MIN, CPU.LOB_Z_MAX),
-        },
-        flight: CPU.LOB_T,
-        lob: true,
-      };
+    if (Math.abs(opponent.z) <= CPU.NET_Z) return netPlayShot(opponent, dir);
+    if (Math.random() < CPU.LOB_BASE + CPU.LOB_VS_STRETCH * stretch) {
+      return lobShot(opponent, dir);
     }
     return {
       target: shotTarget(opponent.x, dir, stretch),
