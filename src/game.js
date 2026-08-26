@@ -612,16 +612,18 @@
     }
 
     /**
-     * トス中に ←→ で狙うコースを選ぶ。狙い先（targetSign）と同じ向きに入力すればワイド、
-     * 逆向きなら T、無入力ならボディへ。
+     * トス中に ←→ で狙うコースを選ぶ。狙い先（targetSign）と同じ向きに入力すればワイド
+     * （さらに Shift を押しながら離すと、ワイドより切れ込む代わりにフォールトもしやすい
+     * 角度サーブ＝AIM_ANGLE）、逆向きなら T、無入力ならボディへ。
      * @param {1|-1} targetSign このサーブが入るボックスの符号
      */
     serveAimMagnitude(targetSign) {
       const aim = this.input.moveX * INPUT_X_TO_WORLD;
       if (aim === 0) return rand(SERVE.AIM_BODY_MIN, SERVE.AIM_BODY_MAX);
-      return aim === targetSign
-        ? rand(SERVE.AIM_WIDE_MIN, SERVE.AIM_WIDE_MAX)
-        : rand(SERVE.AIM_T_MIN, SERVE.AIM_T_MAX);
+      if (aim !== targetSign) return rand(SERVE.AIM_T_MIN, SERVE.AIM_T_MAX);
+      return this.input.lob
+        ? rand(SERVE.AIM_ANGLE_MIN, SERVE.AIM_ANGLE_MAX)
+        : rand(SERVE.AIM_WIDE_MIN, SERVE.AIM_WIDE_MAX);
     }
 
     /**
@@ -637,12 +639,18 @@
       return rand(SERVE.DEPTH_MIN, SERVE.DEPTH_MAX);
     }
 
-    /** CPU/AI のサーブのコース選択。プレイヤーと同じ T／ボディ／ワイドから毎回ランダムに選ぶ。 */
+    /**
+     * CPU/AI のサーブのコース選択。プレイヤーと同じ T／ボディ／ワイドから毎回ランダムに選ぶ。
+     * ワイドを引いたときだけ、さらに CPU.CPU_ANGLE_CHANCE の確率で角度サーブに格上げする
+     * （T／ボディの発生確率は従来どおり1/3ずつのまま変えない）。
+     */
     cpuServeAimMagnitude() {
       const roll = Math.random();
       if (roll < 1 / 3) return rand(SERVE.AIM_T_MIN, SERVE.AIM_T_MAX);
       if (roll < 2 / 3) return rand(SERVE.AIM_BODY_MIN, SERVE.AIM_BODY_MAX);
-      return rand(SERVE.AIM_WIDE_MIN, SERVE.AIM_WIDE_MAX);
+      return Math.random() < SERVE.CPU_ANGLE_CHANCE
+        ? rand(SERVE.AIM_ANGLE_MIN, SERVE.AIM_ANGLE_MAX)
+        : rand(SERVE.AIM_WIDE_MIN, SERVE.AIM_WIDE_MAX);
     }
 
     hit(who) {

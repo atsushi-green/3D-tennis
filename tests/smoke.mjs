@@ -961,6 +961,64 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   }
 }
 
+// --- 角度をつけたサービス：ワイドより切れ込むが、その分フォールトもしやすい4本目のコース ---
+{
+  const {
+    AIM_WIDE_MIN, AIM_WIDE_MAX, AIM_ANGLE_MIN, AIM_ANGLE_MAX, AIM_T_MIN, AIM_T_MAX,
+    AIM_BODY_MIN, AIM_BODY_MAX,
+  } = SERVE;
+  const FAULT_X = HALF_W + COURT.LINE_SLACK;
+  const courseLanding = (moveX, lob) => {
+    const input = { moveX, moveZ: 0, lob };
+    const g = new R.Game({ input, hooks: noHooks });
+    g.start();
+    tossAndHit(g);
+    return R.physics.predictLanding(g.ball);
+  };
+  const STEP_SLACK = 0.05; // 上の「サーブのコースを←→で打ち分けられる」テストと同じ手当て
+  const inRange = (v, min, max) => v >= min - STEP_SLACK && v <= max + STEP_SLACK;
+
+  // Shift を押しながらワイド方向へ離すと、ワイドの続きからサイドラインの外まで踏み込む
+  // 角度サーブになる（入れば通常のワイドより外へ切れる＝レシーバーの届く範囲の外）
+  let sawOutsideWideMax = false;
+  let angleFaults = 0;
+  const N = 200;
+  for (let i = 0; i < N; i++) {
+    const angle = courseLanding(-1, true);
+    ok(inRange(Math.abs(angle.x), AIM_ANGLE_MIN, AIM_ANGLE_MAX), `angle course: |x|=${angle.x}`);
+    if (Math.abs(angle.x) > AIM_WIDE_MAX) sawOutsideWideMax = true;
+    if (Math.abs(angle.x) > FAULT_X) angleFaults++;
+  }
+  ok(sawOutsideWideMax, 'the angle course reaches beyond the normal wide serve\'s outer edge');
+  ok(angleFaults / N > 0.15,
+    `the angle course faults (goes past the sideline) a lot more than the ~0% of a normal wide serve, got ${angleFaults}/${N}`);
+
+  // Shift なしなら従来どおりの通常ワイド（4本目のコースを選んでも既存のワイドは無傷）
+  const wide = courseLanding(-1, false);
+  ok(inRange(Math.abs(wide.x), AIM_WIDE_MIN, AIM_WIDE_MAX), `wide course (no Shift) is unaffected: |x|=${wide.x}`);
+
+  // T・ボディは Shift の有無に関わらず変わらない（既存のバランスは無変更）
+  const tNoShift = courseLanding(1, false);
+  const tShift = courseLanding(1, true);
+  ok(inRange(Math.abs(tNoShift.x), AIM_T_MIN, AIM_T_MAX) && inRange(Math.abs(tShift.x), AIM_T_MIN, AIM_T_MAX),
+    `T course is unaffected by Shift, got noShift=${tNoShift.x} shift=${tShift.x}`);
+  const bodyNoShift = courseLanding(0, false);
+  const bodyShift = courseLanding(0, true);
+  ok(inRange(Math.abs(bodyNoShift.x), AIM_BODY_MIN, AIM_BODY_MAX) && inRange(Math.abs(bodyShift.x), AIM_BODY_MIN, AIM_BODY_MAX),
+    `body course is unaffected by Shift, got noShift=${bodyNoShift.x} shift=${bodyShift.x}`);
+
+  // CPU/AI も角度サーブを選べる（ワイド域を明確に超える値がサンプルの中に出る）
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    let sawAngle = false;
+    for (let i = 0; i < 200 && !sawAngle; i++) {
+      if (Math.abs(g.cpuServeAimMagnitude()) > AIM_WIDE_MAX) sawAngle = true;
+    }
+    ok(sawAngle, 'CPU/AI serve course selection also reaches the angle zone across repeated samples');
+  }
+}
+
 // --- CPU/AIのサーブも T／ボディ／ワイドの3コースへ散らばる ---
 // (退行テスト: 以前は専用の SERVE.AIM_X_MIN〜AIM_X_MAX という狭い範囲しか使っておらず、
 //  結果としてボディ相当の場所にしか来なかった＝「必ず正面に来る」)
