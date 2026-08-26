@@ -13,7 +13,8 @@
     const stage = scene3d.createStage();
     const { scene, camera } = stage;
 
-    scene.add(scene3d.createCourt(), scene3d.createNet());
+    const court = scene3d.createCourt();
+    scene.add(court, scene3d.createNet());
 
     const you = scene3d.createPlayer(THEME.YOU);
     const cpu = scene3d.createPlayer(THEME.CPU);
@@ -91,6 +92,13 @@
       syncCamera(state.you, dt);
     }
 
-    return { sync, render: stage.render, scene, camera };
+    /** スタート画面でのサーフェス選択を、コートの見た目（テクスチャ色）へ反映する。 */
+    function setSurface(surfaceName) {
+      scene3d.setCourtSurface(court, surfaceName);
+    }
+
+    return {
+      sync, render: stage.render, scene, camera, setSurface,
+    };
   };
 })(window.RallyOne = window.RallyOne || {});

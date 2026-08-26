@@ -10,6 +10,12 @@
 - テスト: <tests/smoke.mjs の結果>
 ```
 
+## 2026-08-26 コートサーフェス（ハード／クレー／芝）を選べるようにする
+- ブランチ: なし（ユーザー指示によりROADMAPを上から順にmain上で直接実装）
+- 実施内容: `config.js` に `SURFACE`（`physics.js#reflectBounce()` が毎バウンド参照する「今効いている」倍率。`CPU`/`PLAYER` と同じ「参照を渡して中身だけ書き換える」パターン）・`SURFACE_PRESETS`（ハード=倍率1／クレー=`RESTITUTION_MULT`1.15・`FRICTION_MULT`0.90／芝=0.75・1.05）・`applySurface(name)`・`SURFACE_COLORS`（コートテクスチャの配色）を追加。`reflectBounce()` は `PHYSICS.RESTITUTION/FRICTION × スピン別倍率 × SURFACE.*_MULT` の3段掛けにした。`scene/court.js` の `courtTexture()` はサーフェス別の配色を受け取れるようにし、`createCourt()` が返すグループに `userData.surfaceMesh` を持たせて、新設の `setCourtSurface()` が試合前でもテクスチャだけ焼き直せるようにした。`scene/world.js` は `createWorld()` の戻り値に `setSurface(name)` を追加。スタート画面には CPUの強さ選択（1/2/3）と同じ見た目・パターンで `4 ハード／5 クレー／6 芝` の選択行を追加（`input.js` の `SURFACE_KEYS`、`hud.js` の `setSurface()`、`main.js` が選択のたびに `hud.setSurface()` と `world.setSurface()` を呼んで背後のコートを即座に塗り替える。実際の物理適用は `applyCpuLevel()` と同じタイミング＝`game.start()` 直前）。
+- テスト: `node tests/smoke.mjs` — ALL PASS（既知の無関係な既存フレーク「the drop lands right behind the net」を除く）。新規テスト：同じ入射速度で `reflectBounce()` を叩いたとき、クレーはハードよりバウンド後の上向き速度(vy)が大きく水平速度は遅いこと、芝は逆に上向き速度が小さく水平速度が保たれること、ハードはサーフェスの仕組みを足す前の計算式と完全に一致すること（既存のバランスを崩さない）、未知のサーフェス名はハード扱いにフォールバックすること。
+- 備考: `claude-in-chrome` で実機確認（`http.server` 経由）。スタート画面で 5/6 キーを押すと背後のコートがクレー（赤土）・芝（緑）へ即座に塗り替わり、選択したままマッチを開始してサーブを打っても正常に動作すること、コンソールエラーが出ないことを確認した。確認中、ブラウザがポート8934の `src/config.js` を積極的にキャッシュしていて最初のチェックで古いコードのまま動いてしまう（`applySurface is not a function`）現象に遭遇したが、ハードリロードで解消した実装側の不具合ではない。セルフレビューでも問題は見つからなかった。
+
 ## 2026-08-26 角度をつけたサービス（決まりやすいがフォールトもしやすい）を用意する
 - ブランチ: なし（ユーザー指示によりROADMAPを上から順にmain上で直接実装）
 - 実施内容: ワイドの続きからサイドライン(`HALF_W`=4.115、フォールト境界は+`LINE_SLACK`で4.145)を越える所まで踏み込む4本目のコース `SERVE.AIM_ANGLE_MIN`(3.85)〜`AIM_ANGLE_MAX`(4.30) を追加。人間は ←→ でワイド方向（`aim===targetSign`）を選んだ上で **Shift を押しながら離す**と選べる（サーブ中は Shift＝ロブが未使用なので `serveAimMagnitude()` が `this.input.lob` を見て流用）。CPU/AI の `cpuServeAimMagnitude()` は、ワイドを引いたときだけ `SERVE.CPU_ANGLE_CHANCE`(0.4) の確率で角度サーブに格上げする（T／ボディの1/3ずつの発生確率はそのまま）。狙いの範囲そのものがサイドラインの外まで踏み込んでいるため、入れば通常のワイドより外へ切れる（＝レシーバーの届く範囲の外＝エースになりやすい）一方、そもそも最初からサービスボックスの外を狙っている割合が一定あるぶんフォールト率も上がる、という単純だが確実なリスク/リターンの釣り合いにした（物理エンジンは風の無いサーブ飛翔中は狙った座標へほぼそのまま着地するため、狙いの範囲自体をずらすだけで両方の性質が同時に成立する）。ネットの通過判定自体（`hitsNet()`）はボール半径ぶんの余白だけで判定しており `solveShot()` の `clearance` 引数は着地点に向けた弾道の山なり具合を決めるだけ（＝それ単体でフォールト率は上げられない）と分かったため、`SERVE.CLEARANCE` 自体は変更していない。

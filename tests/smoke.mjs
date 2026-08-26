@@ -2064,6 +2064,55 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `without a previous position the bounce keeps the current coords, got (${teleported.x}, ${teleported.z})`);
 }
 
+// --- コートサーフェス（ハード／クレー／芝）でバウンドの質が変わる ---
+{
+  const { reflectBounce } = R.physics;
+  const { applySurface, SURFACE, PHYSICS: PHYS } = R.config;
+  const savedSurface = { ...SURFACE };
+
+  const bounceOf = (surfaceName) => {
+    applySurface(surfaceName);
+    const b = {
+      x: 0, y: PHYS.BALL_R, z: 0, px: 0, py: 0.5, pz: -0.5, vx: 5, vy: -6, vz: 8, spin: 'flat',
+    };
+    reflectBounce(b);
+    return b;
+  };
+
+  try {
+    const hard = bounceOf('hard');
+    const clay = bounceOf('clay');
+    const grass = bounceOf('grass');
+
+    // クレー＝高く弾んで減速：ハードより上向きの初速(vy)が大きく、水平速度は遅い
+    ok(clay.vy > hard.vy, `clay bounces higher than hard, got clay.vy=${clay.vy} hard.vy=${hard.vy}`);
+    ok(Math.hypot(clay.vx, clay.vz) < Math.hypot(hard.vx, hard.vz),
+      `clay slows the ball down more than hard, got clay=${Math.hypot(clay.vx, clay.vz)} hard=${Math.hypot(hard.vx, hard.vz)}`);
+
+    // 芝＝低く滑って伸びる：ハードより上向きの初速(vy)が小さく、水平速度は保たれる
+    ok(grass.vy < hard.vy, `grass bounces lower than hard, got grass.vy=${grass.vy} hard.vy=${hard.vy}`);
+    ok(Math.hypot(grass.vx, grass.vz) > Math.hypot(hard.vx, hard.vz),
+      `grass keeps more pace than hard, got grass=${Math.hypot(grass.vx, grass.vz)} hard=${Math.hypot(hard.vx, hard.vz)}`);
+
+    // ハードを選んだときは、サーフェスの仕組みを足す前の物理と完全に一致する（既存のバランスを崩さない）
+    const restMult = R.config.SPIN.BOUNCE_RESTITUTION_MULT.flat || 1;
+    const friMult = R.config.SPIN.BOUNCE_FRICTION_MULT.flat || 1;
+    const expectedVy = -(-6) * PHYS.RESTITUTION * restMult;
+    const expectedVx = 5 * PHYS.FRICTION * friMult;
+    const expectedVz = 8 * PHYS.FRICTION * friMult;
+    ok(Math.abs(hard.vy - expectedVy) < 1e-9 && Math.abs(hard.vx - expectedVx) < 1e-9 && Math.abs(hard.vz - expectedVz) < 1e-9,
+      `hard surface matches the physics with no surface multiplier applied, got vy=${hard.vy} vx=${hard.vx} vz=${hard.vz}`);
+  } finally {
+    Object.assign(SURFACE, savedSurface);
+  }
+
+  // 不明なサーフェス名はハード扱いにフォールバックする
+  applySurface('does-not-exist');
+  ok(SURFACE.RESTITUTION_MULT === 1 && SURFACE.FRICTION_MULT === 1,
+    `an unknown surface name falls back to hard, got ${JSON.stringify(SURFACE)}`);
+  Object.assign(SURFACE, savedSurface);
+}
+
 // --- 軌跡：サービスのフォルト判定（inServiceBox）も、同じ「着地の瞬間を必ず1点記録する」
 //     仕組みでカバーされている（inServiceBox() も bounce() の中から同じ座標で呼ばれるため） ---
 {

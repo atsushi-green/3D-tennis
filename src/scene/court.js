@@ -2,7 +2,9 @@
 (function (RallyOne) {
   'use strict';
 
-  const { COURT, HALF_L, HALF_W, THEME } = RallyOne.config;
+  const {
+    COURT, HALF_L, HALF_W, THEME, SURFACE_COLORS,
+  } = RallyOne.config;
   const scene3d = RallyOne.scene = RallyOne.scene || {};
 
   /** テクスチャが覆うワールド範囲（±RX, ±RZ）。コート平面のサイズと対応させること。 */
@@ -11,7 +13,13 @@
   const PLANE_W = 16;
   const PLANE_L = 36;
 
-  function courtTexture() {
+  /** @param {'hard'|'clay'|'grass'} [surfaceName] 省略時はハード（現状の配色）。 */
+  function colorsFor(surfaceName) {
+    return SURFACE_COLORS[surfaceName] || SURFACE_COLORS.hard;
+  }
+
+  function courtTexture(surfaceName) {
+    const { surface: surfaceColor, apron: apronColor } = colorsFor(surfaceName);
     const W = 1024;
     const H = 2048;
     const cv = document.createElement('canvas');
@@ -23,9 +31,9 @@
     const pz = (z) => (z + RZ) / (2 * RZ) * H;
     const uw = (m) => m / (2 * RX) * W;
 
-    g.fillStyle = THEME.COURT_APRON;
+    g.fillStyle = apronColor;
     g.fillRect(0, 0, W, H);
-    g.fillStyle = THEME.COURT_SURFACE;
+    g.fillStyle = surfaceColor;
     g.fillRect(px(-COURT.DW / 2), pz(-HALF_L), uw(COURT.DW), pz(HALF_L) - pz(-HALF_L));
 
     g.strokeStyle = THEME.COURT_LINE;
@@ -71,15 +79,17 @@
     return group;
   }
 
-  scene3d.createCourt = function createCourt() {
+  /** @param {'hard'|'clay'|'grass'} [surfaceName] 省略時はハード（現状の配色）。 */
+  scene3d.createCourt = function createCourt(surfaceName) {
     const group = new THREE.Group();
 
     const surface = new THREE.Mesh(
       new THREE.PlaneGeometry(PLANE_W, PLANE_L),
-      new THREE.MeshLambertMaterial({ map: courtTexture() }),
+      new THREE.MeshLambertMaterial({ map: courtTexture(surfaceName) }),
     );
     surface.rotation.x = -Math.PI / 2;
     group.add(surface);
+    group.userData.surfaceMesh = surface; // setCourtSurface() が後から塗り替えるときの参照
 
     const apron = new THREE.Mesh(
       new THREE.PlaneGeometry(70, 70),
@@ -91,5 +101,19 @@
 
     group.add(createStands());
     return group;
+  };
+
+  /**
+   * スタート画面でサーフェスを選び直したときに、既に作った同じコートの見た目だけを
+   * 塗り替える（テクスチャを焼き直す）。試合中は呼ばない想定。
+   * @param {THREE.Group} court createCourt() が返したグループ
+   * @param {'hard'|'clay'|'grass'} surfaceName
+   */
+  scene3d.setCourtSurface = function setCourtSurface(court, surfaceName) {
+    const mesh = court.userData.surfaceMesh;
+    const oldTexture = mesh.material.map;
+    mesh.material.map = courtTexture(surfaceName);
+    mesh.material.needsUpdate = true;
+    oldTexture.dispose();
   };
 })(window.RallyOne = window.RallyOne || {});

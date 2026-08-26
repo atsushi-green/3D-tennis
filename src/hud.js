@@ -25,12 +25,18 @@
         chargeFill: $('chargeFill'),
         smashTip: $('smashTip'),
         diffOpts: [$('diffEasy'), $('diffNormal'), $('diffHard')],
+        surfaceOpts: [$('surfHard'), $('surfClay'), $('surfGrass')],
       };
     }
 
     /** スタート画面のCPUの強さ表示を切り替える（実際の適用は config.applyCpuLevel が行う）。 */
     setDifficulty(level) {
       this.el.diffOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === level));
+    }
+
+    /** スタート画面のサーフェス表示を切り替える（実際の適用は config.applySurface が行う）。 */
+    setSurface(level) {
+      this.el.surfaceOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === level));
     }
 
     /**

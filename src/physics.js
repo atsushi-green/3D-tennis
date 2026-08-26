@@ -5,7 +5,9 @@
 (function (RallyOne) {
   'use strict';
 
-  const { COURT, PHYSICS, SPIN } = RallyOne.config;
+  const {
+    COURT, PHYSICS, SPIN, SURFACE,
+  } = RallyOne.config;
   const { lerp } = RallyOne.math;
   const { GRAVITY, BALL_R } = PHYSICS;
 
@@ -79,8 +81,9 @@
 
   /**
    * バウンドの反射を1回分、その場で適用する（b を直接書き換える）。反発係数・摩擦は
-   * スピン別倍率込み。game.js の bounce() と predictBounceApex() の両方から使う
-   * （物理の実装を1箇所にまとめ、両者がずれないようにするため）。
+   * スピン別倍率とサーフェス別倍率（config.SURFACE、applySurface() が選ぶ）の両方込み。
+   * game.js の bounce() と predictBounceApex() の両方から使う（物理の実装を1箇所に
+   * まとめ、両者がずれないようにするため）。
    * 反射の前に、接地点そのものを groundCrossing() で補正する：IN/OUT 判定も軌跡も
    * ここで確定した x/z を読むので、行き過ぎた座標のままだと判定が外側へ偏る。
    */
@@ -91,9 +94,9 @@
     b.x = at.x;
     b.z = at.z;
     b.y = BALL_R;
-    b.vy = -b.vy * PHYSICS.RESTITUTION * restMult;
-    b.vx *= PHYSICS.FRICTION * friMult;
-    b.vz *= PHYSICS.FRICTION * friMult;
+    b.vy = -b.vy * PHYSICS.RESTITUTION * restMult * SURFACE.RESTITUTION_MULT;
+    b.vx *= PHYSICS.FRICTION * friMult * SURFACE.FRICTION_MULT;
+    b.vz *= PHYSICS.FRICTION * friMult * SURFACE.FRICTION_MULT;
   }
 
   /**

@@ -639,6 +639,35 @@
   }
 
   /**
+   * コートサーフェス。`physics.js#reflectBounce()` は既に
+   * `PHYSICS.RESTITUTION × スピン別倍率` の形なので、そこにサーフェス別の倍率を1枚
+   * 掛けるだけで球質が変わる。ハードは倍率1＝現在の物理と完全に一致する（既存のバランスを
+   * 崩さない）。芝＝低く滑って伸びる（反発を抑え、水平方向の減衰を弱める＝ネットプレー有利）、
+   * クレー＝高く弾んで減速（反発を強め、水平方向の減衰を強める＝ラリーが長引きドロップが効く）。
+   */
+  const SURFACE_PRESETS = {
+    hard: { RESTITUTION_MULT: 1, FRICTION_MULT: 1 },
+    clay: { RESTITUTION_MULT: 1.15, FRICTION_MULT: 0.90 },
+    grass: { RESTITUTION_MULT: 0.75, FRICTION_MULT: 1.05 },
+  };
+  // physics.js が毎バウンド参照する「今効いている」倍率。CPU/PLAYER と同じく、新しい
+  // オブジェクトに差し替えるのではなく既存オブジェクトのプロパティを書き換える
+  // （applySurface() 参照）ので、他ファイルは読み込み時に参照ごと受け取っておける。
+  const SURFACE = { RESTITUTION_MULT: 1, FRICTION_MULT: 1 };
+
+  /** @param {'hard'|'clay'|'grass'} name */
+  function applySurface(name) {
+    Object.assign(SURFACE, SURFACE_PRESETS[name] || SURFACE_PRESETS.hard);
+  }
+
+  /** court.js がテクスチャを焼くときの配色（見た目だけ。物理は上の SURFACE_PRESETS）。 */
+  const SURFACE_COLORS = {
+    hard: { surface: '#2b6cb0', apron: '#1d7a5f' }, // 現状のTHEME.COURT_SURFACE/COURT_APRONと同じ
+    clay: { surface: '#b5541f', apron: '#1d5f3f' },
+    grass: { surface: '#3f8f4a', apron: '#1d5f3f' },
+  };
+
+  /**
    * スピン（トップスピン／スライス／フラット）。「アーケードのまま感覚チューニングする」方針
    * （2026-08-17に人間と合意済み）のため、マグヌス力の実式は使わず、飛翔中の実効重力と
    * バウンド時の反発係数・摩擦係数に体感重視の倍率を掛ける簡易モデルにした。
@@ -683,5 +712,6 @@
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO,
     CPU_LEVELS, applyCpuLevel, SPIN, WIND, TRAIL, DROP, SMASH_HINT,
+    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS,
   };
 })(window.RallyOne = window.RallyOne || {});
