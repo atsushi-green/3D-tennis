@@ -19,7 +19,12 @@
     <div id="stats">A <span id="ace1">0</span>–<span id="ace2">0</span> · DF <span id="df1">0</span>–<span id="df2">0</span></div>
     <div id="wind"></div>
     <div id="serveSpeed"></div>
-    <div id="stamina"><div id="staminaLabel">スタミナ</div><div id="staminaBar"><div id="staminaFill"></div></div></div>
+    <div id="stamina">
+      <div class="staminaRow"><div class="staminaLabel">YOU</div><div class="staminaBar"><div class="staminaFill" id="staminaFillYou"></div></div></div>
+      <div class="staminaRow"><div class="staminaLabel">CPU</div><div class="staminaBar"><div class="staminaFill" id="staminaFillCpu"></div></div></div>
+      <div class="staminaRow" id="staminaRowYouMate"><div class="staminaLabel">パートナー</div><div class="staminaBar"><div class="staminaFill" id="staminaFillYouMate"></div></div></div>
+      <div class="staminaRow" id="staminaRowCpuMate"><div class="staminaLabel">CPU2</div><div class="staminaBar"><div class="staminaFill" id="staminaFillCpuMate"></div></div></div>
+    </div>
   </div>
   <div id="head">1 set match · <span id="setinfo">first to 6</span></div>
   <div id="call"><div class="big" id="callBig"></div><div class="sub" id="callSub"></div><div class="shot" id="callShot"></div></div>

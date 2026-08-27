@@ -60,18 +60,20 @@ canvas{display:block}
 }
 #serveSpeed:empty{display:none}
 
-/* スタミナ（自分の分だけ常時表示）。ラリーで減り、ポイント間で少し回復する */
+/* スタミナ（自分以外も含めた全員を常時表示。パートナー/CPU2はダブルスのときだけ）。
+   ラリーで減り、ポイント間で少し回復する */
 #stamina{
   margin-top:6px;padding:5px 10px;
   background:rgba(9,20,34,.6);border-radius:2px;
-  display:flex;align-items:center;gap:8px;
+  display:flex;flex-direction:column;gap:4px;
 }
-#staminaLabel{font-size:11px;letter-spacing:.04em;color:var(--dim);white-space:nowrap}
-#staminaBar{flex:1;height:6px;border-radius:3px;overflow:hidden;
+.staminaRow{display:flex;align-items:center;gap:8px}
+.staminaLabel{font-size:11px;letter-spacing:.04em;color:var(--dim);white-space:nowrap;min-width:52px}
+.staminaBar{flex:1;height:5px;border-radius:3px;overflow:hidden;
   background:rgba(232,238,245,.12);
 }
-#staminaFill{height:100%;width:100%;background:var(--ball);transition:width .15s linear,background-color .15s linear}
-#staminaFill.low{background:#ef6b5a}
+.staminaFill{height:100%;width:100%;background:var(--ball);transition:width .15s linear,background-color .15s linear}
+.staminaFill.low{background:#ef6b5a}
 
 #head{
   position:absolute;top:14px;right:14px;text-align:right;

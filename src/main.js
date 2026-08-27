@@ -68,8 +68,18 @@
     onAnyKey: () => world.skipReplay(),
   });
 
+  /** hud.setStamina() に渡す4人ぶんの残量をそのつど組み立てる。 */
+  function syncStamina() {
+    hud.setStamina({
+      you: game.you.stamina,
+      cpu: game.cpu.stamina,
+      youMate: game.youMate.stamina,
+      cpuMate: game.cpuMate.stamina,
+    }, game.doubles);
+  }
+
   hud.renderScore(game.match, game.server, game.stats);
-  hud.setStamina(game.you.stamina);
+  syncStamina();
   world.sync(game, 0); // スタート画面の後ろにも正しい配置で映しておく
 
   // 開発用：コンソールから RallyOne.game で状態を覗ける
@@ -98,7 +108,7 @@
       world.sync(game, dt);
       hud.setCharge(game.chargeMeter());
       hud.setSmashTip(game.smashHint);
-      hud.setStamina(game.you.stamina);
+      syncStamina();
     }
     world.render();
   }

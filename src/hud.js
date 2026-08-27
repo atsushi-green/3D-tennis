@@ -16,7 +16,12 @@
         doubleFaults: { you: $('df1'), cpu: $('df2') },
         wind: $('wind'),
         serveSpeed: $('serveSpeed'),
-        staminaFill: $('staminaFill'),
+        staminaFillYou: $('staminaFillYou'),
+        staminaFillCpu: $('staminaFillCpu'),
+        staminaFillYouMate: $('staminaFillYouMate'),
+        staminaFillCpuMate: $('staminaFillCpuMate'),
+        staminaRowYouMate: $('staminaRowYouMate'),
+        staminaRowCpuMate: $('staminaRowCpuMate'),
         call: $('call'),
         callBig: $('callBig'),
         callSub: $('callSub'),
@@ -33,10 +38,26 @@
       };
     }
 
-    /** @param {number} fraction 0〜1。自分（you）の残量だけを表示する。 */
-    setStamina(fraction) {
-      this.el.staminaFill.style.width = `${Math.max(0, Math.min(1, fraction)) * 100}%`;
-      this.el.staminaFill.classList.toggle('low', fraction < STAMINA.LOW_THRESHOLD);
+    /**
+     * 4人全員の残量を表示する（自分の分だけでなく、相手・パートナーの消耗具合も駆け引きの
+     * 材料になる）。パートナー(youMate)/CPU2(cpuMate)の行はダブルスのときだけ出す。
+     * @param {{you:number, cpu:number, youMate:number, cpuMate:number}} stamina 各アクターの残量(0〜1)
+     * @param {boolean} doubles
+     */
+    setStamina(stamina, doubles) {
+      this.setStaminaFill(this.el.staminaFillYou, stamina.you);
+      this.setStaminaFill(this.el.staminaFillCpu, stamina.cpu);
+      this.el.staminaRowYouMate.style.display = doubles ? '' : 'none';
+      this.el.staminaRowCpuMate.style.display = doubles ? '' : 'none';
+      if (doubles) {
+        this.setStaminaFill(this.el.staminaFillYouMate, stamina.youMate);
+        this.setStaminaFill(this.el.staminaFillCpuMate, stamina.cpuMate);
+      }
+    }
+
+    setStaminaFill(el, fraction) {
+      el.style.width = `${Math.max(0, Math.min(1, fraction)) * 100}%`;
+      el.classList.toggle('low', fraction < STAMINA.LOW_THRESHOLD);
     }
 
     /** スタート画面のCPUの強さ表示を切り替える（実際の適用は config.applyCpuLevel が行う）。 */
