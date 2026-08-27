@@ -3,7 +3,7 @@
   'use strict';
 
   const {
-    PHYSICS, applyCpuLevel, applyCpuStyle, applySurface,
+    PHYSICS, applyCpuLevel, applyCpuStyle, applySurface, TOSS,
   } = RallyOne.config;
   const { sfx, unlock } = RallyOne.audio;
 
@@ -17,6 +17,10 @@
   let surface = 'hard';
   /** スタート画面で選んだCPU/AIのプレースタイル。既定はなし（未選択のまま開始した場合）。 */
   let cpuStyle = 'none';
+  /** トス（コイントス）に人間が勝ち、サーブ/レシーブの選択を待っている間だけ true。 */
+  let awaitingToss = false;
+  /** トスを始めた時点で選ばれていたダブルスの有無（トスの選択後にそのまま渡す）。 */
+  let doublesPending = false;
 
   const game = new RallyOne.Game({
     input,
@@ -30,23 +34,39 @@
     },
   });
 
+  /** applyCpuLevel/Style/Surface を適用してから実際に試合を始める（トスの結果が決まった後）。 */
+  function beginMatch(doubles, initialServer) {
+    applyCpuLevel(cpuLevel);
+    applyCpuStyle(cpuStyle); // 必ず applyCpuLevel() の後（config.js のコメント参照）
+    applySurface(surface);
+    hud.hideStartScreen();
+    game.start(doubles, initialServer);
+  }
+
+  /**
+   * 試合開始時のトス（コイントス）。実際の試合と同じく、勝った側がサーブ／レシーブを選ぶ。
+   * 人間が勝ったらスタート画面で選ばせ（onSelectToss を待つ）、CPUが勝ったら
+   * TOSS.CPU_SERVE_CHANCE の確率で自動的に選んで、選んだ側の結果でそのまま試合を始める。
+   */
+  function beginToss(doubles) {
+    unlock(); // AudioContext はユーザー操作の中でしか起こせない
+    doublesPending = doubles;
+    if (Math.random() < 0.5) {
+      awaitingToss = true;
+      hud.showTossChoice();
+      return;
+    }
+    beginMatch(doubles, Math.random() < TOSS.CPU_SERVE_CHANCE ? 'cpu' : 'you');
+  }
+
   input.attach({
     isStarted: () => game.started,
-    onStart: () => {
-      unlock(); // AudioContext はユーザー操作の中でしか起こせない
-      applyCpuLevel(cpuLevel);
-      applyCpuStyle(cpuStyle); // 必ず applyCpuLevel() の後（config.js のコメント参照）
-      applySurface(surface);
-      hud.hideStartScreen();
-      game.start(false);
-    },
-    onStartDoubles: () => {
-      unlock();
-      applyCpuLevel(cpuLevel);
-      applyCpuStyle(cpuStyle);
-      applySurface(surface);
-      hud.hideStartScreen();
-      game.start(true);
+    isAwaitingToss: () => awaitingToss,
+    onStart: () => beginToss(false),
+    onStartDoubles: () => beginToss(true),
+    onSelectToss: (choice) => {
+      awaitingToss = false;
+      beginMatch(doublesPending, choice === 'serve' ? 'you' : 'cpu');
     },
     onChargeStart: (spin) => game.chargeStart(spin),
     onChargeRelease: () => game.chargeRelease(),

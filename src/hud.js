@@ -27,6 +27,9 @@
         callSub: $('callSub'),
         callShot: $('callShot'),
         start: $('start'),
+        startCta: $('startCta'),
+        doublesCta: $('doublesCta'),
+        tossChoice: $('tossChoice'),
         charge: $('charge'),
         chargeFill: $('chargeFill'),
         smashTip: $('smashTip'),
@@ -145,6 +148,16 @@
 
     hideStartScreen() {
       this.el.start.style.display = 'none';
+    }
+
+    /**
+     * トス（コイントス）に人間が勝ったとき、サーブ／レシーブの選択画面に切り替える
+     * （実際の選択の適用は main.js#onSelectToss が行う）。
+     */
+    showTossChoice() {
+      this.el.startCta.style.display = 'none';
+      this.el.doublesCta.style.display = 'none';
+      this.el.tossChoice.classList.add('on');
     }
 
     /**

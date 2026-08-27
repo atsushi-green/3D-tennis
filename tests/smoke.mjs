@@ -1675,6 +1675,47 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(g.serverPartner.you === 'you', `team you's server rotates back to you, got ${g.serverPartner.you}`);
 }
 
+// --- トス（コイントス）：勝った側が選んだサーブ/レシーブが最初のサーバーになり、
+//     以降のゲームごとの交代（ダブルスのパートナーの巡りも含む）はいつもどおり続く ---
+{
+  // 引数省略時は従来どおり you が最初のサーバー（既存の挙動を壊さない）
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(false);
+    ok(g.server === 'you', `omitting initialServer keeps the default (you), got ${g.server}`);
+  }
+
+  // シングルス：トスに負けて相手（cpu）にサーブを選ばれた場合
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(false, 'cpu');
+    ok(g.server === 'cpu', `initialServer='cpu' makes cpu serve first, got ${g.server}`);
+    // 以降のゲームごとの交代は既存ロジックのまま（1ゲームぶん与えると交代する）
+    for (let i = 0; i < 4; i++) { g.phase = 'rally'; g.endPoint('cpu', 'test'); }
+    ok(g.server === 'you', `the usual per-game alternation still applies afterward, got ${g.server}`);
+  }
+
+  // ダブルス：トスに勝って人間チームがレシーブを選んだ（＝cpuチームが最初にサーブ）場合、
+  // パートナーの巡りも含めて既存ロジックがそのまま続く
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(true, 'cpu');
+    ok(g.server === 'cpu' && g.servingPlayer() === 'cpu',
+      `doubles: initialServer='cpu' makes the main cpu serve first, got server=${g.server} servingPlayer=${g.servingPlayer()}`);
+    for (let i = 0; i < 4; i++) { g.phase = 'rally'; g.endPoint('you', 'test'); } // cpuチームに1ゲームぶん与える
+    ok(g.server === 'you' && g.serverPartner.cpu === 'cpuMate',
+      `doubles: the per-game rotation (including the partner rotation) still works from a non-default start, got server=${g.server} serverPartner.cpu=${g.serverPartner.cpu}`);
+  }
+
+  // 既に始まっている試合には影響しない（2回目の start() は無視される）
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(false, 'cpu');
+    g.start(false, 'you'); // 2回目は無視されるはず
+    ok(g.server === 'cpu', `a second start() call (even with a different initialServer) is a no-op, got ${g.server}`);
+  }
+}
+
 // --- ダブルス：レシーバーは固定（サイドで主力/相方が決まる）、もう一方はネット際で構える ---
 {
   const { DOUBLES } = R.config;

@@ -143,6 +143,11 @@ canvas{display:block}
 .diff-opt{margin:0 4px;opacity:.45}
 .diff-opt.on{opacity:1;color:var(--ball);font-weight:700}
 
+/* トス（コイントス）に人間が勝ったときだけ出るサーブ／レシーブの選択（既定は非表示）。
+   #start .cta-alt{display:block} より詳細度で勝つよう #start を重ねて指定する。 */
+#start #tossChoice{display:none}
+#start #tossChoice.on{display:block}
+
 @media (max-width:520px){
   #keys{font-size:10px;gap:10px}
   #bug .nm{min-width:84px}

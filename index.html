@@ -45,8 +45,13 @@
   <h1>RALLY <span>ONE</span></h1>
   <p>3Dテニス v0.1 — ループの1周目。<br>
      ボールが自コートで2バウンドしたら失点。ラインを割っても失点。</p>
-  <div class="cta">Space / クリックで開始</div>
-  <div class="cta cta-alt">D でダブルス（あなた＋AIパートナー vs CPU2人）</div>
+  <div class="cta" id="startCta">Space / クリックで開始</div>
+  <div class="cta cta-alt" id="doublesCta">D でダブルス（あなた＋AIパートナー vs CPU2人）</div>
+  <div class="cta cta-alt" id="tossChoice">
+    🎾 コイントスに勝ちました！<br>
+    <span class="diff-opt" id="tossServe" data-choice="serve">1 サーブ</span>
+    <span class="diff-opt" id="tossReceive" data-choice="receive">2 レシーブ</span>
+  </div>
   <div class="cta cta-alt" id="diffRow">
     CPUの強さ：
     <span class="diff-opt" id="diffEasy" data-level="easy">1 Easy</span>

@@ -283,11 +283,17 @@
 
     /* -------------------------------------------------------------- 入力 */
 
-    /** @param {boolean} [doubles] true ならダブルス（you+youMate vs cpu+cpuMate）で開始 */
-    start(doubles) {
+    /**
+     * @param {boolean} [doubles] true ならダブルス（you+youMate vs cpu+cpuMate）で開始
+     * @param {'you'|'cpu'} [initialServer] トス（コイントス）で決まった最初のサーバー。
+     *   省略時は既定の 'you'（コンストラクタで設定済み）のまま。以降のゲームごとの交代は
+     *   endPoint() の既存ロジックがそのまま続ける（ここは開始時の1回だけに効く）。
+     */
+    start(doubles, initialServer) {
       if (this.started) return;
       this.started = true;
       this.doubles = !!doubles;
+      if (initialServer) this.server = initialServer;
       this.newPoint();
     }
 

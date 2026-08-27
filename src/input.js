@@ -32,6 +32,12 @@
   const STYLE_KEYS = {
     Digit7: 'none', Digit8: 'serveAndVolley', Digit9: 'retriever', Digit0: 'aggressiveBaseliner',
   };
+  /**
+   * トス（コイントス）に勝った人間だけが選ぶ。スタート画面の各種選択が終わった後の
+   * 別画面（handlers.isAwaitingToss()）でだけ意味を持つので、Digit1/2 を使い回しても
+   * 難易度選択（Digit1〜3）とは表示上・時間軸上で重ならない。
+   */
+  const TOSS_KEYS = { Digit1: 'serve', Digit2: 'receive' };
   /** ブラウザのスクロールを止めたいキー */
   const SWALLOW = MOVE_LEFT.concat(MOVE_RIGHT, MOVE_UP, MOVE_DOWN, SWING_CODES);
 
@@ -47,6 +53,7 @@
      * @param {{onStart:Function, onStartDoubles:Function, onChargeStart:Function,
      *   onChargeRelease:Function, onFormationNet:Function, onFormationBack:Function,
      *   onSelectDifficulty:Function, onSelectSurface:Function, onSelectStyle:Function,
+     *   onSelectToss:Function, isAwaitingToss:Function,
      *   onAnyKey:Function, isStarted:Function}} handlers
      */
     attach(handlers) {
@@ -55,6 +62,10 @@
         if (e.repeat) return;
         this.held.add(e.code);
         if (!handlers.isStarted()) {
+          if (handlers.isAwaitingToss()) {
+            if (TOSS_KEYS[e.code]) handlers.onSelectToss(TOSS_KEYS[e.code]);
+            return; // トスの結果待ちの間は、他の開始キーには反応しない
+          }
           if (e.code === 'KeyD') handlers.onStartDoubles();
           else if (DIFFICULTY_KEYS[e.code]) handlers.onSelectDifficulty(DIFFICULTY_KEYS[e.code]);
           else if (SURFACE_KEYS[e.code]) handlers.onSelectSurface(SURFACE_KEYS[e.code]);
@@ -93,8 +104,9 @@
       });
 
       addEventListener('pointerdown', () => {
-        if (!handlers.isStarted()) handlers.onStart();
-        else if (!this.chargeKey) {
+        if (!handlers.isStarted()) {
+          if (!handlers.isAwaitingToss()) handlers.onStart(); // トス結果待ちの間はクリックでは進めない
+        } else if (!this.chargeKey) {
           this.chargeKey = 'Pointer';
           handlers.onChargeStart(this.heldSpin());
         }

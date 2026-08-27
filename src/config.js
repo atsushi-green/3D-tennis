@@ -422,6 +422,14 @@
     NET_IN_CALL: 0.8, // 「ネットイン！」のコール表示が消えるまで
   };
 
+  /**
+   * 試合開始時のトス（コイントス）。実際の試合と同じく、勝った側がサーブ／レシーブを選ぶ。
+   * 人間が勝ったらスタート画面で選ばせ（main.js）、CPUが勝ったら自動で選ぶ。
+   */
+  const TOSS = {
+    CPU_SERVE_CHANCE: 0.75, // CPUがトスに勝ったとき、サーブを選ぶ確率（高め）
+  };
+
   /** 見た目 */
   const THEME = {
     BG: 0x0b1a2b,
@@ -839,6 +847,6 @@
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT,
-    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, REPLAY, STAMINA,
+    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, REPLAY, STAMINA, TOSS,
   };
 })(window.RallyOne = window.RallyOne || {});
