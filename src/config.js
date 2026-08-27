@@ -699,7 +699,13 @@
       },
       player: {
         CPU_CHASE: 10.2, CPU_RECOVER: 3.7, CPU_REACT: 0.05, CPU_RECOVER_DELAY: 0.42,
-        CPU_REACH: 1.6, CPU_REFLEX_REACH: 0.72,
+        // CPU_REFLEX_REACH は CPU_REACH ほど比率を上げていない：ここはダブルスの前衛が
+        // ボレー・スマッシュ（＝ bounces===0 で ball.age が短く reactReach() がこの値
+        // 付近になる）を拾えるかを直接左右する。CPU_REACH と同じ比率（1.6/1.45）で
+        // 上げると 0.5→0.55 で済むところ 0.72 まで跳ね上がり、「Hard の前衛はほぼ全ての
+        // ボレー・スマッシュを拾う」という報告の原因になっていた。normal からの上げ幅を
+        // 抑えて、前衛が触れずに決まる球も残すようにしてある。
+        CPU_REACH: 1.6, CPU_REFLEX_REACH: 0.56,
       },
     },
   };
