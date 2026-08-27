@@ -110,6 +110,8 @@
       tone(freq, (backhand ? 0.1 : 0.08) + charge * 0.05, 0.20 + charge * 0.16);
     },
     bounce: () => tone(180, 0.06, 0.10),
+    // ネットコードに当たる鈍い音。bounce()より低く長め＝ゴム/ガットの振動っぽさを出す
+    netIn: () => tone(130, 0.11, 0.12),
     point: (winner, outcome, rallyShots) => {
       tone(winner === 'you' ? 660 : 220, 0.16, 0.14);
       crowd(rallyShots, outcome);

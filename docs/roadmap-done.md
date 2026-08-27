@@ -10,6 +10,13 @@
 - テスト: <tests/smoke.mjs の結果>
 ```
 
+## 2026-08-27 ネットインを実装する
+- ブランチ: なし（ユーザー指示により直接実装）
+- 経緯: ユーザーから「ネットインを実装してほしい、あんまり頻発しない感じで」という要望を受けた。それまでネットに掛かった球は常にフォールト（サーブ）／失点（ラリー）だった。
+- 実施内容: `config.js` に `NET`（`FAULT_VZ_MULT`/`FAULT_VX_MULT`/`FAULT_VY_MULT`＝既存のフォールト時の減速値をそのまま切り出したもの、`IN_CHANCE`=0.08、`IN_VZ_MULT`/`IN_VX_MULT`/`IN_VY_MULT`=0.3）を追加し、`TIMING.NET_IN_CALL`=0.8 も追加。`game.js#stepBall()` の `hitsNet(ball)` 分岐に、ラリー中（`!this.serveInFlight`）に限り `Math.random() < NET.IN_CHANCE` で分岐する処理を追加：ネットインなら `endPoint()`/`serveFault()` を呼ばずに `vz`/`vx`/`vy` を（向きは変えずに）大きく減速させるだけにし、`hooks.sound('netIn')` と `hooks.call('ネットイン！', '')`（`TIMING.NET_IN_CALL` 秒後に `hooks.clearCall()`、既存の「パートナー」コールと同じパターン）を鳴らして即 `return`（ボールは生きたまま続行）。サーブがネットに触れた場合は対象外のまま（実際のルールのレット/フォールトの判定を混同しないため。コメントに理由を明記）。`audio.js` に `sfx.netIn`（`bounce`より低く長い鈍いトーン）を追加。
+- テスト: `node tests/smoke.mjs` — ALL PASS。新規テスト（`tests/smoke.mjs`）：①確率境界ちょうど（`Math.random()===NET.IN_CHANCE`）ではネットインにならず従来どおりフォールトになること、②確率を下回ればポイントを終わらせずボールが生きたまま`NET.IN_VZ_MULT`で減速して同じ向きに進み続けること、③`netIn`サウンドと「ネットイン！」コールが発火し`TIMING.NET_IN_CALL`秒後に`tickTimers()`で自動的に消えること、④サーブ中は`Math.random()`が最も有利な値でも常にフォールトのままネットインにならないこと。`claude-in-chrome`（ローカル`http.server`経由）で実機確認：`Math.random`を固定してネットインを強制発火させ、コート上でボールがネット際に留まる見た目・「ネットイン！」の大きなコール表示・タイマー経過後にコールが消えること・サーブ中は同じ乱数でも常にフォールトになることを確認。コンソールエラーなし。
+  - 備考：ブラウザ実機確認の途中、同じポートの`http.server`を使い回した際に一部スクリプト（`src/game.js`）だけ古いキャッシュが残り新しいコードが読み込まれない事象に遭遇した（`config.js`は新しい内容が読めていたのに`game.js`だけ古いままだった）。ポート番号を変えて新規オリジンとして読み込み直すことで解消した＝アプリ側の不具合ではなく検証環境のキャッシュの問題と判断した。
+
 ## 2026-08-27 観客の歓声を入れる
 - ブランチ: なし（ユーザー指示によりROADMAPを上から順にmain上で直接実装）
 - 実施内容: `game.js` に `rallyShots`（このポイントで何本打たれたか。サーブも1本に数える。`beginServe()` で数え直し、`serve()`/`hit()` で加算）を追加。`endPoint()` で決まり方を `'ace'|'winner'|'error'|'doubleFault'` に分類し、既存の `hooks.sound('point', winner)` を `hooks.sound('point', winner, outcome, this.rallyShots)` に拡張（既存の呼び出し口をそのまま使い、新しいフックは足していない）。`audio.js` に、ホワイトノイズ→バンドパスフィルタ→山なりの音量エンベロープという最小構成で `crowd(rallyShots, outcome)` を追加し、`sfx.point` から `tone()`（既存の決着音）と一緒に鳴らすようにした。音量・長さ・鳴らす条件はすべて `config.js` の `AUDIO.CROWD` に集約（`BASE_DUR`/`MAX_DUR`/`BASE_VOL`/`MAX_VOL`/`ATTACK`/`OUTCOME_VOL_MULT`/`FILTER_BASE_HZ`/`FILTER_EXCITED_HZ`/`EXCITEMENT_SHOTS`）。ラリーの本数で音量・長さが `EXCITEMENT_SHOTS`(20本) まで伸び、決まり方の倍率（エース1.35／ウィナー1.15／凡ミス0.7／ダブルフォルト0.3）を掛ける。エースは定義上サーブ1本だけのポイントなので倍率が高くてもラリーぶんの伸びが乗らず、結果として「長いラリーの末のウィナー」が音量・長さとも最大になる（実測：ウィナー×20本＝長さ2.0秒・音量0.23、対してエース＝長さ0.9秒・音量0.0945）。

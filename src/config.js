@@ -146,6 +146,24 @@
   };
 
   /**
+   * ネットに掛かった球の扱い。既定は常にフォールト（サーブ）／失点（ラリー）で、ネットに
+   * 当たって自陣側へ弱く跳ね返る（FAULT_*）。ラリー中（サーブ中は対象外）に限り、ごく低い
+   * 確率でネットコードに救われてそのまま相手コートへ入り続ける＝「ネットイン」になる
+   * （IN_CHANCE）。サーブを対象外にしているのは、実際のルールでは「サーブがネットに触れて
+   * 正しいボックスに入る」は失点にならない代わりレット（打ち直し）になるはずで、それを
+   * このまま生きた球として続行させるのは別のルール（レット）を混同することになるため。
+   */
+  const NET = {
+    FAULT_VZ_MULT: -0.18, // フォールト：向きを反転させつつ大きく失速（自陣側へ弱く落ちる）
+    FAULT_VX_MULT: 0.3,
+    FAULT_VY_MULT: 0.3,
+    IN_CHANCE: 0.08,      // ラリー中にネットへ掛かった球のうち、ネットインになる割合
+    IN_VZ_MULT: 0.3,      // ネットイン：向きはそのまま、コードで大きく失速するだけ
+    IN_VX_MULT: 0.3,
+    IN_VY_MULT: 0.3,
+  };
+
+  /**
    * ボレー（サービスラインより前で、ノーバウンドの球を打ち返すとき）。
    * 溜め時間ではなく、ボールとプレイヤーの左右距離で威力・角度が決まる：真正面（距離0）や
    * 伸びきり（距離が SWEET_DIST+WINDOW を超える）は普通のブロック返球に、フォア/バック側に
@@ -401,6 +419,7 @@
     CPU_SERVE_DELAY: 0.9,
     NEXT_POINT: 1.5,
     NEXT_MATCH: 2.6,
+    NET_IN_CALL: 0.8, // 「ネットイン！」のコール表示が消えるまで
   };
 
   /** 見た目 */
@@ -818,7 +837,7 @@
 
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
-    BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO,
+    BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT,
     SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, REPLAY, STAMINA,
   };

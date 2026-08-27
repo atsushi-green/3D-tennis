@@ -577,6 +577,85 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(g.stats.you.aces === 1, 'it counts as an ace, same as an untouched serve that bounces twice');
 }
 
+// --- ネットイン：ラリー中にネットへ掛かった球が、ごく低い確率でそのまま相手コートへ入り続ける ---
+{
+  const { NET, TIMING } = R.config;
+
+  /** ラリー中、ネットの手前から相手コート側へ向かう球を1ステップだけ進める。 */
+  function rallyNetHit(g) {
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    Object.assign(g.ball, {
+      x: 1, z: -0.01, px: 1, pz: -0.01, y: 0.3, py: 0.3, vx: 0, vy: 0, vz: 5, bounces: 0, last: 'you', live: true, wind: 0,
+    });
+    g.stepBall(0.05);
+  }
+
+  // 既定（乱数が確率を上回る）はこれまでどおりフォールトのまま
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    const origRandom = Math.random;
+    Math.random = () => NET.IN_CHANCE; // ちょうど境界＝ネットインにはならない（< 判定）
+    try {
+      rallyNetHit(g);
+    } finally {
+      Math.random = origRandom;
+    }
+    ok(g.phase === 'over', 'without beating the chance, a net-clipped rally shot still ends the point as before');
+    ok(g.match.points.cpu === 1 && g.match.points.you === 0,
+      'the point goes to the opponent of whoever hit it into the net, unchanged');
+  }
+
+  // 確率を下回ったときだけネットインになり、ポイントは終わらずボールが生きたまま相手コートへ続く
+  {
+    const calls = [];
+    const sounds = [];
+    const hooks = {
+      ...noHooks, call: (big, sub) => calls.push([big, sub]), clearCall: () => calls.push('clear'), sound: (name) => sounds.push(name),
+    };
+    const g = new R.Game({ input: fakeInput, hooks });
+    g.start();
+    const origRandom = Math.random;
+    Math.random = () => 0; // 必ずネットインさせる
+    try {
+      rallyNetHit(g);
+    } finally {
+      Math.random = origRandom;
+    }
+    ok(g.phase === 'rally', 'a net-in does not end the point');
+    ok(g.ball.live === true, 'the ball stays live after a net-in');
+    ok(g.match.points.you === 0 && g.match.points.cpu === 0, 'no point is awarded on a net-in');
+    ok(g.ball.vz > 0, `the ball keeps travelling the same direction (toward the opponent), got vz=${g.ball.vz}`);
+    ok(Math.abs(g.ball.vz - 5 * NET.IN_VZ_MULT) < 1e-9,
+      `forward speed is damped by NET.IN_VZ_MULT, got vz=${g.ball.vz}`);
+    ok(sounds.includes('netIn'), 'a dedicated netIn sound is played');
+    ok(calls.some(([big]) => big === 'ネットイン！'), 'a transient "ネットイン！" call is shown');
+
+    // その表示は TIMING.NET_IN_CALL 秒後に自動で消える（タイマーだけを直接進める）
+    g.tickTimers(TIMING.NET_IN_CALL + 0.01);
+    ok(calls[calls.length - 1] === 'clear', 'the net-in call clears itself after TIMING.NET_IN_CALL seconds');
+  }
+
+  // サーブは対象外：ネットに掛かればネットインの確率に関わらず常にフォールトのまま
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.serve('you');
+    ok(g.serveInFlight === true, 'precondition: first serve is in flight');
+    const origRandom = Math.random;
+    Math.random = () => 0; // ネットインの確率だけ見るならここで必ず救われるはずの乱数
+    try {
+      g.ball.x = 1; g.ball.z = -0.01; g.ball.y = 0.3; g.ball.vx = 0; g.ball.vy = 0; g.ball.vz = 5;
+      g.stepBall(0.05);
+    } finally {
+      Math.random = origRandom;
+    }
+    ok(g.serveNumber === 2, 'a serve clipping the net is always a fault, never a net-in');
+    ok(g.phase === 'serve', 'the point does not continue as a live rally');
+  }
+}
+
 // --- スタッツ：エースはサーブが一度も返球されずに2バウンドで決まったときだけ積む ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });

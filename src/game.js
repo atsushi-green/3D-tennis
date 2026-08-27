@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    BOUNDS, CHARGE, COURT, CPU, DOUBLES, DROP, FX, HALF_L, HALF_W, PHYSICS, PLAYER, RETURN, SERVE,
+    BOUNDS, CHARGE, COURT, CPU, DOUBLES, DROP, FX, HALF_L, HALF_W, NET, PHYSICS, PLAYER, RETURN, SERVE,
     SHOT, SMASH_HINT, STAMINA, TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND,
   } = RallyOne.config;
   const {
@@ -1302,9 +1302,21 @@
       ball.age += dt;
 
       if (hitsNet(ball)) {
-        ball.vz *= -0.18;
-        ball.vx *= 0.3;
-        ball.vy *= 0.3;
+        // サーブは対象外（実際のルールのレットと混同しないよう常にフォールトのまま。
+        // config.js の NET のコメント参照）。ラリー中だけ、ごく低い確率でネットコードに
+        // 救われてそのまま相手コートへ入り続ける＝ネットイン。
+        if (!this.serveInFlight && Math.random() < NET.IN_CHANCE) {
+          ball.vz *= NET.IN_VZ_MULT;
+          ball.vx *= NET.IN_VX_MULT;
+          ball.vy *= NET.IN_VY_MULT;
+          this.hooks.sound('netIn');
+          this.hooks.call('ネットイン！', '');
+          this.after(TIMING.NET_IN_CALL, () => this.hooks.clearCall());
+          return;
+        }
+        ball.vz *= NET.FAULT_VZ_MULT;
+        ball.vx *= NET.FAULT_VX_MULT;
+        ball.vy *= NET.FAULT_VY_MULT;
         if (this.serveInFlight) this.serveFault('ネット');
         else this.endPoint(opponent(ball.last), 'ネット');
         return;
