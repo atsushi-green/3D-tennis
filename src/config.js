@@ -788,7 +788,7 @@
    */
   const SURFACE_PRESETS = {
     hard: { RESTITUTION_MULT: 1, FRICTION_MULT: 1 },
-    clay: { RESTITUTION_MULT: 1.15, FRICTION_MULT: 0.90 },
+    clay: { RESTITUTION_MULT: 1.08, FRICTION_MULT: 0.90 },
     grass: { RESTITUTION_MULT: 0.75, FRICTION_MULT: 1.05 },
   };
   // physics.js が毎バウンド参照する「今効いている」倍率。CPU/PLAYER と同じく、新しい
