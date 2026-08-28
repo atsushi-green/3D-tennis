@@ -200,6 +200,14 @@
       this.tossActive = false;
       /** true の間はサーブがまだ一度も返球されていない＝ノーバウンドで打ち返してはいけない。 */
       this.serveInFlight = false;
+      /**
+       * プレースタイル「サーブ&ボレーヤー」用。cpu が自分のサーブを打った瞬間に true になり、
+       * そのポイントの間ずっと（返球された後も）ネット際へ詰め続ける。以前は serveInFlight
+       * （＝自分のサーブがまだ返されていない、ごく短い間）と誤って連動させていたため、
+       * 人間が返球した瞬間にネットへの接近そのものをやめてしまい、実質ほとんど前に出られ
+       * ていなかった（ユーザー報告）。moveSinglesCpu() 参照。
+       */
+      this.cpuNetRush = false;
       /** setTimeout ではなくゲームループで数える。ポイント間で確実に破棄できる。 */
       this.timers = [];
       /**
@@ -478,6 +486,7 @@
       this.phase = 'serve';
       this.tossActive = false;
       this.serveInFlight = false;
+      this.cpuNetRush = false;
       this.rallyShots = 0; // このサーブ（フォールトからのやり直しも含む）から数え直す
 
       const ball = this.ball;
@@ -630,6 +639,9 @@
 
       this.tossActive = false;
       this.serveInFlight = true; // 一度も返球されていない＝ノーバウンドで打ち返してはいけない
+      // プレースタイル「サーブ&ボレーヤー」：cpu が自分のサーブを打った瞬間から、このポイントの
+      // 間ずっとネットへ詰め続ける（moveSinglesCpu() 参照）。
+      if (who === 'cpu' && CPU.APPROACH_NET_AFTER_SERVE) this.cpuNetRush = true;
       this.phase = 'rally';
       this.rallyShots++; // サーブも1本に数える（観客の歓声・実況の盛り上がりに使う）
       this.resetChase(); // レシーバーが「このサーブを追った距離」を数え始める
@@ -1169,12 +1181,17 @@
         this.cpu.speed = 0; // まだ反応できていない
         return;
       }
-      // プレースタイル「サーブ&ボレーヤー」：自分のサーブがまだ返球されていない間
-      // （serveInFlight）は、通常の定位置(HOME_Z)へ戻る代わりにネット際へ詰める。
+      // プレースタイル「サーブ&ボレーヤー」：自分のサーブを打ってからこのポイントの間ずっと
+      // （cpuNetRush。serve() 参照）、通常の定位置(HOME_Z)へ戻る代わりにネット際へ詰める。
+      // 以前は serveInFlight（＝サーブがまだ返球されていない、コンマ数秒しかない間）で見て
+      // いたため、人間が返球した瞬間にネットへの接近そのものをやめてしまい、ベースライン
+      // 付近からほとんど動けていなかった。CPU_RECOVER（定位置へゆっくり戻る速度）ではなく
+      // CPU_CHASE（球を追う速い速度）を使い、実際に間に合う勢いで詰めさせる。
       const approachingNet = !incoming && CPU.APPROACH_NET_AFTER_SERVE
-        && this.server === 'cpu' && this.serveInFlight;
+        && this.server === 'cpu' && this.cpuNetRush;
       const target = incoming ? chasePosition(this.ball, 1, this.cpu) : homePosition(approachingNet);
-      this.moveIfRecovered('cpu', this.cpu, cpuBefore, target, incoming ? PLAYER.CPU_CHASE : PLAYER.CPU_RECOVER, dt);
+      const speed = incoming || approachingNet ? PLAYER.CPU_CHASE : PLAYER.CPU_RECOVER;
+      this.moveIfRecovered('cpu', this.cpu, cpuBefore, target, speed, dt);
     }
 
     /**

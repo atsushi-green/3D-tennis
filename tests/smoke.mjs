@@ -1963,17 +1963,33 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       `approaching the net targets a shallower z than the normal home position, got net=${netHome.z} normal=${normalHome.z}`);
   }
   {
-    // 実際に game.js を通しても、サーブがまだ返っていない間（serveInFlight）は
-    // 通常の定位置(HOME_Z)ではなくネット際(NET_APPROACH_Z)へ歩いていく
+    // serve() を実際に呼ぶと cpuNetRush が立つ（そのポイントの間ネットへ詰め続けるフラグ）。
+    // 退行テスト: 以前は serveInFlight（サーブがまだ返っていない、コンマ数秒しかない間）で
+    // 見ていたため、人間が返球した瞬間に接近そのものをやめてしまい、実際にはベースライン
+    // 付近からほとんど動けていなかった（ユーザー報告「サービス＆ボレーでもあまり前に
+    // 出てこない」）。cpuNetRush はサーブを打った後、返球されても立ったままであること、
+    // かつ CPU_RECOVER（定位置へ戻るだけの遅い速度）ではなく CPU_CHASE（球を追う速い速度）
+    // で詰めることを検証する。
     const g = new R.Game({ input: fakeInput, hooks: noHooks });
     g.server = 'cpu';
-    g.phase = 'rally';
-    g.serveInFlight = true;
+    g.newPoint();
+    g.serve('cpu');
+    ok(g.cpuNetRush === true, 'serve() flags cpuNetRush for a serve-and-volley cpu serve');
+
+    // 人間が打ち返した想定（serveInFlight は解除されるが、cpuNetRush は解除されない）
+    g.serveInFlight = false;
+    g.ball.last = 'you';
+    ok(g.cpuNetRush === true, 'cpuNetRush survives past the return, unlike the old serveInFlight-based check');
+
+    // 待機中（自分の番ではない）に戻し、実際に1秒ぶん歩かせて速度と到達距離を確認する
     g.ball.last = 'cpu';
     g.cpu.x = 0; g.cpu.z = R.config.CPU.HOME_Z;
-    for (let i = 0; i < 120; i++) g.movePlayers(1 / 60);
+    for (let i = 0; i < 60; i++) g.movePlayers(1 / 60);
+    const covered = R.config.CPU.HOME_Z - g.cpu.z;
     ok(g.cpu.z < R.config.CPU.HOME_Z - 1,
-      `serve-and-volley CPU walks toward the net after serving, got z=${g.cpu.z} (started at ${R.config.CPU.HOME_Z})`);
+      `serve-and-volley CPU keeps walking toward the net after the return, got z=${g.cpu.z} (started at ${R.config.CPU.HOME_Z})`);
+    ok(covered >= PLAYER.CPU_CHASE * 0.9,
+      `advances at CPU_CHASE speed rather than the slower CPU_RECOVER, covered ${covered.toFixed(2)}m/s vs CPU_CHASE=${PLAYER.CPU_CHASE}`);
   }
 
   // リトリーバー：ミスしにくく、ロブを多用する
