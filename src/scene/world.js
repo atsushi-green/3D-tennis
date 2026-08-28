@@ -16,7 +16,7 @@
     const { scene, camera } = stage;
 
     const court = scene3d.createCourt();
-    scene.add(court, scene3d.createNet());
+    scene.add(court, scene3d.createNet(), scene3d.createOfficials(), scene3d.createCrowd());
 
     const you = scene3d.createPlayer(THEME.YOU);
     const cpu = scene3d.createPlayer(THEME.CPU);

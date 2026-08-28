@@ -108,7 +108,9 @@ src/
   scene/
     renderer.js     レンダラー・カメラ・ライト
     court.js        コート面（ラインは CanvasTexture）とスタンド
+    crowd.js        観客（スタンド上に InstancedMesh でひな壇状に並べる）
     net.js          ネットとポスト
+    officials.js    審判台・主審・線審・ボールボーイ（静止した装飾）
     player.js       選手のメッシュとスイングのポーズ
     ball.js         ボール・影・着地マーカー
     hint.js         スマッシュの先回り地点マーカー

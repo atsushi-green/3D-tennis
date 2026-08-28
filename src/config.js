@@ -400,11 +400,14 @@
      * 既存の効果音（point:0.14, hit:最大0.36程度）とぶつからないよう、控えめな帯域に収める。
      */
     CROWD: {
-      BASE_DUR: 0.9,
-      MAX_DUR: 2.0,
+      // 「歓声が短い」というユーザー報告を受け、BASE/MAX とも伸ばした（0.9→1.3 / 2.0→3.2）。
+      // ATTACK も比率を保って伸ばし、伸びた分が全部フェードアウトに食われて
+      // 「立ち上がりは同じだけどすぐ収まる」という印象に戻らないようにしてある。
+      BASE_DUR: 1.3,
+      MAX_DUR: 3.2,
       BASE_VOL: 0.07,
       MAX_VOL: 0.20,
-      ATTACK: 0.18, // 音量が立ち上がるまでの時間（頭のクリック感を避け、沸き上がる感じにする）
+      ATTACK: 0.24, // 音量が立ち上がるまでの時間（頭のクリック感を避け、沸き上がる感じにする）
       EXCITEMENT_SHOTS: 20, // このぶん本数のラリーで盛り上がりが頭打ちになる目安（audio.js#crowd参照）
       OUTCOME_VOL_MULT: {
         ace: 1.35, winner: 1.15, error: 0.7, doubleFault: 0.3,
@@ -447,6 +450,90 @@
     GRIP: 0x22303f,
     YOU: { shirt: 0xe8eef5, shorts: 0x1e2c3c },
     CPU: { shirt: 0xef6b5a, shorts: 0x2a1c22 },
+    UMPIRE_CHAIR: 0x33445a,
+    OFFICIAL_UNIFORM: 0x24344a, // 主審・線審の制服
+    BALLKID_SHIRT: 0xd9c23a,    // ボールボーイの制服（コート上で見分けやすい差し色）
+    BALLKID_SHORTS: 0x22303f,
+  };
+
+  /**
+   * 審判台・主審・線審・ボールボーイの配置。すべて静止した装飾（scene/officials.js）で、
+   * ゲームロジックには関与しない。ネットポスト（COURT.NET_HALF）の外側に審判台を、
+   * コートの外周に線審とボールボーイを配置する。
+   */
+  const OFFICIALS = {
+    CHAIR: {
+      X: COURT.NET_HALF + 1.3, // ネットポストの外側
+      Z: 0.5,                  // ポストと重ならないよう前後にずらす
+      HEIGHT: 1.85,             // 座面の高さ
+      FOOTPRINT: 0.5,           // 脚が作る正方形の半幅
+    },
+    BALLKID: {
+      SCALE: 0.82, // 大人（主審・線審）より小柄にする
+      NET: [
+        { x: -(COURT.NET_HALF - 0.4), z: 0.45 },
+        { x: (COURT.NET_HALF - 0.4), z: -0.45 },
+      ],
+      // プレイヤー／CPUが実際に動き回れる範囲（PLAYER.X_LIMIT・Z_FAR_MARGIN）の外側に
+      // 出しておく。ここより内側だとラリー中に選手のすぐそばに突っ立って見え、
+      // 「ボールボーイがベースライン付近で近すぎる」違和感の原因になっていた。
+      CORNER: [
+        { x: -(PLAYER.X_LIMIT + 0.6), z: -(HALF_L + PLAYER.Z_FAR_MARGIN + 1.3) },
+        { x: (PLAYER.X_LIMIT + 0.6), z: -(HALF_L + PLAYER.Z_FAR_MARGIN + 1.3) },
+        { x: -(PLAYER.X_LIMIT + 0.6), z: (HALF_L + PLAYER.Z_FAR_MARGIN + 1.3) },
+        { x: (PLAYER.X_LIMIT + 0.6), z: (HALF_L + PLAYER.Z_FAR_MARGIN + 1.3) },
+      ],
+    },
+    LINE: {
+      // ベースラインのすぐ外に立つ線審。センターマーク付近(x≈0)に置くと、カメラが
+      // 自陣ベースラインのすぐ後ろに固定されているせいでサーブ時の自分の真後ろ・至近距離に
+      // 重なって見えてしまう（ユーザー報告「グレーの服の人がベースライン付近で邪魔」）。
+      // CORNER のボールボーイと同じく PLAYER.X_LIMIT の外側へ出し、選手の可動域とも
+      // カメラの正面視界とも重ならないようにする（ライン自体には手前に寄せて近づける）。
+      BASE: [
+        { x: -(PLAYER.X_LIMIT + 1.0), z: -(HALF_L + 0.9) },
+        { x: (PLAYER.X_LIMIT + 1.0), z: (HALF_L + 0.9) },
+      ],
+      // サービスライン付近、ダブルスサイドラインの外に立つ線審
+      SIDE: [
+        { x: (COURT.DW / 2 + 0.6), z: -COURT.SERVICE * 0.5 },
+        { x: -(COURT.DW / 2 + 0.6), z: COURT.SERVICE * 0.5 },
+      ],
+    },
+  };
+
+  /**
+   * スタンド代わりの低い壁（court.js#createStands）の形状。壁自体（court.js）と
+   * 観客の並び（scene/crowd.js）の両方がここを参照する＝マジックナンバーの二重管理を避ける。
+   * axis:'x' は壁がx方向に伸びる（z=fixedに立つ）、'z' はその逆（x=fixedに立つ）。
+   */
+  const STANDS = {
+    HEIGHT: 2.6,
+    THICKNESS: 2, // 壁の厚み（span と垂直な向きの奥行き）
+    WALLS: [
+      { axis: 'x', fixed: 20, span: 54 },
+      { axis: 'x', fixed: -20, span: 54 },
+      { axis: 'z', fixed: 26, span: 42 },
+      { axis: 'z', fixed: -26, span: 42 },
+    ],
+  };
+
+  /**
+   * 観客。スタンドの壁（STANDS）の上に、簡易な人型（胴＋頭のInstancedMesh）をひな壇状に
+   * 並べる（scene/crowd.js）。1人ずつ Mesh を作ると壁4枚で数百体になり得るため、
+   * InstancedMesh 2つ（胴・頭）だけで描画コストを抑える。ゲームロジックには関与しない。
+   */
+  const SPECTATORS = {
+    ROWS: 3,             // ひな壇の段数
+    SEAT_SPACING: 1.15,  // 観客同士の間隔（壁に沿った方向）
+    EDGE_MARGIN: 1.5,    // 壁の両端を間引く余白（コーナーの装飾と詰まりすぎないように）
+    ROW_GAP: 0.6,        // 段ごとに外側（コートから離れる向き）へずれる奥行き
+    ROW_RISE: 0.38,      // 段ごとに高くなる量（後ろの段ほど見えるように）
+    SCALE: 0.8,          // 主審・線審（大人サイズ=1）よりひとまわり小さく、遠景らしくする
+    SCALE_JITTER: 0.2,   // 個体ごとの大きさのばらつき（0〜この幅を SCALE に加える）
+    JITTER_ALONG: 0.3,   // 壁沿いの位置を少しランダムにずらし、整列しすぎないようにする
+    JITTER_UP: 0.08,     // 高さも軽くばらつかせる
+    SHIRTS: [0xef6b5a, 0xe8eef5, 0x4ad9f2, 0xd9c23a, 0x8a6bd1, 0x5fbf6a, 0xf2a65a, 0xc75c9a],
   };
 
   /**
@@ -853,6 +940,7 @@
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT,
-    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, REPLAY, STAMINA, TOSS,
+    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, REPLAY, STAMINA, TOSS, OFFICIALS,
+    STANDS, SPECTATORS,
   };
 })(window.RallyOne = window.RallyOne || {});

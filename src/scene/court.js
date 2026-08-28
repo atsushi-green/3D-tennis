@@ -3,7 +3,7 @@
   'use strict';
 
   const {
-    COURT, HALF_L, HALF_W, THEME, SURFACE_COLORS,
+    COURT, HALF_L, HALF_W, THEME, SURFACE_COLORS, STANDS,
   } = RallyOne.config;
   const scene3d = RallyOne.scene = RallyOne.scene || {};
 
@@ -64,16 +64,15 @@
     return tex;
   }
 
-  /** スケール感を出すためのスタンド代わりの低い壁 */
+  /** スケール感を出すためのスタンド代わりの低い壁。形状は STANDS（config.js）を参照する。 */
   function createStands() {
     const group = new THREE.Group();
     const material = new THREE.MeshLambertMaterial({ color: THEME.STAND });
-    [[0, 20], [0, -20], [26, 0], [-26, 0]].forEach(([x, z]) => {
-      const wall = new THREE.Mesh(
-        new THREE.BoxGeometry(x ? 2 : 54, 2.6, x ? 42 : 2),
-        material,
-      );
-      wall.position.set(x, 1.3, z);
+    STANDS.WALLS.forEach(({ axis, fixed, span }) => {
+      const w = axis === 'x' ? span : STANDS.THICKNESS;
+      const d = axis === 'x' ? STANDS.THICKNESS : span;
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, STANDS.HEIGHT, d), material);
+      wall.position.set(axis === 'x' ? 0 : fixed, STANDS.HEIGHT / 2, axis === 'x' ? fixed : 0);
       group.add(wall);
     });
     return group;
