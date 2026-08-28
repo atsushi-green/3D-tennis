@@ -1831,6 +1831,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(R.config.CPU.OUT_LONG > baseline.OUT_LONG && R.config.CPU.OUT_WIDE > baseline.OUT_WIDE,
     `easy misses more often than normal: OUT_LONG=${R.config.CPU.OUT_LONG} OUT_WIDE=${R.config.CPU.OUT_WIDE}`);
   ok(R.config.CPU.SHOT_T > baseline.SHOT_T, 'easy hits slower/loopier shots than normal');
+  ok(R.config.CPU.SERVE_T > baseline.SERVE_T, 'easy serves weaker (slower/loopier) than normal');
   ok(R.config.PLAYER.CPU_REACT > basePlayerCpu.CPU_REACT, 'easy reacts slower than normal');
   ok(R.config.PLAYER.CPU_CHASE < basePlayerCpu.CPU_CHASE, 'easy chases slower than normal');
 
@@ -1838,6 +1839,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(R.config.CPU.OUT_LONG < baseline.OUT_LONG && R.config.CPU.OUT_WIDE < baseline.OUT_WIDE,
     `hard misses less often than normal: OUT_LONG=${R.config.CPU.OUT_LONG} OUT_WIDE=${R.config.CPU.OUT_WIDE}`);
   ok(R.config.CPU.SHOT_T < baseline.SHOT_T, 'hard hits faster/flatter shots than normal');
+  ok(R.config.CPU.SERVE_T < baseline.SERVE_T, 'hard serves stronger (faster/flatter) than normal');
   ok(R.config.PLAYER.CPU_REACT < basePlayerCpu.CPU_REACT, 'hard reacts faster than normal');
   ok(R.config.PLAYER.CPU_CHASE > basePlayerCpu.CPU_CHASE, 'hard chases faster than normal');
 
@@ -1880,6 +1882,57 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   applyCpuLevel('normal');
   // COURT/RULES 等のゲームルール寄りの値には触れない
   ok(R.config.COURT.W === 8.23, 'applyCpuLevel does not touch court dimensions');
+}
+
+// --- CPU/AIのサーブの威力（CPU.SERVE_T）は難易度に応じて実際に serve() へ反映される ---
+// (ユーザー報告「敵のサーブが弱すぎる、難易度で変わらない」を受けた変更。ダブルスの
+//  味方(youMate)も cpu と同じコードパスを通るので、そちらも同様に確認する)
+{
+  const { applyCpuLevel } = R.config;
+  const { mpsToKmh } = R.math;
+  const cpuServeSpeed = () => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(false);
+    // server を明示的に cpu にしてから newPoint() し直す。そうしないと beginServe() が
+    // まだ 'you' として置いたボール位置（自陣ベースライン）のまま serve('cpu') を呼ぶことになり、
+    // ネットを挟まない・現実にありえない位置からの「サーブ」を測ってしまう。
+    g.server = 'cpu';
+    g.newPoint();
+    g.serve('cpu');
+    return mpsToKmh(Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz));
+  };
+  const mateServeSpeed = () => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(true);
+    g.server = 'you';
+    g.serverPartner.you = 'youMate';
+    g.newPoint();
+    g.serve('youMate');
+    return mpsToKmh(Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz));
+  };
+
+  // コース・深さのランダムなばらつきが威力差より大きく出ないよう固定する
+  // （初速km/hのテストと同じ手当て）
+  const origRandom = Math.random;
+  Math.random = () => 0.5;
+  let easyCpu; let normalCpu; let hardCpu; let easyMate; let hardMate;
+  try {
+    applyCpuLevel('easy');
+    easyCpu = cpuServeSpeed();
+    easyMate = mateServeSpeed();
+    applyCpuLevel('normal');
+    normalCpu = cpuServeSpeed();
+    applyCpuLevel('hard');
+    hardCpu = cpuServeSpeed();
+    hardMate = mateServeSpeed();
+  } finally {
+    Math.random = origRandom;
+    applyCpuLevel('normal');
+  }
+  ok(easyCpu < normalCpu && normalCpu < hardCpu,
+    `CPU serve speed rises with difficulty: easy=${easyCpu.toFixed(0)} normal=${normalCpu.toFixed(0)} hard=${hardCpu.toFixed(0)}`);
+  ok(easyMate < hardMate,
+    `doubles partner (youMate) serve speed also rises with difficulty: easy=${easyMate.toFixed(0)} hard=${hardMate.toFixed(0)}`);
 }
 
 // --- CPU/AIの「プレースタイル」：強さ(Easy/Normal/Hard)とは直交する性格を上書きする ---
@@ -2074,11 +2127,21 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(g.you.stroke.startsWith('volley-'), 'precondition: this hit is classified as a volley');
   ok(g.ball.spin === 'flat', `volley ignores spin input and stays flat, got ${g.ball.spin}`);
 
-  // CPU/AIの返球：人間の入力に関わらず常にフラット
-  g.cpu.x = 0; g.cpu.z = HALF_L + 0.5;
-  g.ball.x = 0; g.ball.y = 1; g.ball.z = 2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
-  g.hit('cpu');
-  ok(g.ball.spin === 'flat', `CPU/AI returns are always flat regardless of the human's held spin key, got ${g.ball.spin}`);
+  // CPU/AIの返球：aiSpin() が一定確率でトップスピン／スライスを混ぜる（以前は常にフラット
+  // 固定だった）。1回だけだと運で 'flat' を引く可能性があるので、多数回サンプルして
+  // 「毎回フラットではない」こと・「常に有効なスピンの範囲に収まる」ことの両方を確認する。
+  {
+    const seen = new Set();
+    for (let i = 0; i < 200; i++) {
+      g.cpu.x = 0; g.cpu.z = HALF_L + 0.5;
+      g.ball.x = 0; g.ball.y = 1; g.ball.z = 2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
+      g.hit('cpu');
+      seen.add(g.ball.spin);
+    }
+    ok([...seen].every((s) => ['flat', 'top', 'slice'].includes(s)),
+      `CPU/AI returns only ever use flat/top/slice, got ${[...seen]}`);
+    ok(seen.size > 1, `CPU/AI returns are no longer always flat (200 samples), got only ${[...seen]}`);
+  }
 
   // サーブ：トスを上げた瞬間（chargeStart()）に固定したスピンでスライスサーブ・スピンサーブが打てる
   const gs = new R.Game({ input: fakeInput, hooks: noHooks });
@@ -2086,11 +2149,20 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   tossAndHit(gs, 0, 'slice'); // C を押しっぱなしにしてサーブ
   ok(gs.ball.spin === 'slice', `holding C (slice) through the toss produces a slice serve, got ${gs.ball.spin}`);
 
-  // CPU/AI のサーブ：人間の入力に関わらず常にフラット
-  const gs3 = new R.Game({ input: fakeInput, hooks: noHooks });
-  gs3.start();
-  gs3.serve('cpu');
-  ok(gs3.ball.spin === 'flat', `CPU/AI serves are always flat regardless of the human's held spin key, got ${gs3.ball.spin}`);
+  // CPU/AI のサーブも同じ aiSpin() を使う（以前は常にフラット固定だった）。返球と同様、
+  // 多数回サンプルして確認する。
+  {
+    const seenServe = new Set();
+    for (let i = 0; i < 200; i++) {
+      const gs3 = new R.Game({ input: fakeInput, hooks: noHooks });
+      gs3.start();
+      gs3.serve('cpu');
+      seenServe.add(gs3.ball.spin);
+    }
+    ok([...seenServe].every((s) => ['flat', 'top', 'slice'].includes(s)),
+      `CPU/AI serves only ever use flat/top/slice, got ${[...seenServe]}`);
+    ok(seenServe.size > 1, `CPU/AI serves are no longer always flat (200 samples), got only ${[...seenServe]}`);
+  }
 }
 
 // --- newPoint() は前のポイントのスピンを持ち越さない ---

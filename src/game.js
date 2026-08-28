@@ -16,7 +16,7 @@
     hitsNet, integrate, predictWindow, reflectBounce, solveShot,
   } = RallyOne.physics;
   const {
-    chasePosition, homePosition, cpuShot, isResponder, coverPosition, reactReach,
+    chasePosition, homePosition, cpuShot, isResponder, coverPosition, reactReach, aiSpin,
   } = RallyOne.ai;
   const { Match } = RallyOne.scoring;
 
@@ -609,12 +609,12 @@
         z: dir * (COURT.SERVICE - (who === 'you' ? this.serveDepth() : rand(SERVE.DEPTH_MIN, SERVE.DEPTH_MAX))),
       };
       // プレイヤーは「打つ」瞬間の溜め量で威力が変わる。CPU/AI（cpu・cpuMate・youMate）は
-      // 溜め演出がない代わりに、常に一定のそこそこの威力（SERVE.CPU_T）で打つ。
-      const flightT = who === 'you' ? lerp(SERVE.T, SERVE.CHARGE_T, this.you.swingCharge) : SERVE.CPU_T;
+      // 溜め演出がない代わりに、難易度で決まる一定の威力（CPU.SERVE_T）で打つ。
+      const flightT = who === 'you' ? lerp(SERVE.T, SERVE.CHARGE_T, this.you.swingCharge) : CPU.SERVE_T;
       // 人間はトスを上げた瞬間に固定したスピン（V/C。chargeStart() 参照）でスライスサーブ・
-      // スピンサーブが打てる。グラウンドストロークと同じ SPIN 設定（実効重力・バウンドの
-      // 弾み方）がそのまま乗る。CPU/AI は他の打球と同じく常にフラット固定。
-      const spin = who === 'you' ? this.you.chargeSpin : 'flat';
+      // スピンサーブが打てる。CPU/AI も同じ SPIN 設定（実効重力・バウンドの弾み方）で
+      // 一定確率でスピンサーブを混ぜる（aiSpin()。以前は常にフラット固定だった）。
+      const spin = who === 'you' ? this.you.chargeSpin : aiSpin();
 
       ball.y = from.y;
       Object.assign(ball, solveShot(from, target, flightT, SERVE.CLEARANCE, spin));
@@ -735,13 +735,15 @@
           ? cpuShot(this.you, -1, stretch)
           : cpuShot(this.cpu, 1, stretch);
 
-      // スピン選択は人間の通常グラウンドストローク限定（スマッシュ・ボレー・CPU/AIはフラット固定）。
-      // C＝スライス／V＝トップスピン。chargeStart() の瞬間に固定した値を使う（当たる瞬間まで
-      // 押し続けなくてよい。詳細はchargeStart()のコメント参照）。何も押していなければフラット。
+      // スピン選択は通常のグラウンドストローク限定（スマッシュ・ボレーはフラット固定）。
+      // 人間は C＝スライス／V＝トップスピン。chargeStart() の瞬間に固定した値を使う（当たる
+      // 瞬間まで押し続けなくてよい。詳細はchargeStart()のコメント参照）。何も押していなければ
+      // フラット。CPU/AI（cpu・cpuMate・youMate）は aiSpin() が一定確率で混ぜる
+      // （以前は常にフラット固定で単調だった）。
       // ドロップショットだけは playerShot() が専用の spin('drop') を返す（弾道・バウンドとも
-      // 通常のスライスとは別扱いにするため）。それ以外は従来どおり chargeStart() で固定した値。
-      const spin = shot.spin || ((who === 'you' && (stroke === 'forehand' || stroke === 'backhand'))
-        ? this.you.chargeSpin
+      // 通常のスライスとは別扱いにするため）。それ以外は上記のとおり。
+      const spin = shot.spin || (stroke === 'forehand' || stroke === 'backhand'
+        ? (who === 'you' ? this.you.chargeSpin : aiSpin())
         : 'flat');
 
       this.resetChase(); // ここから相手側の「この球を追った距離」を数え直す

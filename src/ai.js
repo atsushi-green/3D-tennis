@@ -302,7 +302,19 @@
     return { x, z: netZ };
   }
 
+  /**
+   * CPU/AI のスピン選択（サーブ・グラウンドストローク共通。ボレー・スマッシュは呼び出し側
+   * ＝game.js が対象外にする）。以前は常にフラット固定で単調だったというユーザー報告を受け、
+   * CPU.SPIN_FLAT_CHANCE の確率でフラットのまま、それ以外は CPU.SPIN_TOP_SHARE の割合で
+   * トップスピン／スライスを混ぜる。
+   * @returns {'flat'|'top'|'slice'}
+   */
+  function aiSpin() {
+    if (Math.random() < CPU.SPIN_FLAT_CHANCE) return 'flat';
+    return Math.random() < CPU.SPIN_TOP_SHARE ? 'top' : 'slice';
+  }
+
   RallyOne.ai = {
-    chasePosition, homePosition, shotTarget, cpuShot, isResponder, coverPosition, reactReach,
+    chasePosition, homePosition, shotTarget, cpuShot, isResponder, coverPosition, reactReach, aiSpin,
   };
 })(window.RallyOne = window.RallyOne || {});
