@@ -144,7 +144,15 @@
     /** ポイントが決まった瞬間に main.js から呼ぶ。録れていなければ何もしない。 */
     function startReplay() {
       if (history.length < 2) return;
-      reel = history.slice();
+      // MAX_PLAY_SEC で長さを絞るのは前側（リード）だけ。末尾は必ず history の最後の
+      // コマ＝ポイントが決まった瞬間（アウトならボールが実際にベースラインを越えた
+      // 座標）まで含める。ここを history.slice() のまま先頭から MAX_PLAY_SEC ぶんだけ
+      // 再生していたときは、肝心の決着の瞬間が再生範囲の外に切り落とされ、
+      // リプレイがボールの決着より手前で止まって見えていた。
+      const endT = history[history.length - 1].t;
+      const startT = endT - REPLAY.MAX_PLAY_SEC;
+      reel = history.filter((f) => f.t >= startT);
+      if (reel.length < 2) reel = history.slice(-2);
       replayClock = 0;
       replaying = true;
     }
@@ -172,9 +180,15 @@
 
       if (replaying) {
         replayClock += dt * REPLAY.SPEED;
-        const duration = reel[reel.length - 1].t - reel[0].t;
-        if (replayClock <= Math.min(duration, REPLAY.MAX_PLAY_SEC)) {
-          const frame = frameAt(replayClock);
+        // reel は startReplay() の時点で末尾（決着の瞬間）を必ず含む形に切り出し済みなので、
+        // ここでは単純にその全長を再生し切ればよい。
+        const playEnd = reel[reel.length - 1].t - reel[0].t;
+        // playEnd を過ぎても HOLD_SEC の間は最後のコマを横視点のまま静止させる。
+        // これがないと、再生終了と同時に裏で進んでいた本編（次のポイントの支度）が
+        // 通常カメラへ lerp で戻る途中に映り込み、「戻りながら次が始まって見える」
+        // 落ち着かない切り替わりになってしまう。
+        if (replayClock <= playEnd + REPLAY.HOLD_SEC) {
+          const frame = frameAt(Math.min(replayClock, playEnd));
           applyFrame(frame, dt, false);
           scene3d.updateTrail(trail, NO_TRAIL); // 再生そのものが「振り返り」なので軌跡は隠す
           scene3d.placeSmashHint(smashHint, null);
@@ -182,6 +196,10 @@
           return;
         }
         replaying = false; // 再生し終わったら通常表示へ戻る
+        // 横視点で静止していた状態から通常カメラへは lerp させず瞬時に切り替える
+        // （lerp だと数フレームかけて振れながら戻り、本編がその途中で見えてしまうため）
+        camera.position.set(state.you.x * CAMERA.FOLLOW_X, CAMERA.HEIGHT, -CAMERA.BACK);
+        camera.lookAt(state.you.x * CAMERA.LOOK_X, CAMERA.LOOK_AT.y, CAMERA.LOOK_AT.z);
       }
 
       applyFrame(state, dt, state.tossActive === true && state.server === 'you');
