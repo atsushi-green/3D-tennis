@@ -271,7 +271,12 @@
     if (!at) return false;
     // 通過するのは at.t 秒後なので、そのときの反応時間は「今までの経過＋これから」。
     // 今の age だけで判断すると、まだ余裕があるのに反射扱いになって前衛が出て行かない。
-    return Math.abs(at.x - player.x) <= reactReach((ball.age || 0) + at.t)
+    // ただし、この時間は CPU_POACH_T_MAX で頭打ちにする（config.js のコメント参照）：
+    // 後衛への深い展開球でもネット際を通過するまでには相応の時間がかかり、そのぶんを
+    // そのまま反応時間として渡すと reactReach() がほぼ CPU_REACH まで開いてしまい、
+    // 「ポーチ」のはずが全力疾走の間合いで判定されてしまう。
+    const poachT = Math.min((ball.age || 0) + at.t, PLAYER.CPU_POACH_T_MAX);
+    return Math.abs(at.x - player.x) <= reactReach(poachT)
       && at.y < PLAYER.CPU_REACH_Y && at.y > PLAYER.CPU_REACH_Y_MIN;
   }
 
