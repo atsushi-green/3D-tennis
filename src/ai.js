@@ -218,9 +218,9 @@
    * （意表をつく1本）。それ以外はネットの近さ（closeness）で「足元」、相手の中央寄り
    * 具合（centered）で「パッシング」の重みを連続的に変える。
    */
-  function netPlayShot(opponent, dir) {
+  function netPlayShot(opponent, dir, lobScale) {
     const pressed = Math.abs(opponent.z) <= CPU.NET_PRESS_Z;
-    if (Math.random() < (pressed ? CPU.NET_LOB_PRESSED : CPU.NET_LOB)) {
+    if (Math.random() < (pressed ? CPU.NET_LOB_PRESSED : CPU.NET_LOB) * lobScale) {
       return lobShot(opponent, dir);
     }
     const closeness = clamp(
@@ -243,12 +243,16 @@
    * @param {{x:number, z:number}} opponent 返球を受ける側（逆をつく相手）
    * @param {1|-1} dir 打ち込む方向（shotTarget と同じ）
    * @param {number} stretch 0〜1。ぎりぎり追いついて打った度合い
+   * @param {number} [lobScale] ロブを選ぶ確率全体（LOB_BASE・LOB_VS_STRETCH・NET_LOB・
+   *   NET_LOB_PRESSED）に掛ける倍率。既定1（シングルス）。ダブルスはラリーが長引きやすく、
+   *   同じ確率でも1ポイント中の絶対数が増えて目立つため、game.js が DOUBLES.LOB_SCALE を
+   *   渡して抑える（config.js のコメント参照）。
    * @returns {{target:{x:number,y:number,z:number}, flight:number, lob:boolean}}
    */
-  function cpuShot(opponent, dir, stretch) {
+  function cpuShot(opponent, dir, stretch, lobScale = 1) {
     // 相手が自陣のどのあたりにいるかはネットからの距離で見る（dir の符号に依存させない）
-    if (Math.abs(opponent.z) <= CPU.NET_Z) return netPlayShot(opponent, dir);
-    if (Math.random() < CPU.LOB_BASE + CPU.LOB_VS_STRETCH * stretch) {
+    if (Math.abs(opponent.z) <= CPU.NET_Z) return netPlayShot(opponent, dir, lobScale);
+    if (Math.random() < (CPU.LOB_BASE + CPU.LOB_VS_STRETCH * stretch) * lobScale) {
       return lobShot(opponent, dir);
     }
     return {
