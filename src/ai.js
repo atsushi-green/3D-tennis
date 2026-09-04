@@ -12,7 +12,7 @@
     clamp, lerp, rand, signOr,
   } = RallyOne.math;
   const {
-    predictLanding, predictBounceApex, predictApex, predictAtZ,
+    predictLanding, predictBounceApex, predictApex, predictAtZ, predictWindow,
   } = RallyOne.physics;
 
   /**
@@ -100,6 +100,44 @@
   }
 
   /**
+   * 頭上へ上がってきた球（ロブ）を、バウンドを待たずに叩ける先回り地点。
+   * 人間側の smashSpot()（game.js、ヒント表示用）の CPU/AI 版で、考え方は同じ：
+   * 「まだバウンドしていないまま、打てる高さの帯（SMASH_MIN_Y 〜 CPU_REACH_Y の少し下）を
+   * 通り、かつコートの中（SMASH_Z_MIN〜SMASH_Z_MAX）である区間」を先読みし、その真ん中で待つ。
+   *
+   * 帯の上端から入ってくること（enter.y が上端付近）を条件にしてあるのは、本当に上から
+   * 落ちてくる球＝ロブだけを対象にするため。これが無いと、ネット際を胸の高さで通り過ぎる
+   * だけの速い球にも「叩ける帯を通る」と反応して前へ飛び出してしまう。
+   * 走って間に合わないなら null を返し、呼び出し側は従来どおりバウンド後の頂点を追う
+   * （空中で叩きにいって届かず、そのまま頭上を抜かれる、という最悪の形を避ける）。
+   * @param {1|-1} side 追う選手がいる陣地（1＝cpu 陣地 z>0）
+   * @returns {{x:number, z:number}|null}
+   */
+  function smashApproach(ball, player, side) {
+    if (ball.bounces > 0) return null;
+    const top = PLAYER.CPU_REACH_Y - CPU.SMASH_Y_SLACK;
+    if (top <= CPU.SMASH_MIN_Y) return null;
+    const zMin = side > 0 ? CPU.SMASH_Z_MIN : -CPU.SMASH_Z_MAX;
+    const zMax = side > 0 ? CPU.SMASH_Z_MAX : -CPU.SMASH_Z_MIN;
+    // 帯に入るまでに自陣の上空をどこまで高く通ったか。predictWindow() は軌道を時間順に
+    // なめるので、帯へ降りてくる時点でこの値には「それ以前の最高到達点」が入っている。
+    let peak = 0;
+    const smashable = (at) => {
+      const inCourt = at.z >= zMin && at.z <= zMax;
+      if (inCourt) peak = Math.max(peak, at.y);
+      return at.bounces === 0 && inCourt && at.y >= CPU.SMASH_MIN_Y && at.y <= top;
+    };
+    const window = predictWindow(ball, smashable, CPU.SMASH_LEAD_T, 0);
+    if (!window) return null;
+    if (window.enter.y < top - CPU.SMASH_ENTER_SLACK) return null; // 上から落ちてきた球ではない
+    if (peak < CPU.SMASH_LOB_PEAK) return null; // そもそも高く上がっていない＝ロブではない
+    const { mid } = window;
+    const runT = Math.hypot(mid.x - player.x, mid.z - player.z) / PLAYER.CPU_CHASE;
+    if (runT > mid.t * CPU.SMASH_CHASE_MARGIN) return null; // 走っても間に合わない
+    return { x: clamp(mid.x, -CPU.CHASE_X_LIMIT, CPU.CHASE_X_LIMIT), z: mid.z };
+  }
+
+  /**
    * ボールを追うときに立ちたい位置。
    * CPU.CHASE_Z_* はもともと cpu 陣地（z>0）基準の値なので、you 陣地（z<0）の
    * youMate が使うときは side=-1 を渡して z 方向を鏡映しにする（自陣を追わせるため）。
@@ -115,6 +153,12 @@
   function chasePosition(ball, side = 1, player) {
     if (player && inReachOf(player, ball)) {
       return { x: player.x, z: player.z };
+    }
+    // 頭上に上がってきた球は、バウンドを待たずに叩ける位置へ先回りする（＝スマッシュ）。
+    // 間に合わないと判断したときだけ null が返り、従来どおりバウンド後の頂点を追う。
+    if (player) {
+      const smash = smashApproach(ball, player, side);
+      if (smash) return smash;
     }
     if (player && canPoach(player, ball)) {
       const at = predictAtZ(ball, player.z);
@@ -134,6 +178,34 @@
       x: clamp(x, -CPU.CHASE_X_LIMIT, CPU.CHASE_X_LIMIT),
       z,
     };
+  }
+
+  /**
+   * ネットへ詰めている最中（game.js の cpuNetRush）に、向かってくる球を迎え撃つ位置。
+   * 通常の chasePosition() はバウンド後の頂点＝自陣の深いところを追わせるので、せっかく
+   * 前に出ても相手が打った瞬間に後ろへ引き返してしまい、ボレーの機会が生まれない。
+   * ここでは「ボールがある深さを通過する瞬間、そこに立って打てるか」をネット際
+   * (NET_APPROACH_Z)から自分の今いる深さまで順に調べ、間に合ういちばん前の深さで待つ。
+   * ネット際まで詰め切れない球でも、届く範囲でできるだけ前へ出て（＝ファーストボレー）
+   * 少しずつ前進できる：一番前しか見ないと「間に合わない→ベースラインまで下がる」を
+   * 繰り返すだけで、結局一度もネットに立てなかった。
+   * 頭を越されるロブ（通過点が高すぎる）やどこでも間に合わない球では null を返し、
+   * 呼び出し側は通常の追い方（＝下がって1バウンドさせる）に戻る。
+   * @param {1|-1} side 詰めている選手がいる陣地（1＝cpu 陣地 z>0）
+   * @returns {{x:number, z:number}|null}
+   */
+  function netRushPosition(ball, side, player) {
+    if (ball.bounces > 0) return null;
+    const near = side * CPU.NET_APPROACH_Z;
+    for (let i = 0; i <= CPU.NET_RUSH_STEPS; i++) {
+      const z = lerp(near, player.z, i / CPU.NET_RUSH_STEPS);
+      const at = predictAtZ(ball, z, CPU.NET_RUSH_LEAD_T);
+      if (at && at.y < PLAYER.CPU_REACH_Y && at.y > PLAYER.CPU_REACH_Y_MIN) {
+        const runT = Math.hypot(at.x - player.x, z - player.z) / PLAYER.CPU_CHASE;
+        if (runT <= at.t) return { x: clamp(at.x, -CPU.CHASE_X_LIMIT, CPU.CHASE_X_LIMIT), z };
+      }
+    }
+    return null; // どの深さでも迎え撃てない（頭を越された／間に合わない）＝素直に下がる
   }
 
   /**
@@ -163,13 +235,72 @@
     const outLong = lerp(CPU.OUT_LONG, CPU.STRETCH_OUT_LONG, stretch);
     const outWide = lerp(CPU.OUT_WIDE, CPU.STRETCH_OUT_WIDE, stretch);
 
-    let x = -signOr(opponentX, Math.random() - 0.5) * rand(aimXMin, aimXMax);
-    let z = dir * rand(aimZMin, aimZMax);
+    const x = -signOr(opponentX, Math.random() - 0.5) * rand(aimXMin, aimXMax);
+    const z = dir * rand(aimZMin, aimZMax);
 
-    if (Math.random() < outLong) z = dir * (HALF_L + 0.9);          // ベースラインオーバー
-    if (Math.random() < outWide) x = Math.sign(x) * (HALF_W + 0.7); // サイドアウト
+    return scatterOut({ x, y: PHYSICS.BALL_R, z }, dir, outLong, outWide);
+  }
 
-    return { x, y: PHYSICS.BALL_R, z };
+  /**
+   * わざとミスする（ライン際を狙い損なう）ぶんの上乗せ。狙いが決まった後の目標地点を、
+   * 確率でコートの外へ動かす。ボレー・スマッシュも同じ形でミスを混ぜたいので関数に切り出す。
+   * @param {{x:number, y:number, z:number}} target
+   * @param {1|-1} dir 打ち込む方向
+   * @param {number} longChance ベースラインを割る確率
+   * @param {number} wideChance サイドを割る確率
+   */
+  function scatterOut(target, dir, longChance, wideChance) {
+    const out = target;
+    if (Math.random() < longChance) out.z = dir * (HALF_L + 0.9);          // ベースラインオーバー
+    if (Math.random() < wideChance) out.x = signOr(out.x, 1) * (HALF_W + 0.7); // サイドアウト
+    return out;
+  }
+
+  /**
+   * CPU/AI のボレー（ノーバウンドで返す1本）。グラウンドストローク（shotTarget）とは別枠で、
+   * 「高い打点を余裕をもって捕まえたときだけ鋭く決めにいく」形にしてある：
+   * 打点が高い(VOLLEY_HIGH_Y)ほど、そして走らされていない(stretch が小さい)ほど sharp が
+   * 1に近づき、サイドライン際へ短く角度をつけた速い球になる。逆に足元へ沈められた球
+   * (VOLLEY_LOW_Y 以下)や大きく振られた球は、中央寄りでゆるいブロック返球にしかならない。
+   * @param {{x:number, z:number}} opponent 返球を受ける側（逆をつく相手）
+   * @param {1|-1} dir 打ち込む方向
+   * @param {number} stretch 0〜1。ぎりぎり追いついて打った度合い
+   * @param {number} contactY 打点の高さ(m)
+   */
+  function cpuVolleyShot(opponent, dir, stretch = 0, contactY = 1) {
+    const high = clamp(
+      (contactY - CPU.VOLLEY_LOW_Y) / (CPU.VOLLEY_HIGH_Y - CPU.VOLLEY_LOW_Y), 0, 1,
+    );
+    const sharp = high * (1 - clamp(stretch, 0, 1));
+    const x = -signOr(opponent.x, Math.random() - 0.5)
+      * lerp(CPU.VOLLEY_BLOCK_X, CPU.VOLLEY_ANGLE_X, sharp);
+    const z = dir * lerp(CPU.VOLLEY_BLOCK_Z, CPU.VOLLEY_ANGLE_Z, sharp);
+    return {
+      target: scatterOut(
+        { x, y: PHYSICS.BALL_R, z },
+        dir, CPU.OUT_LONG * CPU.VOLLEY_OUT_MULT, CPU.OUT_WIDE * CPU.VOLLEY_OUT_MULT,
+      ),
+      flight: lerp(CPU.VOLLEY_BLOCK_T, CPU.VOLLEY_ANGLE_T, sharp),
+      lob: false,
+    };
+  }
+
+  /**
+   * CPU/AI のスマッシュ。相手の逆をついて深く、飛翔時間 SMASH_T（＝グラウンドストロークの
+   * 1/3 近い速さ）で突き刺す決め球。追い込まれて打つ（stretch が大きい）ときだけ
+   * SMASH_STRETCH_T まで威力が落ちる。
+   */
+  function cpuSmashShot(opponent, dir, stretch = 0) {
+    const x = -signOr(opponent.x, Math.random() - 0.5) * rand(CPU.SMASH_AIM_X_MIN, CPU.SMASH_AIM_X_MAX);
+    const z = dir * rand(CPU.SMASH_AIM_Z_MIN, CPU.SMASH_AIM_Z_MAX);
+    return {
+      target: scatterOut(
+        { x, y: PHYSICS.BALL_R, z },
+        dir, CPU.OUT_LONG * CPU.SMASH_OUT_MULT, CPU.OUT_WIDE * CPU.SMASH_OUT_MULT,
+      ),
+      flight: lerp(CPU.SMASH_T, CPU.SMASH_STRETCH_T, clamp(stretch, 0, 1)),
+      lob: false,
+    };
   }
 
   /** ロブ（山なりの返球）の狙い。頭を越す攻めのロブにも、時間を稼ぐ逃げのロブにも使う共通の弾道。 */
@@ -328,6 +459,7 @@
   }
 
   RallyOne.ai = {
-    chasePosition, homePosition, shotTarget, cpuShot, isResponder, coverPosition, reactReach, aiSpin,
+    chasePosition, homePosition, netRushPosition, shotTarget, cpuShot, cpuVolleyShot,
+    cpuSmashShot, smashApproach, isResponder, coverPosition, reactReach, aiSpin,
   };
 })(window.RallyOne = window.RallyOne || {});

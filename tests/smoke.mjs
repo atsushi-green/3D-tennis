@@ -3259,5 +3259,187 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `the drop's second bounce is still inside the service box, got z=${dropRun[1]}`);
 }
 
+// --- CPU/AI：ネット際でノーバウンドに捕まえた球はボレーになり、高い打点ほど鋭く決めにいく ---
+{
+  const { CPU } = R.config;
+  const { cpuVolleyShot } = R.ai;
+  const opponent = { x: 2.0, z: -HALF_L };
+
+  // 打点の高さと余裕（stretch）で鋭さが決まる：高くて余裕があるほど短く・角度がつき・速い
+  {
+    const origRandom = Math.random;
+    Math.random = () => 0.5;
+    try {
+      const high = cpuVolleyShot(opponent, -1, 0, CPU.VOLLEY_HIGH_Y);
+      const low = cpuVolleyShot(opponent, -1, 0, CPU.VOLLEY_LOW_Y);
+      const stretched = cpuVolleyShot(opponent, -1, 1, CPU.VOLLEY_HIGH_Y);
+      ok(Math.abs(high.target.z) < Math.abs(low.target.z),
+        `a high volley is put away shorter than a low one: ${high.target.z} vs ${low.target.z}`);
+      ok(Math.abs(high.target.x) > Math.abs(low.target.x),
+        `a high volley is angled wider: ${high.target.x} vs ${low.target.x}`);
+      ok(high.flight < low.flight,
+        `a high volley is faster (shorter flight): ${high.flight} vs ${low.flight}`);
+      ok(high.flight < CPU.SHOT_T,
+        `even so it is far faster than a plain groundstroke: ${high.flight} vs ${CPU.SHOT_T}`);
+      ok(stretched.flight === low.flight,
+        'a high ball reached on the stretch falls back to the same safe block as a low one');
+      ok(Math.sign(high.target.x) === -Math.sign(opponent.x),
+        'the volley goes to the open side (away from the opponent)');
+      ok(Math.sign(high.target.z) === -1, 'the volley is hit into the opponent half (dir=-1)');
+    } finally {
+      Math.random = origRandom;
+    }
+  }
+
+  // ネット際(PLAYER.VOLLEY_Z 以内)でノーバウンドの球を返した cpu は 'volley-*' になる
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.cpu.x = 0; g.cpu.z = PLAYER.VOLLEY_Z - 0.5;
+    g.ball.x = 0.3; g.ball.y = 1.2; g.ball.z = g.cpu.z; g.ball.bounces = 0; g.ball.vy = 0;
+    g.hit('cpu');
+    ok(g.cpu.stroke === 'volley-forehand' || g.cpu.stroke === 'volley-backhand',
+      `the cpu volleys a no-bounce ball at the net, got ${g.cpu.stroke}`);
+  }
+
+  // ベースライン側で1バウンドさせて返す球はこれまで通りのグラウンドストローク
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.cpu.x = 0; g.cpu.z = CPU.HOME_Z;
+    g.ball.x = 0.3; g.ball.y = 1.2; g.ball.z = g.cpu.z; g.ball.bounces = 1; g.ball.vy = 0;
+    g.hit('cpu');
+    ok(g.cpu.stroke === 'forehand' || g.cpu.stroke === 'backhand',
+      `a bounced baseline ball stays a plain groundstroke, got ${g.cpu.stroke}`);
+  }
+}
+
+// --- CPU/AI：頭上へ落ちてくる高い球はスマッシュになる（人間の溜め条件にあたるものは無い） ---
+{
+  const { CPU } = R.config;
+  const smashHit = (y, vy, z) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.cpu.x = 0; g.cpu.z = z;
+    Object.assign(g.ball, {
+      x: 0.3, y, z, bounces: 0, vy, vx: 0, vz: -1,
+    });
+    g.hit('cpu');
+    return g;
+  };
+
+  {
+    const g = smashHit(CPU.SMASH_MIN_Y + 0.2, CPU.SMASH_FALLING_VY - 1, 3);
+    ok(g.cpu.stroke === 'smash', `a high falling ball inside the court is a smash, got ${g.cpu.stroke}`);
+    ok(g.lastShotBy.cpu === 'スマッシュ', `and it is called a smash, got ${g.lastShotBy.cpu}`);
+  }
+  // まだ上がっている（＝叩き下ろせない）球はスマッシュにしない
+  {
+    const g = smashHit(CPU.SMASH_MIN_Y + 0.2, 2, 3);
+    ok(g.cpu.stroke !== 'smash', `a rising ball is not a smash, got ${g.cpu.stroke}`);
+  }
+  // 低い球もスマッシュにしない
+  {
+    const g = smashHit(CPU.SMASH_MIN_Y - 0.4, CPU.SMASH_FALLING_VY - 1, 3);
+    ok(g.cpu.stroke !== 'smash', `a low ball is not a smash, got ${g.cpu.stroke}`);
+  }
+  // ベースラインのはるか後ろ（SMASH_Z_MAX の外）で高く弾んだ球もスマッシュにしない
+  {
+    const g = smashHit(CPU.SMASH_MIN_Y + 0.2, CPU.SMASH_FALLING_VY - 1, CPU.SMASH_Z_MAX + 1.5);
+    ok(g.cpu.stroke !== 'smash', `a high ball taken from behind the baseline is not a smash, got ${g.cpu.stroke}`);
+  }
+
+  // スマッシュは通常のグラウンドストロークよりはっきり速い
+  {
+    const origRandom = Math.random;
+    Math.random = () => 0.5;
+    try {
+      const opponent = { x: 1.5, z: -HALF_L };
+      const smash = R.ai.cpuSmashShot(opponent, -1, 0);
+      const drive = R.ai.cpuShot(opponent, -1, 0);
+      ok(smash.flight < drive.flight,
+        `the cpu smash flies faster than its groundstroke: ${smash.flight} vs ${drive.flight}`);
+      ok(smash.flight < CPU.SMASH_STRETCH_T,
+        'a comfortable smash is faster than a stretched one');
+      ok(Math.abs(smash.target.z) >= CPU.SMASH_AIM_Z_MIN,
+        `the smash is buried deep, got z=${smash.target.z}`);
+    } finally {
+      Math.random = origRandom;
+    }
+  }
+}
+
+// --- CPU/AI：ロブは待たずに空中で叩きにいく（smashApproach）。普通のドライブでは出ていかない ---
+{
+  const { CPU } = R.config;
+  const { smashApproach } = R.ai;
+  const { solveShot } = R.physics;
+  const shoot = (target, flight) => {
+    const from = { x: 0, y: 1.0, z: -HALF_L + 1 };
+    return {
+      ...from, ...solveShot(from, { x: target.x, y: R.config.PHYSICS.BALL_R, z: target.z }, flight),
+      bounces: 0, age: 0, spin: 'flat', wind: 0,
+    };
+  };
+  const atBaseline = { x: 0, z: CPU.HOME_Z };
+
+  const lob = shoot({ x: 0, z: 9.5 }, R.config.SHOT.LOB_T);
+  const spot = smashApproach(lob, atBaseline, 1);
+  ok(spot !== null, 'the cpu goes out to meet a lob in the air');
+  if (spot) {
+    ok(spot.z >= CPU.SMASH_Z_MIN && spot.z <= CPU.SMASH_Z_MAX,
+      `the interception point is inside the court, got z=${spot.z}`);
+  }
+
+  // 普通の（低い）ドライブは自陣で2m台を降りてくるが、高く上がっていないので対象外
+  const drive = shoot({ x: 0, z: 9.0 }, CPU.SHOT_T);
+  ok(smashApproach(drive, atBaseline, 1) === null,
+    'a plain drive is not chased down as a smash');
+  // 既にバウンドした球も対象外（ノーバウンドで叩くための先回りなので）
+  ok(smashApproach({ ...lob, bounces: 1 }, atBaseline, 1) === null,
+    'an already-bounced ball is not chased down as a smash');
+  // 陣地は side で鏡映しになる（youMate は z<0 側で同じことをする）
+  const mirrored = { ...lob, z: -lob.z, vz: -lob.vz };
+  const mateSpot = smashApproach(mirrored, { x: 0, z: -CPU.HOME_Z }, -1);
+  ok(mateSpot !== null && mateSpot.z < 0, 'the partner does the same on its own (z<0) half');
+}
+
+// --- CPU/AI：ネットへ詰めている間は、下がらずに前で迎え撃つ位置を返す（netRushPosition） ---
+{
+  const { CPU } = R.config;
+  const { netRushPosition, chasePosition } = R.ai;
+  const { solveShot } = R.physics;
+  const shoot = (target, flight) => {
+    const from = { x: 0, y: 1.0, z: -HALF_L + 1 };
+    return {
+      ...from, ...solveShot(from, { x: target.x, y: R.config.PHYSICS.BALL_R, z: target.z }, flight),
+      bounces: 0, age: 0, spin: 'flat', wind: 0,
+    };
+  };
+
+  // ネット際に立っている選手の少し横を通る低い球。その場から一歩寄れば前で迎え撃てる
+  // （真正面すぎると canPoach() だけで足りてしまい、netRushPosition の出番にならない）。
+  const drive = shoot({ x: 2.6, z: 8.0 }, CPU.SHOT_T);
+  const atNet = { x: 0, z: CPU.NET_APPROACH_Z };
+  const meet = netRushPosition(drive, 1, atNet);
+  ok(meet !== null && meet.z <= CPU.NET_APPROACH_Z + 0.01,
+    `a rushing cpu meets the ball at the net instead of retreating, got ${meet && meet.z}`);
+  ok(chasePosition(drive, 1, atNet).z > CPU.NET_APPROACH_Z,
+    'precondition: the normal chase would have sent it back toward the baseline');
+
+  // 頭を越すロブは迎え撃てない（null＝通常の追い方に戻って下がる）
+  const lob = shoot({ x: 0, z: 9.5 }, R.config.SHOT.LOB_T);
+  ok(netRushPosition(lob, 1, atNet) === null, 'a lob over the head cannot be met at the net');
+  // 既にバウンドした球も対象外
+  ok(netRushPosition({ ...drive, bounces: 1 }, 1, atNet) === null,
+    'an already-bounced ball is chased normally');
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);

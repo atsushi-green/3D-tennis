@@ -16,7 +16,8 @@
     hitsNet, integrate, predictWindow, reflectBounce, solveShot,
   } = RallyOne.physics;
   const {
-    chasePosition, homePosition, cpuShot, isResponder, coverPosition, reactReach, aiSpin,
+    chasePosition, homePosition, netRushPosition, cpuShot, cpuVolleyShot, cpuSmashShot,
+    isResponder, coverPosition, reactReach, aiSpin,
   } = RallyOne.ai;
   const { Match } = RallyOne.scoring;
 
@@ -66,6 +67,20 @@
     const t = (player.z - ball.z) / ball.vz;
     if (!(t > 0)) return ball.x; // 既に通り過ぎた/向かっていない場合は現在位置で代用
     return ball.x + ball.vx * t;
+  }
+
+  /**
+   * CPU/AI がその球を「今」返してよいか（ノーバウンドで手を出してよいか）。
+   * 原則は1バウンド待ってから返すが、ネット際（PLAYER.VOLLEY_Z 以内）にいるならボレー、
+   * 頭上へ上がってきた球（CPU.SMASH_MIN_Y 以上でコートの中）ならスマッシュで叩ける。
+   * 後者を許さないと、ai.js#smashApproach() が先回りさせた位置に立っていても
+   * 打点が高いまま素通りさせてしまい、結局バウンド後に打ち直すことになる。
+   */
+  function aiCanReturnNow(actor, ball) {
+    return ball.bounces >= 1
+      || Math.abs(actor.z) <= PLAYER.VOLLEY_Z
+      || (ball.y >= CPU.SMASH_MIN_Y && ball.vy <= CPU.SMASH_FALLING_VY
+        && Math.abs(actor.z) <= CPU.SMASH_Z_MAX);
   }
 
   /** ボールの仮想延長線が、ラケット側か逆側（体の反対側に手を伸ばす＝バックハンド）か */
@@ -774,11 +789,21 @@
       const charge = who === 'you' ? this.you.swingCharge : 0;
       // 高くて緩いボール(SMASH_MIN_Y以上)を、しっかり溜めてから(SMASH_MIN_CHARGE以上)離すと
       // スマッシュになる。フォア/バックの区別はなく、専用の振り下ろしモーション＋強打になる。
-      const isSmash = who === 'you' && ball.y >= PLAYER.SMASH_MIN_Y && charge >= PLAYER.SMASH_MIN_CHARGE;
+      // CPU/AI には溜めが無いので、条件は「打点の高さ」＋「コートの中で打てていること」
+      // （CPU.SMASH_MIN_Y / SMASH_Z_MAX。ベースラインのはるか後ろで高く弾んだ球は
+      // スマッシュではなく、ただ高い打点の返球）。
+      const isSmash = who === 'you'
+        ? ball.y >= PLAYER.SMASH_MIN_Y && charge >= PLAYER.SMASH_MIN_CHARGE
+        : ball.y >= CPU.SMASH_MIN_Y && ball.vy <= CPU.SMASH_FALLING_VY
+          && Math.abs(player.z) <= CPU.SMASH_Z_MAX;
       // サービスラインより前（ネット寄り）で、ノーバウンドの球を返すときはボレー。
       // フォア/バックの区別はテイクバックのモーションにだけ使い、実際の威力・角度は
       // 溜めではなくボールとの左右距離で決まる（playerShot() 側で計算する）。
-      const isVolley = who === 'you' && !isSmash && ball.bounces === 0 && player.z > -COURT.SERVICE;
+      // CPU/AI がノーバウンドで返せるのは元々ネット際（PLAYER.VOLLEY_Z 以内。
+      // checkSwings() のゲート）だけなので、その1本がそのままボレーになる。
+      const isVolley = !isSmash && ball.bounces === 0 && (who === 'you'
+        ? player.z > -COURT.SERVICE
+        : Math.abs(player.z) <= PLAYER.VOLLEY_Z);
       const stroke = isSmash ? 'smash' : isVolley ? `volley-${baseStroke}` : baseStroke;
 
       // AI（cpu/cpuMate は人間の逆をつきつつ you 陣地(z<0)へ、youMate はダブルスで唯一の
@@ -800,11 +825,18 @@
       // 抑える（config.js のコメント参照）。
       const lobScale = this.doubles ? DOUBLES.LOB_SCALE : 1;
       const arcScale = this.doubles ? DOUBLES.ARC_SCALE : 1;
+      // CPU/AI は打ち方（スマッシュ／ボレー／グラウンドストローク）ごとに狙いを変える。
+      // 以前はどの打ち方でも一律 cpuShot()（中速のグラウンドストローク）だったため、
+      // ネット際で捕まえた球も頭上に上がってきた球も同じ速さ・深さで返っていた。
+      const aimAt = TEAM_OF[who] === 'cpu' ? this.you : this.cpu; // 逆をつく相手
+      const aimDir = TEAM_OF[who] === 'cpu' ? -1 : 1;             // 打ち込む方向
       const shot = who === 'you'
         ? this.playerShot(stroke, ball.z - player.z)
-        : TEAM_OF[who] === 'cpu'
-          ? cpuShot(this.you, -1, stretch, lobScale, arcScale)
-          : cpuShot(this.cpu, 1, stretch, lobScale, arcScale);
+        : isSmash
+          ? cpuSmashShot(aimAt, aimDir, stretch)
+          : isVolley
+            ? cpuVolleyShot(aimAt, aimDir, stretch, ball.y)
+            : cpuShot(aimAt, aimDir, stretch, lobScale, arcScale);
 
       // スピン選択は通常のグラウンドストローク限定（スマッシュ・ボレーはフラット固定）。
       // 人間は C＝スライス／V＝トップスピン。chargeStart() の瞬間に固定した値を使う（当たる
@@ -816,6 +848,23 @@
       const spin = shot.spin || (stroke === 'forehand' || stroke === 'backhand'
         ? (who === 'you' ? this.you.chargeSpin : aiSpin())
         : 'flat');
+
+      // シングルスの cpu のネットへの詰め（moveSinglesCpu() 参照）。ダブルスは元々2人とも
+      // ネット際が基本位置なのでボレーの機会が自然に生まれるが、シングルスの cpu は常に
+      // ベースラインへ戻るだけで、一度も前に出ないためボレー・スマッシュが皆無だった。
+      // 余裕をもって（stretch が小さい）深く狙えた1本＝アプローチショットの後だけ詰め、
+      // 逆にロブなどで深く押し戻されたら（打点が APPROACH_FROM_Z より奥）詰めるのをやめる
+      // （＝中途半端な位置に立ち続けない）。
+      if (who === 'cpu' && !this.doubles) {
+        if (this.cpuNetRush) {
+          if (Math.abs(player.z) > CPU.APPROACH_FROM_Z) this.cpuNetRush = false;
+        } else if (!shot.lob
+          && Math.abs(shot.target.z) >= CPU.APPROACH_DEPTH
+          && stretch <= CPU.APPROACH_MAX_STRETCH
+          && Math.random() < CPU.APPROACH_CHANCE) {
+          this.cpuNetRush = true;
+        }
+      }
 
       this.resetChase(); // ここから相手側の「この球を追った距離」を数え直す
       // shot.clearance を返すのはドロップショットだけ（ネットぎりぎりを狙う）。
@@ -1124,13 +1173,21 @@
       return window && smashHintFrom(window, this.you, standX, standZ);
     }
 
-    /** @returns {'forehand'|'backhand'|null} 圏内かつ自分が拾うべき球なら見込みのストロークを返す */
+    /**
+     * @returns {'forehand'|'backhand'|'smash'|null} 圏内かつ自分が拾うべき球なら見込みの
+     *   ストロークを返す。CPU/AI は、そのまま打てばスマッシュになる高い球（hit() と同じ条件）
+     *   のときだけ「頭の後ろに担ぐ振りかぶり」の構えになる（人間の windUpSmash と同じ見せ方）。
+     */
     computePrep(who, reach) {
       const ball = this.ball;
       if (!ball.live || TEAM_OF[who] === ball.last) return null;
       const player = this.actor(who);
       const onMySide = TEAM_OF[who] === 'you' ? ball.z < PLAYER.NET_MARGIN : ball.z > PLAYER.NET_MARGIN;
       if (!onMySide || !reaches(ball, player, reach)) return null;
+      if (who !== 'you' && ball.y >= CPU.SMASH_MIN_Y && ball.vy <= CPU.SMASH_FALLING_VY
+        && Math.abs(player.z) <= CPU.SMASH_Z_MAX) {
+        return 'smash';
+      }
       return classifyStroke(who, ball, player);
     }
 
@@ -1240,15 +1297,25 @@
         this.cpu.speed = 0; // まだ反応できていない
         return;
       }
-      // プレースタイル「サーブ&ボレーヤー」：自分のサーブを打ってからこのポイントの間ずっと
-      // （cpuNetRush。serve() 参照）、通常の定位置(HOME_Z)へ戻る代わりにネット際へ詰める。
-      // 以前は serveInFlight（＝サーブがまだ返球されていない、コンマ数秒しかない間）で見て
-      // いたため、人間が返球した瞬間にネットへの接近そのものをやめてしまい、ベースライン
-      // 付近からほとんど動けていなかった。CPU_RECOVER（定位置へゆっくり戻る速度）ではなく
-      // CPU_CHASE（球を追う速い速度）を使い、実際に間に合う勢いで詰めさせる。
-      const approachingNet = !incoming && CPU.APPROACH_NET_AFTER_SERVE
-        && this.server === 'cpu' && this.cpuNetRush;
-      const target = incoming ? chasePosition(this.ball, 1, this.cpu) : homePosition(approachingNet);
+      // ネットへ詰めている最中（cpuNetRush）は、通常の定位置(HOME_Z)へ戻る代わりに
+      // ネット際へ向かう。この旗が立つのは2箇所：プレースタイル「サーブ&ボレーヤー」が
+      // 自分のサーブを打った瞬間（serve()）と、アプローチショットを打った瞬間（hit()）。
+      // どちらもこのポイントの間ずっと立ったままにする：以前 serveInFlight（＝サーブが
+      // まだ返球されていない、コンマ数秒しかない間）で見ていた頃は、人間が返球した瞬間に
+      // ネットへの接近そのものをやめてしまい、ベースライン付近からほとんど動けていなかった。
+      // CPU_RECOVER（定位置へゆっくり戻る速度）ではなく CPU_CHASE（球を追う速い速度）を
+      // 使い、実際に間に合う勢いで詰めさせる。
+      const approachingNet = !incoming && this.cpuNetRush;
+      // ネットへ詰めている最中は、向かってくる球もネット際で迎え撃つ（netRushPosition）。
+      // 通常の追い方（chasePosition）はバウンド後の頂点＝自陣の深いところを追わせるため、
+      // 相手が打った瞬間に引き返してしまい、せっかく前に出てもボレーにならない。
+      // 迎え撃てない球（頭を越すロブ／間に合わない球）では null が返り、従来どおり下がる。
+      const rushTarget = incoming && this.cpuNetRush
+        ? netRushPosition(this.ball, 1, this.cpu)
+        : null;
+      const target = incoming
+        ? rushTarget || chasePosition(this.ball, 1, this.cpu)
+        : homePosition(approachingNet);
       const speed = incoming || approachingNet ? PLAYER.CPU_CHASE : PLAYER.CPU_RECOVER;
       this.moveIfRecovered('cpu', this.cpu, cpuBefore, target, speed, dt);
     }
@@ -1537,7 +1604,7 @@
       if (this.doubles && ball.last !== 'you' && ball.z < PLAYER.NET_MARGIN
         && this.doublesResponder('you') === 'youMate') {
         const inRange = ball.y < PLAYER.CPU_REACH_Y && ball.y > PLAYER.CPU_REACH_Y_MIN;
-        const canReturn = ball.bounces >= 1 || Math.abs(this.youMate.z) <= PLAYER.VOLLEY_Z;
+        const canReturn = aiCanReturnNow(this.youMate, ball);
         if (canReturn && reaches(ball, this.youMate, reactReach(ball.age)) && inRange) this.hit('youMate');
       }
 
@@ -1546,10 +1613,9 @@
       if (ball.last !== 'cpu' && ball.z > PLAYER.NET_MARGIN) {
         const inRange = ball.y < PLAYER.CPU_REACH_Y && ball.y > PLAYER.CPU_REACH_Y_MIN;
         const responder = this.doubles ? this.doublesResponder('cpu') : 'cpu';
-        const cpuCanReturn = responder === 'cpu'
-          && (ball.bounces >= 1 || Math.abs(this.cpu.z) <= PLAYER.VOLLEY_Z);
+        const cpuCanReturn = responder === 'cpu' && aiCanReturnNow(this.cpu, ball);
         const cpuMateCanReturn = this.doubles && responder === 'cpuMate'
-          && (ball.bounces >= 1 || Math.abs(this.cpuMate.z) <= PLAYER.VOLLEY_Z);
+          && aiCanReturnNow(this.cpuMate, ball);
         // 反応に使える時間ぶんに狭めた守備範囲で判定する（ai.reactReach 参照）。
         // 打たれてすぐ届く球（スマッシュ・至近距離のボレー）は体の近くしか触れない。
         const reach = reactReach(ball.age);
