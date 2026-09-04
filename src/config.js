@@ -493,6 +493,12 @@
     GRIP: 0x22303f,
     YOU: { shirt: 0xe8eef5, shorts: 0x1e2c3c },
     CPU: { shirt: 0xef6b5a, shorts: 0x2a1c22 },
+    // ダブルスのパートナー。以前は本人と同じ色（THEME.YOU/CPU）を使い回していたため、
+    // 自分とパートナー、敵2人の見分けがつかないというユーザー報告を受けて追加。
+    // シャツと短パンの色を入れ替えた「アウェイ配色」にして、チームの同一性
+    // （同じ2色を使う）を保ったまま、本人とは一目で区別できるようにする。
+    YOU_MATE: { shirt: 0x1e2c3c, shorts: 0xe8eef5 },
+    CPU_MATE: { shirt: 0x2a1c22, shorts: 0xef6b5a },
     UMPIRE_CHAIR: 0x33445a,
     OFFICIAL_UNIFORM: 0x24344a, // 主審・線審の制服
     BALLKID_SHIRT: 0xd9c23a,    // ボールボーイの制服（コート上で見分けやすい差し色）

@@ -21,9 +21,10 @@
     const you = scene3d.createPlayer(THEME.YOU);
     const cpu = scene3d.createPlayer(THEME.CPU);
     cpu.rotation.y = Math.PI; // CPU は手前を向く
-    // ダブルスのパートナー。シングルスでは this.doubles===false の間 sync() で visible=false のまま
-    const youMate = scene3d.createPlayer(THEME.YOU);
-    const cpuMate = scene3d.createPlayer(THEME.CPU);
+    // ダブルスのパートナー。シングルスでは this.doubles===false の間 sync() で visible=false のまま。
+    // 本人と同じ色だと見分けがつかないので、シャツ/短パンを入れ替えた配色(THEME.*_MATE)にする。
+    const youMate = scene3d.createPlayer(THEME.YOU_MATE);
+    const cpuMate = scene3d.createPlayer(THEME.CPU_MATE);
     cpuMate.rotation.y = Math.PI;
     const ballMesh = scene3d.createBall();
     const shadows = {
