@@ -761,17 +761,28 @@
    * 溜まる速さ（CHARGE.MAX_TIME 相当）が落ちる。ドロップとロブを「相手を走らせる道具」
    * として意味のあるものにするのが狙い。人間・CPU/AI・ダブルスの4人全員に同じルールで
    * 効く（game.js#drainStamina()/staminaSpeedMult()/staminaChargeMult() 参照）。
-   * ポイント間（newPoint()）に RECOVER_PER_POINT ぶんだけ回復する（フルには戻らないことも
-   * ある＝長いゲームの終盤ほど効いてくる）。効き幅は控えめに：実測（tests/smoke.mjs の
-   * 「ラリー20本」テスト参照）で、スタミナが尽きた状態でも移動速度は SPEED_FLOOR
-   * （元の85%）までしか落とさない。
+   *
+   * ポイント間（newPoint()）に回復するが、その回復量は「そのセットで消化したゲーム数」が
+   * 増えるほど RECOVER_FATIGUE_PER_GAME ぶんずつ目減りする（下限は RECOVER_MIN_RATIO、
+   * game.js#staminaRecoverAmount() 参照）。序盤はほぼ全回復できるが、セット終盤になるほど
+   * ポイント間で回復しきれず、疲労が抜けないまま次のポイントに入る＝「終盤でバテる」。
+   *
+   * 移動速度・溜め速度への効き方は LOW_THRESHOLD を境に二段階（game.js#staminaCurve()）：
+   * それより上ではなだらか（ほぼ気づかない程度）、それを下回ると FLOOR へ向けて急勾配で
+   * 落ちる。体力が少ないときの失速をはっきり体感できるようにする狙い。実測
+   * （tests/smoke.mjs の「ラリー20本」テスト参照）で、20本程度の通常のラリー直後はまだ
+   * LOW_THRESHOLD を上回っており、速度低下は1〜10%の範囲に収まる。
    */
   const STAMINA = {
-    DRAIN_PER_M: 0.006,     // 1m走るごとに減る量（0〜1のうち）
-    RECOVER_PER_POINT: 0.35, // ポイント間で回復する量
-    SPEED_FLOOR: 0.85,      // stamina=0のときの移動速度倍率の下限
-    CHARGE_FLOOR: 0.75,     // stamina=0のときの溜め速度倍率の下限（人間のみ、溜め自体があるため）
-    LOW_THRESHOLD: 0.35,    // HUDでの残量警告表示に使う閾値
+    DRAIN_PER_M: 0.004,      // 1m走るごとに減る量（0〜1のうち）
+    RECOVER_PER_POINT: 0.16, // ポイント間で回復する基本量（セットが進むと目減りする）
+    RECOVER_FATIGUE_PER_GAME: 0.014, // そのセットで消化したゲーム数ごとに回復量が減る量
+    RECOVER_MIN_RATIO: 0.35, // 回復量が目減りしてもRECOVER_PER_POINTのこの割合までしか下がらない
+    SPEED_FLOOR: 0.78,       // stamina=0のときの移動速度倍率の下限
+    CHARGE_FLOOR: 0.55,      // stamina=0のときの溜め速度倍率の下限（人間のみ、溜め自体があるため）
+    LOW_THRESHOLD: 0.35,     // これを下回ると急勾配区間に入る（HUDの残量警告表示にも使う）
+    LOW_SPEED_MULT: 0.94,    // stamina=LOW_THRESHOLDちょうどのときの速度倍率
+    LOW_CHARGE_MULT: 0.85,   // stamina=LOW_THRESHOLDちょうどのときの溜め速度倍率
   };
 
   /**

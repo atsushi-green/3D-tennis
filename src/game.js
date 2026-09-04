@@ -438,19 +438,43 @@
       return 1 - t * (1 - MOVE_CAP_FLOOR);
     }
 
+    /**
+     * スタミナ(0〜1)から性能倍率を求める共通カーブ。STAMINA.LOW_THRESHOLD より上では
+     * ゆるやかに、それを下回ると floor へ向けて急勾配で落ちる（体力が少ないときの
+     * 失速をはっきり体感できるようにする）。
+     */
+    staminaCurve(stamina, floor, thresholdMult) {
+      const { LOW_THRESHOLD } = STAMINA;
+      if (stamina >= LOW_THRESHOLD) {
+        return lerp(thresholdMult, 1, (stamina - LOW_THRESHOLD) / (1 - LOW_THRESHOLD));
+      }
+      return lerp(floor, thresholdMult, stamina / LOW_THRESHOLD);
+    }
+
     /** スタミナ(0〜1)から移動速度の倍率を求める。尽きても STAMINA.SPEED_FLOOR までしか落ちない。 */
     staminaSpeedMult(stamina) {
-      return lerp(STAMINA.SPEED_FLOOR, 1, stamina);
+      return this.staminaCurve(stamina, STAMINA.SPEED_FLOOR, STAMINA.LOW_SPEED_MULT);
     }
 
     /** スタミナ(0〜1)から溜め速度（CHARGE.MAX_TIME に対する倍率）を求める。人間の溜めにだけ効く。 */
     staminaChargeMult(stamina) {
-      return lerp(STAMINA.CHARGE_FLOOR, 1, stamina);
+      return this.staminaCurve(stamina, STAMINA.CHARGE_FLOOR, STAMINA.LOW_CHARGE_MULT);
     }
 
     /** 実際に走った距離ぶん、その選手のスタミナを減らす（0未満にはしない）。 */
     drainStamina(actor, moved) {
       actor.stamina = Math.max(0, actor.stamina - moved * STAMINA.DRAIN_PER_M);
+    }
+
+    /**
+     * ポイント間の回復量。そのセットで消化したゲーム数（gamesPlayed）が増えるほど
+     * RECOVER_FATIGUE_PER_GAME ぶんずつ目減りし、下限は RECOVER_PER_POINT の
+     * RECOVER_MIN_RATIO 倍まで（＝終盤ほど疲れが抜けにくくなるが、回復が完全に
+     * 止まりはしない）。
+     */
+    staminaRecoverAmount(gamesPlayed) {
+      const min = STAMINA.RECOVER_PER_POINT * STAMINA.RECOVER_MIN_RATIO;
+      return Math.max(min, STAMINA.RECOVER_PER_POINT - gamesPlayed * STAMINA.RECOVER_FATIGUE_PER_GAME);
     }
 
     /* ------------------------------------------------------ ポイント進行 */
@@ -465,12 +489,14 @@
       this.wind = clamp(this.wind + rand(-WIND.DRIFT_ACCEL, WIND.DRIFT_ACCEL), -WIND.MAX_ACCEL, WIND.MAX_ACCEL);
       this.hooks.wind(this.wind);
       this.hooks.serveSpeed(null); // 前のポイントのサーブ速度表示を消す
-      // スタミナはポイント間で少し回復する（フルには戻らないこともある＝長いゲームの
-      // 終盤ほど効いてくる）。4人全員に同じルールで効く。
-      this.you.stamina = Math.min(1, this.you.stamina + STAMINA.RECOVER_PER_POINT);
-      this.cpu.stamina = Math.min(1, this.cpu.stamina + STAMINA.RECOVER_PER_POINT);
-      this.youMate.stamina = Math.min(1, this.youMate.stamina + STAMINA.RECOVER_PER_POINT);
-      this.cpuMate.stamina = Math.min(1, this.cpuMate.stamina + STAMINA.RECOVER_PER_POINT);
+      // スタミナはポイント間で少し回復するが、そのセットで消化したゲーム数が増えるほど
+      // 回復量そのものが目減りする（staminaRecoverAmount()）＝長いセットの終盤ほど
+      // 疲れが抜けなくなる。4人全員に同じルールで効く。
+      const recover = this.staminaRecoverAmount(this.match.games.you + this.match.games.cpu);
+      this.you.stamina = Math.min(1, this.you.stamina + recover);
+      this.cpu.stamina = Math.min(1, this.cpu.stamina + recover);
+      this.youMate.stamina = Math.min(1, this.youMate.stamina + recover);
+      this.cpuMate.stamina = Math.min(1, this.cpuMate.stamina + recover);
       this.beginServe();
     }
 
