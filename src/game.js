@@ -198,6 +198,14 @@
       this.youMateFormation = 'net';
       /** true の間、ボールはトス中（重力で上下するだけ）。溜めキーを離して打つまで待つ。 */
       this.tossActive = false;
+      /**
+       * true の間、CPU/AI（cpu・cpuMate・youMate）のサーブ前トスを重力任せで上下させる。
+       * tossActive は「自分（人間）が離すまで待つ」入力待ちの意味も兼ねる（movePlayers()の
+       * 動作停止やchargeStart()の分岐に使われる）ため、AIのサーブでも流用すると人間側の
+       * 移動まで止まってしまう。見た目だけのトスなので別フラグにする（実際の打点・威力は
+       * serve() が SERVE.TOSS_Y 固定で計算するため、この演出の値には影響されない）。
+       */
+      this.aiTossActive = false;
       /** true の間はサーブがまだ一度も返球されていない＝ノーバウンドで打ち返してはいけない。 */
       this.serveInFlight = false;
       /**
@@ -485,6 +493,7 @@
       this.clearTimers();
       this.phase = 'serve';
       this.tossActive = false;
+      this.aiTossActive = false;
       this.serveInFlight = false;
       this.cpuNetRush = false;
       this.rallyShots = 0; // このサーブ（フォールトからのやり直しも含む）から数え直す
@@ -554,6 +563,9 @@
         });
       }
       this.placeServeBall();
+      // CPU/AI（cpu・cpuMate・youMate）も見た目だけトスを上げる。placeServeBall() の後で
+      // 呼ぶ必要がある（先に呼ぶと上のボール位置をトス前の手元に戻されてしまう）。
+      if (server !== 'you') this.aiTossBall();
     }
 
     /**
@@ -599,6 +611,21 @@
       this.hooks.call('トス', 'いいタイミングで離す！');
     }
 
+    /**
+     * CPU/AI（cpu・cpuMate・youMate）のサーブ前トス。tossBall() と同じ弾道を見た目だけ
+     * 再現する（人間の入力待ちを表す tossActive とは別に aiTossActive を立てる。理由は
+     * aiTossActive のコメント参照）。実際の打点・威力は serve() が SERVE.TOSS_Y 固定で
+     * 計算するので、ここでの軌道そのものは結果に影響しない。TIMING.CPU_SERVE_DELAY の間に
+     * 上がって落ちてくるので、リプレイでもちゃんとトスが見える。
+     */
+    aiTossBall() {
+      const ball = this.ball;
+      ball.vx = 0;
+      ball.vz = 0;
+      ball.vy = Math.sqrt(2 * Math.abs(PHYSICS.GRAVITY) * (SERVE.TOSS_PEAK - SERVE.BALL_Y));
+      this.aiTossActive = true;
+    }
+
     serve(who) {
       const ball = this.ball;
       const team = TEAM_OF[who];
@@ -638,6 +665,7 @@
       this.resetTrail();
 
       this.tossActive = false;
+      this.aiTossActive = false;
       this.serveInFlight = true; // 一度も返球されていない＝ノーバウンドで打ち返してはいけない
       // プレースタイル「サーブ&ボレーヤー」：cpu が自分のサーブを打った瞬間から、このポイントの
       // 間ずっとネットへ詰め続ける（moveSinglesCpu() 参照）。
@@ -1319,6 +1347,18 @@
           this.tossActive = false;
           this.placeServeBall();
           this.hooks.call('サーブ', '←→ 左右のコース ／ ↑↓ 深さ ／ B/V/C 押しっぱなしで打つ');
+        }
+        return;
+      }
+
+      if (this.aiTossActive) {
+        integrate(ball, dt); // tossActive と同じく重力だけで上下させる（見た目のみ）
+        // 通常は serve() が TIMING.CPU_SERVE_DELAY 経過時に打って aiTossActive を落とすが、
+        // 難易度設定などで間に合わなかった場合の保険として、人間のトスと同じく自然に
+        // 落ちきったら手元へ戻す（フォルト扱いにはしない＝サーブは after() 側の予定通り来る）。
+        if (ball.y <= SERVE.BALL_Y) {
+          this.aiTossActive = false;
+          this.placeServeBall();
         }
         return;
       }
