@@ -741,14 +741,16 @@
         ? 0
         : clamp((player.chaseDist - CPU.STRETCH_DIST_MIN)
           / (CPU.STRETCH_DIST_MAX - CPU.STRETCH_DIST_MIN), 0, 1);
-      // ダブルスはラリーが長引きやすく、同じロブ選択率でも1ポイント中の絶対数が増えて
-      // 目立つため、DOUBLES.LOB_SCALE で抑える（config.js のコメント参照）。
+      // ダブルスはラリーが長引きやすく、同じロブ選択率・同じ山なり化の度合いでも
+      // 1ポイント中の絶対数が増えて目立つため、DOUBLES.LOB_SCALE / ARC_SCALE で
+      // 抑える（config.js のコメント参照）。
       const lobScale = this.doubles ? DOUBLES.LOB_SCALE : 1;
+      const arcScale = this.doubles ? DOUBLES.ARC_SCALE : 1;
       const shot = who === 'you'
         ? this.playerShot(stroke, ball.z - player.z)
         : TEAM_OF[who] === 'cpu'
-          ? cpuShot(this.you, -1, stretch, lobScale)
-          : cpuShot(this.cpu, 1, stretch, lobScale);
+          ? cpuShot(this.you, -1, stretch, lobScale, arcScale)
+          : cpuShot(this.cpu, 1, stretch, lobScale, arcScale);
 
       // スピン選択は通常のグラウンドストローク限定（スマッシュ・ボレーはフラット固定）。
       // 人間は C＝スライス／V＝トップスピン。chargeStart() の瞬間に固定した値を使う（当たる

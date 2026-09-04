@@ -247,9 +247,13 @@
    *   NET_LOB_PRESSED）に掛ける倍率。既定1（シングルス）。ダブルスはラリーが長引きやすく、
    *   同じ確率でも1ポイント中の絶対数が増えて目立つため、game.js が DOUBLES.LOB_SCALE を
    *   渡して抑える（config.js のコメント参照）。
+   * @param {number} [arcScale] stretch が飛翔時間を STRETCH_T（山なり）へ引っ張る度合いに
+   *   掛ける倍率。既定1。lob=false でも stretch が高いと弾道自体は山なりに近づく
+   *   （「ロブではないのに山なりで打ち損なって見える」の原因）ので、lobScale とは別に
+   *   game.js が DOUBLES.ARC_SCALE を渡して抑える。
    * @returns {{target:{x:number,y:number,z:number}, flight:number, lob:boolean}}
    */
-  function cpuShot(opponent, dir, stretch, lobScale = 1) {
+  function cpuShot(opponent, dir, stretch, lobScale = 1, arcScale = 1) {
     // 相手が自陣のどのあたりにいるかはネットからの距離で見る（dir の符号に依存させない）
     if (Math.abs(opponent.z) <= CPU.NET_Z) return netPlayShot(opponent, dir, lobScale);
     if (Math.random() < (CPU.LOB_BASE + CPU.LOB_VS_STRETCH * stretch) * lobScale) {
@@ -257,7 +261,7 @@
     }
     return {
       target: shotTarget(opponent.x, dir, stretch),
-      flight: lerp(CPU.SHOT_T, CPU.STRETCH_T, stretch),
+      flight: lerp(CPU.SHOT_T, CPU.STRETCH_T, stretch * arcScale),
       lob: false,
     };
   }
