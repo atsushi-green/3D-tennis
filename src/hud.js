@@ -3,7 +3,9 @@
   'use strict';
 
   const { pointLabel } = RallyOne.scoring;
-  const { WIND, STAMINA } = RallyOne.config;
+  const {
+    WIND, STAMINA, SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, getRating,
+  } = RallyOne.config;
   const $ = (id) => document.getElementById(id);
 
   class Hud {
@@ -33,12 +35,124 @@
         charge: $('charge'),
         chargeFill: $('chargeFill'),
         smashTip: $('smashTip'),
+        roster: $('roster'),
+        rosterTabs: $('rosterTabs'),
+        rosterRows: $('rosterRows'),
+        rosterFoot: $('rosterFoot'),
+        rosterReset: $('rosterReset'),
+        rosterRandom: $('rosterRandom'),
         diffOpts: [$('diffEasy'), $('diffNormal'), $('diffHard')],
         surfaceOpts: [$('surfHard'), $('surfClay'), $('surfGrass')],
         styleOpts: [
           $('styleNone'), $('styleServeVolley'), $('styleRetriever'), $('styleBaseliner'),
         ],
       };
+    }
+
+    /* ------------------------------------------------ 選手設定（能力値） */
+
+    /**
+     * スタート画面の「選手設定」パネルを組み立てる（main.js から一度だけ呼ぶ）。
+     * 中身は config.ROSTER / config.SKILLS から作るので、項目を足したいときは config だけ
+     * 触ればよい。値そのものは config が持っていて、ここは表示とクリックの受け付けだけ：
+     * 実際の書き換えは main.js（onChange/onReset/onRandom）が config.setRating() 等で行う
+     * ＝「難易度・サーフェスの選択は main が config に適用する」という既存の流れと同じ。
+     *
+     * 5段階を `<input type=range>` ではなく素の div の並びにしてあるのは、スタート画面が
+     * 「どのキーを押しても開始」という作りで、フォーカスの当たる要素があると矢印キーや
+     * Space で意図せず試合が始まってしまうため（div はフォーカスを取らない）。
+     *
+     * @param {{onChange:(who:string,key:string,value:number)=>void,
+     *   onReset:()=>void, onRandom:()=>void}} handlers
+     */
+    buildRoster(handlers) {
+      this.rosterWho = ROSTER[0].key;
+      this.rosterDots = {}; // key ＝ 能力のキー、値 ＝ その行のドット要素の配列
+
+      ROSTER.forEach((actor) => {
+        const tab = document.createElement('div');
+        tab.className = 'rosterTab';
+        tab.textContent = actor.label;
+        tab.title = actor.note;
+        tab.addEventListener('click', () => {
+          this.rosterWho = actor.key;
+          this.renderRoster();
+        });
+        this.el.rosterTabs.appendChild(tab);
+      });
+
+      SKILLS.forEach((skill) => {
+        const row = document.createElement('div');
+        row.className = 'rosterRow';
+        row.dataset.skill = skill.key;
+        const name = document.createElement('div');
+        name.className = 'rosterName';
+        name.textContent = skill.label;
+        row.appendChild(name);
+
+        const dots = document.createElement('div');
+        dots.className = 'rosterDots';
+        this.rosterDots[skill.key] = [];
+        for (let v = SKILL_MIN; v <= SKILL_MAX; v++) {
+          const dot = document.createElement('div');
+          dot.className = 'rosterDot';
+          dot.title = `${skill.label} ${v}`;
+          dot.addEventListener('click', () => {
+            handlers.onChange(this.rosterWho, skill.key, v);
+            this.renderRoster();
+          });
+          dots.appendChild(dot);
+          this.rosterDots[skill.key].push(dot);
+        }
+        row.appendChild(dots);
+
+        const hint = document.createElement('div');
+        hint.className = 'rosterHint';
+        hint.textContent = skill.hint;
+        row.appendChild(hint);
+        this.el.rosterRows.appendChild(row);
+      });
+
+      this.el.rosterReset.addEventListener('click', () => {
+        handlers.onReset();
+        this.renderRoster();
+      });
+      this.el.rosterRandom.addEventListener('click', () => {
+        handlers.onRandom();
+        this.renderRoster();
+      });
+      this.renderRoster();
+    }
+
+    /** 今選ばれている選手の能力値をパネルに反映する（クリックのたびに呼ぶ）。 */
+    renderRoster() {
+      const who = this.rosterWho;
+      Array.from(this.el.rosterTabs.children).forEach((tab, i) => {
+        tab.classList.toggle('on', ROSTER[i].key === who);
+      });
+      let total = 0;
+      SKILLS.forEach((skill) => {
+        const value = getRating(who, skill.key);
+        total += value;
+        this.rosterDots[skill.key].forEach((dot, i) => {
+          dot.classList.toggle('on', SKILL_MIN + i <= value);
+        });
+        // 人間（you）には効かない項目は薄く表示する（設定はできるが意味がない、と分かるように）
+        const row = this.el.rosterRows.querySelector(`[data-skill="${skill.key}"]`);
+        row.classList.toggle('off', !!skill.aiOnly && who === 'you');
+      });
+      const actor = ROSTER.find((r) => r.key === who);
+      const neutral = SKILL_DEFAULT * SKILLS.length;
+      this.el.rosterFoot.textContent = `${actor.label}（${actor.note}）— 合計 ${total}`
+        + `／既定 ${neutral}。すべて${SKILL_DEFAULT}なら今までと同じ強さです。`;
+    }
+
+    /**
+     * そのクリックが選手設定パネルの中で起きたか（＝「クリックで開始」に使ってはいけないか）。
+     * スタート画面はどこをクリックしても始まる作りなので、この中だけは例外にする。
+     */
+    isRosterClick(target) {
+      return !!(target && this.el.roster.contains(target));
     }
 
     /**

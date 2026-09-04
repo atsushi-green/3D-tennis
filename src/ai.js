@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    CPU, DOUBLES, HALF_L, HALF_W, PHYSICS, PLAYER,
+    CPU, DOUBLES, HALF_L, HALF_W, NEUTRAL_ATTR, PHYSICS, PLAYER,
   } = RallyOne.config;
   const {
     clamp, lerp, rand, signOr,
@@ -23,13 +23,23 @@
    * ボレーでも CPU_REACH(1.45m) の円をまるごと使えてしまう。1バウンドを挟む普通のラリー球は
    * 1秒以上かけて届くので、従来どおり CPU_REACH のまま。
    * @param {number} age ボールが打たれてからの経過時間(秒)。game.js の ball.age。
+   * @param {number} [reachMult] その選手の能力値「リーチ・読み」による倍率（既定1＝中立）。
    */
-  function reactReach(age) {
+  function reactReach(age, reachMult = 1) {
     const t = clamp(
       ((age || 0) - PLAYER.CPU_REFLEX_T_MIN) / (PLAYER.CPU_REFLEX_T_MAX - PLAYER.CPU_REFLEX_T_MIN),
       0, 1,
     );
-    return lerp(PLAYER.CPU_REFLEX_REACH, PLAYER.CPU_REACH, t);
+    return lerp(PLAYER.CPU_REFLEX_REACH, PLAYER.CPU_REACH, t) * reachMult;
+  }
+
+  /**
+   * その選手の能力倍率（config.ATTRS の1人ぶん）。game.js のアクターは自分の分を `attr` に
+   * 持っているが、テストなどの素の {x, z} オブジェクトには無いので、その場合は中立
+   * （すべて1.0＝能力値がすべて既定3のときと同じ）を返す。
+   */
+  function attrOf(player) {
+    return (player && player.attr) || NEUTRAL_ATTR;
   }
 
   /**
@@ -96,7 +106,7 @@
    */
   function inReachOf(player, ball) {
     return ball.y < PLAYER.CPU_REACH_Y
-      && Math.hypot(player.x - ball.x, player.z - ball.z) <= reactReach(ball.age);
+      && Math.hypot(player.x - ball.x, player.z - ball.z) <= reactReach(ball.age, attrOf(player).reach);
   }
 
   /**
@@ -225,21 +235,30 @@
    *   you 陣地の選手（youMate）が cpu 陣地（z>0）を狙うときは +1 を渡す。
    * @param {number} [stretch] 0〜1。ぎりぎり追いついて打った度合い（hit() が実速度から算出）。
    *   大きいほど狙いが浅く・中央寄りになり、ミスの確率も上がる（＝弱気な返球）。
+   * @param {number} [outMult] 能力値「安定感」によるミス率の倍率（既定1＝中立）。
    * @returns {{x:number, y:number, z:number}} ワールド座標の目標地点
    */
-  function shotTarget(opponentX, dir = -1, stretch = 0) {
+  function shotTarget(opponentX, dir = -1, stretch = 0, outMult = 1) {
     const aimXMin = lerp(CPU.AIM_X_MIN, CPU.STRETCH_AIM_X_MIN, stretch);
     const aimXMax = lerp(CPU.AIM_X_MAX, CPU.STRETCH_AIM_X_MAX, stretch);
     const aimZMin = lerp(CPU.AIM_Z_MIN, CPU.STRETCH_AIM_Z_MIN, stretch);
     const aimZMax = lerp(CPU.AIM_Z_MAX, CPU.STRETCH_AIM_Z_MAX, stretch);
-    const outLong = lerp(CPU.OUT_LONG, CPU.STRETCH_OUT_LONG, stretch);
-    const outWide = lerp(CPU.OUT_WIDE, CPU.STRETCH_OUT_WIDE, stretch);
+    const outLong = lerp(CPU.OUT_LONG, CPU.STRETCH_OUT_LONG, stretch) * outMult;
+    const outWide = lerp(CPU.OUT_WIDE, CPU.STRETCH_OUT_WIDE, stretch) * outMult;
 
     const x = -signOr(opponentX, Math.random() - 0.5) * rand(aimXMin, aimXMax);
     const z = dir * rand(aimZMin, aimZMax);
 
     return scatterOut({ x, y: PHYSICS.BALL_R, z }, dir, outLong, outWide);
   }
+
+  /**
+   * ai.js の各ショットが受け取る「打つ人の能力」。能力値が既定（すべて3）ならこの中立値と
+   * 完全に同じになるので、渡さなくても従来どおりの結果になる（config.shotSkill() が作る）。
+   * power＝飛翔時間の倍率（小さいほど速い球）、out＝わざとミスする確率の倍率、
+   * sharp＝ボレーで角度をつけにいく度合いの倍率。
+   */
+  const NEUTRAL_SKILL = { power: 1, out: 1, sharp: 1 };
 
   /**
    * わざとミスする（ライン際を狙い損なう）ぶんの上乗せ。狙いが決まった後の目標地点を、
@@ -267,20 +286,23 @@
    * @param {number} stretch 0〜1。ぎりぎり追いついて打った度合い
    * @param {number} contactY 打点の高さ(m)
    */
-  function cpuVolleyShot(opponent, dir, stretch = 0, contactY = 1) {
+  function cpuVolleyShot(opponent, dir, stretch = 0, contactY = 1, skill = NEUTRAL_SKILL) {
     const high = clamp(
       (contactY - CPU.VOLLEY_LOW_Y) / (CPU.VOLLEY_HIGH_Y - CPU.VOLLEY_LOW_Y), 0, 1,
     );
-    const sharp = high * (1 - clamp(stretch, 0, 1));
+    // 能力値「ボレー」が高いほど、同じ球でも角度をつけて決めにいける（sharp は 0〜1）。
+    const sharp = clamp(high * (1 - clamp(stretch, 0, 1)) * skill.sharp, 0, 1);
     const x = -signOr(opponent.x, Math.random() - 0.5)
       * lerp(CPU.VOLLEY_BLOCK_X, CPU.VOLLEY_ANGLE_X, sharp);
     const z = dir * lerp(CPU.VOLLEY_BLOCK_Z, CPU.VOLLEY_ANGLE_Z, sharp);
     return {
       target: scatterOut(
         { x, y: PHYSICS.BALL_R, z },
-        dir, CPU.OUT_LONG * CPU.VOLLEY_OUT_MULT, CPU.OUT_WIDE * CPU.VOLLEY_OUT_MULT,
+        dir,
+        CPU.OUT_LONG * CPU.VOLLEY_OUT_MULT * skill.out,
+        CPU.OUT_WIDE * CPU.VOLLEY_OUT_MULT * skill.out,
       ),
-      flight: lerp(CPU.VOLLEY_BLOCK_T, CPU.VOLLEY_ANGLE_T, sharp),
+      flight: lerp(CPU.VOLLEY_BLOCK_T, CPU.VOLLEY_ANGLE_T, sharp) * skill.power,
       lob: false,
     };
   }
@@ -290,15 +312,17 @@
    * 1/3 近い速さ）で突き刺す決め球。追い込まれて打つ（stretch が大きい）ときだけ
    * SMASH_STRETCH_T まで威力が落ちる。
    */
-  function cpuSmashShot(opponent, dir, stretch = 0) {
+  function cpuSmashShot(opponent, dir, stretch = 0, skill = NEUTRAL_SKILL) {
     const x = -signOr(opponent.x, Math.random() - 0.5) * rand(CPU.SMASH_AIM_X_MIN, CPU.SMASH_AIM_X_MAX);
     const z = dir * rand(CPU.SMASH_AIM_Z_MIN, CPU.SMASH_AIM_Z_MAX);
     return {
       target: scatterOut(
         { x, y: PHYSICS.BALL_R, z },
-        dir, CPU.OUT_LONG * CPU.SMASH_OUT_MULT, CPU.OUT_WIDE * CPU.SMASH_OUT_MULT,
+        dir,
+        CPU.OUT_LONG * CPU.SMASH_OUT_MULT * skill.out,
+        CPU.OUT_WIDE * CPU.SMASH_OUT_MULT * skill.out,
       ),
-      flight: lerp(CPU.SMASH_T, CPU.SMASH_STRETCH_T, clamp(stretch, 0, 1)),
+      flight: lerp(CPU.SMASH_T, CPU.SMASH_STRETCH_T, clamp(stretch, 0, 1)) * skill.power,
       lob: false,
     };
   }
@@ -349,7 +373,7 @@
    * （意表をつく1本）。それ以外はネットの近さ（closeness）で「足元」、相手の中央寄り
    * 具合（centered）で「パッシング」の重みを連続的に変える。
    */
-  function netPlayShot(opponent, dir, lobScale) {
+  function netPlayShot(opponent, dir, lobScale, skill = NEUTRAL_SKILL) {
     const pressed = Math.abs(opponent.z) <= CPU.NET_PRESS_Z;
     if (Math.random() < (pressed ? CPU.NET_LOB_PRESSED : CPU.NET_LOB) * lobScale) {
       return lobShot(opponent, dir);
@@ -361,7 +385,9 @@
     const dropWeight = lerp(CPU.NET_DROP_MIN, CPU.NET_DROP_MAX, closeness);
     const passWeight = lerp(CPU.NET_PASS_MIN, CPU.NET_PASS_MAX, centered);
     const dropChance = dropWeight / (dropWeight + passWeight);
-    return Math.random() < dropChance ? netDropShot(opponent, dir) : netPassShot(opponent, dir);
+    const shot = Math.random() < dropChance ? netDropShot(opponent, dir) : netPassShot(opponent, dir);
+    shot.flight *= skill.power; // 沈める球もパッシングも「打つ人の上手さ」で速さが変わる
+    return shot;
   }
 
   /**
@@ -384,15 +410,17 @@
    *   game.js が DOUBLES.ARC_SCALE を渡して抑える。
    * @returns {{target:{x:number,y:number,z:number}, flight:number, lob:boolean}}
    */
-  function cpuShot(opponent, dir, stretch, lobScale = 1, arcScale = 1) {
+  function cpuShot(opponent, dir, stretch, lobScale = 1, arcScale = 1, skill = NEUTRAL_SKILL) {
     // 相手が自陣のどのあたりにいるかはネットからの距離で見る（dir の符号に依存させない）
-    if (Math.abs(opponent.z) <= CPU.NET_Z) return netPlayShot(opponent, dir, lobScale);
+    if (Math.abs(opponent.z) <= CPU.NET_Z) return netPlayShot(opponent, dir, lobScale, skill);
+    // ロブは威力ではなくタッチの球なので、能力値による速さの倍率は掛けない（掛けると
+    // 「上手い人のロブほど山なりでなくなる」というおかしな効き方になる）。
     if (Math.random() < (CPU.LOB_BASE + CPU.LOB_VS_STRETCH * stretch) * lobScale) {
       return lobShot(opponent, dir);
     }
     return {
-      target: shotTarget(opponent.x, dir, stretch),
-      flight: lerp(CPU.SHOT_T, CPU.STRETCH_T, stretch * arcScale),
+      target: shotTarget(opponent.x, dir, stretch, skill.out),
+      flight: lerp(CPU.SHOT_T, CPU.STRETCH_T, stretch * arcScale) * skill.power,
       lob: false,
     };
   }
@@ -415,7 +443,7 @@
     // そのまま反応時間として渡すと reactReach() がほぼ CPU_REACH まで開いてしまい、
     // 「ポーチ」のはずが全力疾走の間合いで判定されてしまう。
     const poachT = Math.min((ball.age || 0) + at.t, PLAYER.CPU_POACH_T_MAX);
-    return Math.abs(at.x - player.x) <= reactReach(poachT)
+    return Math.abs(at.x - player.x) <= reactReach(poachT, attrOf(player).reach)
       && at.y < PLAYER.CPU_REACH_Y && at.y > PLAYER.CPU_REACH_Y_MIN;
   }
 

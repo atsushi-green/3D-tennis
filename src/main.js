@@ -4,6 +4,7 @@
 
   const {
     PHYSICS, applyCpuLevel, applyCpuStyle, applySurface, TOSS,
+    setRating, resetRatings, randomizeRatings,
   } = RallyOne.config;
   const { sfx, unlock } = RallyOne.audio;
 
@@ -59,8 +60,19 @@
     beginMatch(doubles, Math.random() < TOSS.CPU_SERVE_CHANCE ? 'cpu' : 'you');
   }
 
+  // スタート画面の「選手設定」パネル。値を持つのは config で、hud は表示とクリックの
+  // 受け付けだけ、実際の適用（setRating 等）はここで行う＝難易度・サーフェスの選択と同じ流れ。
+  hud.buildRoster({
+    onChange: (who, key, value) => setRating(who, key, value),
+    onReset: () => resetRatings(),
+    onRandom: () => randomizeRatings(),
+  });
+
   input.attach({
     isStarted: () => game.started,
+    // 選手設定パネルの中のクリックは「クリックで開始」に使わない（能力値をいじるための
+    // クリックで試合が始まってしまわないように）。DOM の判定は hud 側に任せる。
+    isUiClick: (target) => hud.isRosterClick(target),
     isAwaitingToss: () => awaitingToss,
     onStart: () => beginToss(false),
     onStartDoubles: () => beginToss(true),

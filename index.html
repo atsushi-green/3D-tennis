@@ -64,6 +64,19 @@
     <span class="diff-opt" id="surfClay" data-level="clay">5 クレー</span>
     <span class="diff-opt" id="surfGrass" data-level="grass">6 芝</span>
   </div>
+  <div class="cta cta-alt" id="roster">
+    <div class="rosterHead">
+      <span>選手設定（1〜5・既定3）</span>
+      <span class="rosterBtns">
+        <span class="rosterBtn" id="rosterReset">既定に戻す</span>
+        <span class="rosterBtn" id="rosterRandom">ランダム</span>
+      </span>
+    </div>
+    <!-- タブ（誰の設定か）と能力値の行は hud.js が config.SKILLS / config.ROSTER から組み立てる -->
+    <div class="rosterTabs" id="rosterTabs"></div>
+    <div class="rosterRows" id="rosterRows"></div>
+    <div class="rosterFoot" id="rosterFoot"></div>
+  </div>
   <div class="cta cta-alt" id="styleRow">
     プレースタイル：
     <span class="diff-opt on" id="styleNone" data-level="none">7 なし</span>

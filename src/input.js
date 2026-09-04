@@ -53,7 +53,7 @@
      * @param {{onStart:Function, onStartDoubles:Function, onChargeStart:Function,
      *   onChargeRelease:Function, onFormationNet:Function, onFormationBack:Function,
      *   onSelectDifficulty:Function, onSelectSurface:Function, onSelectStyle:Function,
-     *   onSelectToss:Function, isAwaitingToss:Function,
+     *   onSelectToss:Function, isAwaitingToss:Function, isUiClick:Function,
      *   onAnyKey:Function, isStarted:Function}} handlers
      */
     attach(handlers) {
@@ -103,8 +103,11 @@
         }
       });
 
-      addEventListener('pointerdown', () => {
+      addEventListener('pointerdown', (e) => {
         if (!handlers.isStarted()) {
+          // スタート画面の中でも、操作パネル（選手設定）の上のクリックだけは開始にしない。
+          // 何がパネルかは表示側（hud）が知っているので、判定はハンドラに委ねる。
+          if (handlers.isUiClick && handlers.isUiClick(e.target)) return;
           if (!handlers.isAwaitingToss()) handlers.onStart(); // トス結果待ちの間はクリックでは進めない
         } else if (!this.chargeKey) {
           this.chargeKey = 'Pointer';

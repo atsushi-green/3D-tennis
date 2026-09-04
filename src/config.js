@@ -1076,11 +1076,168 @@
     DISPLAY_THRESHOLD: 0.05, // これ未満はHUDに「無風」と表示する
   };
 
+  /* ------------------------------------------------------------ 選手の能力値 */
+
+  /**
+   * 選手ごとの能力値。スタート画面の「選手設定」で 1〜5 の5段階から選ぶ。
+   * **既定はすべて 3 ＝ どの倍率もちょうど 1.0** なので、何も触らなければこれまでの挙動と
+   * 完全に一致する（既存のバランス・テストを一切動かさないための設計）。
+   *
+   * 効かせ方は「難易度プリセット（applyCpuLevel）」とは別の層にしてある：プリセットは
+   * CPU/PLAYER の値そのものを書き換えるが、能力値は書き換えず、使う瞬間に倍率として掛ける。
+   * こうしておくと「Hard の CPU の、さらにサーブだけ弱い相手」のような組み合わせが
+   * どちらの仕組みも壊さずに作れる（掛け算なので順序にも依存しない）。
+   */
+  const SKILL_MIN = 1;
+  const SKILL_MAX = 5;
+  const SKILL_DEFAULT = 3;
+
+  /**
+   * 各項目の効き幅。能力値3からのずれ p（-1〜+1）に対して倍率がどれだけ振れるか。
+   * 例）SPEED: 0.20 なら 能力1で 0.80倍、能力5で 1.20倍。
+   * 「上手さ」を全部ここに集約してあるので、効きが強すぎ／弱すぎならこの表だけ触ればよい。
+   */
+  const ATTR_SPREAD = {
+    SPEED: 0.20,           // 移動速度
+    STAMINA_DRAIN: 0.35,   // スタミナの減りにくさ（高いほど減らない）
+    STAMINA_RECOVER: 0.30, // ポイント間の回復量
+    REACH: 0.14,           // 打球可能距離（人間 REACH / AI CPU_REACH）
+    REACT: 0.40,           // AIの反応遅延（高いほど短い＝読みが良い）
+    POWER: 0.15,           // 打球の飛翔時間（高いほど短い＝速い球）
+    SERVE_POWER: 0.16,     // サーブの飛翔時間
+    SERVE_WINDOW: 0.35,    // サーブの「ちょうど良いタイミング」の広さ（人間だけに効く）
+    VOLLEY_SHARP: 0.35,    // ボレーの鋭さ（角度をつけて決めにいく度合い）
+    OUT: 0.60,             // AIがわざとミスする確率
+    TIMING: 0.50,          // 打点タイミングのズレがコースを曲げる量（人間だけに効く）
+    NET: 1.00,             // シングルスでネットへ詰める頻度（AIだけに効く）
+  };
+
+  /**
+   * スタート画面に並べる項目。表示の順序もこの配列のまま。
+   * `aiOnly` の項目は人間（you）には効かない（自分で操作する部分なので）。
+   */
+  const SKILLS = [
+    { key: 'forehand', label: 'フォアハンド', hint: 'フォア側の打球の速さ' },
+    { key: 'backhand', label: 'バックハンド', hint: 'バック側の打球の速さ' },
+    { key: 'volley', label: 'ボレー', hint: 'ノーバウンドの球の速さ・鋭さ' },
+    { key: 'smash', label: 'スマッシュ', hint: '頭上の球を叩く速さ' },
+    { key: 'serve', label: 'サーブ', hint: '威力と、タイミングの許容幅' },
+    { key: 'stamina', label: '体力', hint: 'バテにくさと回復の速さ' },
+    { key: 'speed', label: '移動速度', hint: 'コートを動く速さ' },
+    { key: 'reach', label: 'リーチ・読み', hint: '手の届く範囲と反応の速さ' },
+    { key: 'consistency', label: '安定感', hint: 'ミスの少なさ・打点のズレへの強さ' },
+    { key: 'netPlay', label: 'ネット志向', hint: '前へ詰める積極性', aiOnly: true },
+  ];
+
+  /** 設定できる4人。ダブルスでない場合はパートナー/CPU2の値は使われないだけ。 */
+  const ROSTER = [
+    { key: 'you', label: 'YOU', note: 'あなた' },
+    { key: 'youMate', label: 'パートナー', note: 'ダブルスの味方AI' },
+    { key: 'cpu', label: 'CPU', note: '相手の主力' },
+    { key: 'cpuMate', label: 'CPU2', note: 'ダブルスの相手2人目' },
+  ];
+
+  /**
+   * 能力値を範囲内へ丸めるためだけの小さなクランプ。math.js の clamp() と同じものだが、
+   * config.js は依存順で math.js より前に読み込まれる（＝RallyOne.math がまだ無い）ので、
+   * ここにだけローカルで持つ。
+   */
+  const clampSkill = (v) => Math.min(Math.max(v, SKILL_MIN), SKILL_MAX);
+
+  /** 全項目が既定値（3）の能力値セットを作る。 */
+  function defaultRatings() {
+    return Object.fromEntries(SKILLS.map((s) => [s.key, SKILL_DEFAULT]));
+  }
+
+  /** 今選ばれている生の能力値（1〜5）。UI が読み書きする。 */
+  const RATINGS = Object.fromEntries(ROSTER.map((r) => [r.key, defaultRatings()]));
+
+  /**
+   * RATINGS から導いた「使う瞬間に掛ける倍率」。game.js / ai.js はこちらだけを見る。
+   * CPU/PLAYER と同じく、オブジェクトの差し替えではなく中身の書き換えで更新するので、
+   * 各アクター（game.js の you/cpu/…）は読み込み時に参照を1回持っておけばよい。
+   */
+  const ATTRS = Object.fromEntries(ROSTER.map((r) => [r.key, {}]));
+
+  /** すべての倍率が1.0の中立セット。能力値を持たない相手（テストの素のオブジェクト等）用。 */
+  const NEUTRAL_ATTR = {};
+
+  function deriveAttr(ratings, out) {
+    const p = (key) => (clampSkill(ratings[key]) - SKILL_DEFAULT) / (SKILL_MAX - SKILL_DEFAULT);
+    const up = (key, spread) => 1 + p(key) * spread;   // 能力が高いほど大きくなる倍率
+    const down = (key, spread) => 1 - p(key) * spread; // 能力が高いほど小さくなる倍率
+    out.speed = up('speed', ATTR_SPREAD.SPEED);
+    out.drain = down('stamina', ATTR_SPREAD.STAMINA_DRAIN);
+    out.recover = up('stamina', ATTR_SPREAD.STAMINA_RECOVER);
+    out.reach = up('reach', ATTR_SPREAD.REACH);
+    out.react = down('reach', ATTR_SPREAD.REACT);
+    out.forehand = down('forehand', ATTR_SPREAD.POWER);
+    out.backhand = down('backhand', ATTR_SPREAD.POWER);
+    out.volley = down('volley', ATTR_SPREAD.POWER);
+    out.volleySharp = up('volley', ATTR_SPREAD.VOLLEY_SHARP);
+    out.smash = down('smash', ATTR_SPREAD.POWER);
+    out.serve = down('serve', ATTR_SPREAD.SERVE_POWER);
+    out.serveWindow = up('serve', ATTR_SPREAD.SERVE_WINDOW);
+    out.out = down('consistency', ATTR_SPREAD.OUT);
+    out.timing = down('consistency', ATTR_SPREAD.TIMING);
+    out.net = up('netPlay', ATTR_SPREAD.NET);
+    return out;
+  }
+
+  deriveAttr(defaultRatings(), NEUTRAL_ATTR);
+  ROSTER.forEach((r) => deriveAttr(RATINGS[r.key], ATTRS[r.key]));
+
+  /**
+   * 能力値を1つ変える（スタート画面の1クリック＝1回の呼び出し）。
+   * @param {'you'|'youMate'|'cpu'|'cpuMate'} who
+   * @param {string} key SKILLS のキー
+   * @param {number} value 1〜5
+   */
+  function setRating(who, key, value) {
+    if (!RATINGS[who] || !(key in RATINGS[who])) return;
+    RATINGS[who][key] = clampSkill(Math.round(value));
+    deriveAttr(RATINGS[who], ATTRS[who]);
+  }
+
+  function getRating(who, key) {
+    return RATINGS[who][key];
+  }
+
+  /** 4人ぶんまとめて既定（全項目3）へ戻す。 */
+  function resetRatings() {
+    ROSTER.forEach((r) => {
+      Object.assign(RATINGS[r.key], defaultRatings());
+      deriveAttr(RATINGS[r.key], ATTRS[r.key]);
+    });
+  }
+
+  /** 4人ぶんランダムに振り直す（遊び用。1〜5から一様）。 */
+  function randomizeRatings() {
+    ROSTER.forEach((r) => {
+      SKILLS.forEach((s) => {
+        RATINGS[r.key][s.key] = SKILL_MIN + Math.floor(Math.random() * (SKILL_MAX - SKILL_MIN + 1));
+      });
+      deriveAttr(RATINGS[r.key], ATTRS[r.key]);
+    });
+  }
+
+  /**
+   * AI のショット計算（ai.js）へ渡す、その1本ぶんの能力。ai.js は「誰が打つか」を知らずに
+   * 済ませたいので、game.js がここで倍率だけの小さなオブジェクトに畳んでから渡す。
+   * @param {object} attr ATTRS の1人ぶん
+   * @param {'forehand'|'backhand'|'volley'|'smash'} kind その1本の打ち方
+   */
+  function shotSkill(attr, kind) {
+    return { power: attr[kind], out: attr.out, sharp: attr.volleySharp };
+  }
+
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT,
     SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, REPLAY, STAMINA, TOSS, OFFICIALS,
     STANDS, SPECTATORS,
+    SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, ATTR_SPREAD, ATTRS, NEUTRAL_ATTR,
+    setRating, getRating, resetRatings, randomizeRatings, shotSkill,
   };
 })(window.RallyOne = window.RallyOne || {});

@@ -3212,6 +3212,10 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     g.phase = 'rally';
     g.serveInFlight = false;
     g.you.x = 0; g.you.z = fromZ;
+    // 風はこのブロックの検証対象ではないので必ず無風にする（hit() が ball.wind に入れ直すので
+    // ボール側だけ0にしても効かない）。ドロップはネットぎりぎりを狙う球で、横風でネットの
+    // 高い側（ポスト寄り）へ流されると実際に引っ掛かることがあり、テストが時々落ちていた。
+    g.wind = 0;
     Object.assign(g.ball, { x: 0, y: 0.8, z: fromZ, live: true, bounces: 1, last: 'cpu', wind: 0 });
     g.you.chargeSpin = spin;
     g.you.swingCharge = charge;
@@ -3439,6 +3443,159 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   // 既にバウンドした球も対象外
   ok(netRushPosition({ ...drive, bounces: 1 }, 1, atNet) === null,
     'an already-bounced ball is chased normally');
+}
+
+// --- 選手ごとの能力値：既定（すべて3）ならどの倍率も 1.0＝これまでと完全に同じ挙動 ---
+{
+  const {
+    SKILLS, ROSTER, ATTRS, NEUTRAL_ATTR, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT,
+    setRating, getRating, resetRatings, shotSkill,
+  } = R.config;
+
+  ok(SKILLS.length >= 7, `all requested skills exist: ${SKILLS.length}`);
+  ['forehand', 'backhand', 'volley', 'smash', 'serve', 'stamina', 'speed']
+    .forEach((key) => ok(SKILLS.some((s) => s.key === key), `skill "${key}" is configurable`));
+
+  ROSTER.forEach((actor) => {
+    Object.entries(ATTRS[actor.key]).forEach(([key, mult]) => {
+      ok(mult === 1, `${actor.key}.${key} starts at exactly 1.0 (default = today's balance), got ${mult}`);
+    });
+    SKILLS.forEach((s) => ok(getRating(actor.key, s.key) === SKILL_DEFAULT,
+      `${actor.key}.${s.key} defaults to ${SKILL_DEFAULT}`));
+  });
+  Object.values(NEUTRAL_ATTR).forEach((mult) => ok(mult === 1, 'the neutral set is all 1.0 too'));
+
+  // 上げ下げの向き：高い能力＝速く走り、球も速く（飛翔時間は短く）、バテにくい
+  setRating('cpu', 'speed', SKILL_MAX);
+  setRating('cpu', 'stamina', SKILL_MIN);
+  setRating('cpu', 'forehand', SKILL_MAX);
+  setRating('cpu', 'consistency', SKILL_MAX);
+  ok(ATTRS.cpu.speed > 1, `speed 5 -> faster, got ${ATTRS.cpu.speed}`);
+  ok(ATTRS.cpu.drain > 1, `stamina 1 -> drains faster, got ${ATTRS.cpu.drain}`);
+  ok(ATTRS.cpu.recover < 1, `stamina 1 -> recovers less, got ${ATTRS.cpu.recover}`);
+  ok(ATTRS.cpu.forehand < 1, `forehand 5 -> shorter flight (faster ball), got ${ATTRS.cpu.forehand}`);
+  ok(ATTRS.cpu.backhand === 1, 'the other wing is untouched');
+  ok(ATTRS.cpu.out < 1, `consistency 5 -> fewer deliberate misses, got ${ATTRS.cpu.out}`);
+  // 範囲外は丸められる
+  setRating('cpu', 'speed', 99);
+  ok(getRating('cpu', 'speed') === SKILL_MAX, 'ratings are clamped to the 1..5 range');
+
+  // ai.js へ渡す形（打ち方に対応する能力＋安定感）
+  const skill = shotSkill(ATTRS.cpu, 'forehand');
+  ok(skill.power === ATTRS.cpu.forehand && skill.out === ATTRS.cpu.out && skill.sharp === ATTRS.cpu.volleySharp,
+    'shotSkill folds the right three multipliers for that stroke');
+
+  resetRatings();
+  ROSTER.forEach((actor) => Object.entries(ATTRS[actor.key]).forEach(([, mult]) => {
+    ok(mult === 1, 'resetRatings() puts every multiplier back to 1.0');
+  }));
+}
+
+// --- 能力値が実際のプレーに効く（移動・スタミナ・サーブ・打球の速さ） ---
+{
+  const { setRating, resetRatings, SKILL_MIN, SKILL_MAX } = R.config;
+  const { PHYSICS } = R.config;
+
+  // 移動速度：同じ時間だけ同じ目標へ走らせると、能力5の方が遠くまで進む
+  const ranIn = (rating) => {
+    setRating('cpu', 'speed', rating);
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.cpu.x = 0; g.cpu.z = 5;
+    const before = { x: g.cpu.x, z: g.cpu.z };
+    g.moveTowards(g.cpu, before, { x: 6, z: 5 }, PLAYER.CPU_CHASE, 0.5);
+    return g.cpu.x;
+  };
+  try {
+    const slow = ranIn(SKILL_MIN);
+    const fast = ranIn(SKILL_MAX);
+    ok(fast > slow + 0.3, `speed 5 covers more ground than speed 1: ${fast.toFixed(2)} vs ${slow.toFixed(2)}`);
+  } finally { resetRatings(); }
+
+  // 体力：同じ距離を走ったときの消費が違う
+  try {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    setRating('cpu', 'stamina', SKILL_MIN);
+    setRating('cpuMate', 'stamina', SKILL_MAX);
+    g.drainStamina(g.cpu, 10);
+    g.drainStamina(g.cpuMate, 10);
+    ok(g.cpu.stamina < g.cpuMate.stamina,
+      `stamina 1 tires faster than stamina 5: ${g.cpu.stamina.toFixed(3)} vs ${g.cpuMate.stamina.toFixed(3)}`);
+  } finally { resetRatings(); }
+
+  // サーブ：CPU/AI のサーブの初速が能力で変わる。コース・深さ・スピンは毎回ランダムに
+  // 選ばれ、それだけで初速が数m/s動くので、Math.random を固定して能力だけを比べる。
+  const cpuServeSpeed = (rating) => {
+    const origRandom = Math.random;
+    Math.random = () => 0.5;
+    try {
+      setRating('cpu', 'serve', rating);
+      const g = new R.Game({ input: fakeInput, hooks: noHooks });
+      g.start();
+      g.server = 'cpu';
+      g.beginServe();
+      g.serve('cpu');
+      return Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz);
+    } finally {
+      Math.random = origRandom;
+    }
+  };
+  try {
+    const weak = cpuServeSpeed(SKILL_MIN);
+    const strong = cpuServeSpeed(SKILL_MAX);
+    ok(strong > weak, `serve 5 is faster than serve 1: ${strong.toFixed(1)} vs ${weak.toFixed(1)} m/s`);
+  } finally { resetRatings(); }
+
+  // 人間の打球：フォアの能力で飛翔時間（＝速さ）が変わる。バックは別々に効く
+  const youFlight = (stroke, rating) => {
+    setRating('you', stroke, rating);
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.you.swingCharge = 1;
+    return g.playerShot(stroke).flight;
+  };
+  try {
+    const weakFh = youFlight('forehand', SKILL_MIN);
+    const strongFh = youFlight('forehand', SKILL_MAX);
+    ok(strongFh < weakFh, `forehand 5 hits a faster ball: flight ${strongFh.toFixed(3)} vs ${weakFh.toFixed(3)}`);
+    resetRatings();
+    setRating('you', 'forehand', SKILL_MAX);
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.you.swingCharge = 1;
+    ok(g.playerShot('backhand').flight > g.playerShot('forehand').flight,
+      'a strong forehand does not make the backhand strong too');
+  } finally { resetRatings(); }
+
+  // AI の打球：能力（skill.power / skill.out）が飛翔時間とミス率に効く
+  {
+    const origRandom = Math.random;
+    Math.random = () => 0.5; // ミスの抽選には当たらない値に固定して飛翔時間だけ見る
+    try {
+      const opponent = { x: 1.5, z: -HALF_L };
+      const plain = R.ai.cpuShot(opponent, -1, 0);
+      const strong = R.ai.cpuShot(opponent, -1, 0, 1, 1, { power: 0.85, out: 1, sharp: 1 });
+      ok(strong.flight < plain.flight,
+        `a stronger AI hits a faster ball: ${strong.flight.toFixed(3)} vs ${plain.flight.toFixed(3)}`);
+      const volley = R.ai.cpuVolleyShot(opponent, -1, 0, 1.4, { power: 1, out: 1, sharp: 1.35 });
+      const dullVolley = R.ai.cpuVolleyShot(opponent, -1, 0, 1.4, { power: 1, out: 1, sharp: 0.65 });
+      ok(Math.abs(volley.target.x) > Math.abs(dullVolley.target.x),
+        'a better volleyer angles the same ball wider');
+      ok(volley.flight < dullVolley.flight, 'and hits it harder');
+    } finally {
+      Math.random = origRandom;
+    }
+    // ミス率：安定感が高い（out<1）ほど、わざとアウトを狙う確率が下がる
+    const outs = (outMult) => {
+      let n = 0;
+      for (let i = 0; i < 400; i++) {
+        const t = R.ai.shotTarget(0, -1, 1, outMult); // stretch=1（最もミスしやすい状況）
+        if (Math.abs(t.z) > HALF_L || Math.abs(t.x) > HALF_W) n++;
+      }
+      return n;
+    };
+    ok(outs(0.4) < outs(1), 'a steadier AI misses the lines less often');
+  }
+  ok(PHYSICS.BALL_R > 0, 'sanity: config is still intact after all the rating changes');
 }
 
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);

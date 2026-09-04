@@ -6,8 +6,8 @@
   'use strict';
 
   const {
-    BOUNDS, CHARGE, COURT, CPU, DOUBLES, DROP, FX, HALF_L, HALF_W, NET, PHYSICS, PLAYER, RETURN, SERVE,
-    SHOT, SMASH_HINT, STAMINA, TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND,
+    ATTRS, BOUNDS, CHARGE, COURT, CPU, DOUBLES, DROP, FX, HALF_L, HALF_W, NET, PHYSICS, PLAYER,
+    RETURN, SERVE, SHOT, SMASH_HINT, STAMINA, TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND, shotSkill,
   } = RallyOne.config;
   const {
     approach2D, clamp, lerp, mpsToKmh, rand, signOr,
@@ -55,6 +55,9 @@
 
   /** 個々の選手が、チームとしてはどちら側か（ダブルスの味方はチームメイトと同じチーム） */
   const TEAM_OF = { you: 'you', youMate: 'you', cpu: 'cpu', cpuMate: 'cpu' };
+
+  /** 4人ぶんまとめて同じ処理をしたいとき用（スタミナの回復など） */
+  const ACTORS = Object.keys(TEAM_OF);
 
   /**
    * ボールが今の速度のまま直進した場合、プレイヤーの奥行き(z)まで届く瞬間の x 座標（仮想延長線）。
@@ -104,7 +107,8 @@
     // 走る時間（加速は無視した楽観値）＋着いてから溜める時間。走っている間は溜まらない
     // （CHARGE.MOVE_CAP_FLOOR=0）ので、この2つは重ならず足し算になる。帯を抜けきる
     // 時刻(exit.t)までに済むなら間に合う。
-    const needT = Math.hypot(x - you.x, z - you.z) / PLAYER.SPEED
+    // 走る速さは能力値「移動速度」で変わるので、ヒントの「間に合うか」も同じ速さで見積もる。
+    const needT = Math.hypot(x - you.x, z - you.z) / (PLAYER.SPEED * you.attr.speed)
       + CHARGE.MAX_TIME * PLAYER.SMASH_MIN_CHARGE;
     return {
       x,
@@ -172,16 +176,23 @@
         chargeStroke: null, // chargeStart() の瞬間に固定するフォア/バック。溜めている間は変えない
         chargeSpin: 'flat', // chargeStart() の瞬間に固定するスピン（B/V/C）。実際に当たるまで押し続けなくてよい
         stamina: 1, // 0〜1。長いラリーで走るほど減り、ポイント間で少し回復する（newPoint()参照）
+        // スタート画面の「選手設定」で決まる能力倍率（config.ATTRS）。オブジェクトの中身が
+        // 書き換えられる形で更新されるので、ここで参照を1度持っておけば以後ずっと最新を指す。
+        // 既定（全項目3）ならすべて 1.0＝設定を触らない限り従来と完全に同じ挙動になる。
+        attr: ATTRS.you,
       };
       this.cpu = {
         x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, chaseDist: 0, stroke: 'forehand', prep: null, stamina: 1,
+        attr: ATTRS.cpu,
       };
       // ダブルス（this.doubles === true）のときだけ動く AI パートナー。シングルスでは未使用のまま。
       this.youMate = {
         x: 0, z: DOUBLES.NET_Z_YOU, anim: 0, speed: 0, chaseDist: 0, stroke: 'forehand', prep: null, stamina: 1,
+        attr: ATTRS.youMate,
       };
       this.cpuMate = {
         x: 0, z: DOUBLES.NET_Z_CPU, anim: 0, speed: 0, chaseDist: 0, stroke: 'forehand', prep: null, stamina: 1,
+        attr: ATTRS.cpuMate,
       };
 
       this.phase = 'idle';
@@ -400,7 +411,9 @@
      */
     serveTimingPower(heldTime) {
       const { CHARGE_SWEET_T, CHARGE_WINDOW } = SERVE;
-      return clamp(1 - Math.abs(heldTime - CHARGE_SWEET_T) / CHARGE_WINDOW, 0, 1);
+      // 能力値「サーブ」が高いほどこの窓が広い＝多少ずれても威力が落ちない（attr.serveWindow）。
+      const window = CHARGE_WINDOW * this.you.attr.serveWindow;
+      return clamp(1 - Math.abs(heldTime - CHARGE_SWEET_T) / window, 0, 1);
     }
 
     /**
@@ -476,9 +489,12 @@
       return this.staminaCurve(stamina, STAMINA.CHARGE_FLOOR, STAMINA.LOW_CHARGE_MULT);
     }
 
-    /** 実際に走った距離ぶん、その選手のスタミナを減らす（0未満にはしない）。 */
+    /**
+     * 実際に走った距離ぶん、その選手のスタミナを減らす（0未満にはしない）。
+     * 能力値「体力」が高い選手ほど同じ距離での消費が少ない（attr.drain）。
+     */
     drainStamina(actor, moved) {
-      actor.stamina = Math.max(0, actor.stamina - moved * STAMINA.DRAIN_PER_M);
+      actor.stamina = Math.max(0, actor.stamina - moved * STAMINA.DRAIN_PER_M * actor.attr.drain);
     }
 
     /**
@@ -507,11 +523,12 @@
       // スタミナはポイント間で少し回復するが、そのセットで消化したゲーム数が増えるほど
       // 回復量そのものが目減りする（staminaRecoverAmount()）＝長いセットの終盤ほど
       // 疲れが抜けなくなる。4人全員に同じルールで効く。
+      // 回復量にも能力値「体力」が掛かる（attr.recover）。
       const recover = this.staminaRecoverAmount(this.match.games.you + this.match.games.cpu);
-      this.you.stamina = Math.min(1, this.you.stamina + recover);
-      this.cpu.stamina = Math.min(1, this.cpu.stamina + recover);
-      this.youMate.stamina = Math.min(1, this.youMate.stamina + recover);
-      this.cpuMate.stamina = Math.min(1, this.cpuMate.stamina + recover);
+      ACTORS.forEach((who) => {
+        const actor = this.actor(who);
+        actor.stamina = Math.min(1, actor.stamina + recover * actor.attr.recover);
+      });
       this.beginServe();
     }
 
@@ -687,7 +704,10 @@
       };
       // プレイヤーは「打つ」瞬間の溜め量で威力が変わる。CPU/AI（cpu・cpuMate・youMate）は
       // 溜め演出がない代わりに、難易度で決まる一定の威力（CPU.SERVE_T）で打つ。
-      const flightT = who === 'you' ? lerp(SERVE.T, SERVE.CHARGE_T, this.you.swingCharge) : CPU.SERVE_T;
+      // どちらにも能力値「サーブ」の倍率が掛かる（attr.serve。小さいほど速い＝強い）。
+      const flightT = (who === 'you'
+        ? lerp(SERVE.T, SERVE.CHARGE_T, this.you.swingCharge)
+        : CPU.SERVE_T) * this.actor(who).attr.serve;
       // 人間はトスを上げた瞬間に固定したスピン（V/C。chargeStart() 参照）でスライスサーブ・
       // スピンサーブが打てる。CPU/AI も同じ SPIN 設定（実効重力・バウンドの弾み方）で
       // 一定確率でスピンサーブを混ぜる（aiSpin()。以前は常にフラット固定だった）。
@@ -830,13 +850,15 @@
       // ネット際で捕まえた球も頭上に上がってきた球も同じ速さ・深さで返っていた。
       const aimAt = TEAM_OF[who] === 'cpu' ? this.you : this.cpu; // 逆をつく相手
       const aimDir = TEAM_OF[who] === 'cpu' ? -1 : 1;             // 打ち込む方向
+      // 打ち方に対応する能力（フォア／バック／ボレー／スマッシュ）と安定感を、倍率だけの
+      // 小さなオブジェクトに畳んで渡す（ai.js は「誰が打つか」を知らないままでいられる）。
       const shot = who === 'you'
         ? this.playerShot(stroke, ball.z - player.z)
         : isSmash
-          ? cpuSmashShot(aimAt, aimDir, stretch)
+          ? cpuSmashShot(aimAt, aimDir, stretch, shotSkill(player.attr, 'smash'))
           : isVolley
-            ? cpuVolleyShot(aimAt, aimDir, stretch, ball.y)
-            : cpuShot(aimAt, aimDir, stretch, lobScale, arcScale);
+            ? cpuVolleyShot(aimAt, aimDir, stretch, ball.y, shotSkill(player.attr, 'volley'))
+            : cpuShot(aimAt, aimDir, stretch, lobScale, arcScale, shotSkill(player.attr, baseStroke));
 
       // スピン選択は通常のグラウンドストローク限定（スマッシュ・ボレーはフラット固定）。
       // 人間は C＝スライス／V＝トップスピン。chargeStart() の瞬間に固定した値を使う（当たる
@@ -861,7 +883,7 @@
         } else if (!shot.lob
           && Math.abs(shot.target.z) >= CPU.APPROACH_DEPTH
           && stretch <= CPU.APPROACH_MAX_STRETCH
-          && Math.random() < CPU.APPROACH_CHANCE) {
+          && Math.random() < CPU.APPROACH_CHANCE * this.cpu.attr.net) {
           this.cpuNetRush = true;
         }
       }
@@ -913,18 +935,25 @@
       const charge = this.you.swingCharge;
       const baseX = aim !== 0 ? aim * SHOT.AIM_X : -signOr(this.you.x, 1) * SHOT.DEFAULT_X;
 
+      // 能力値の倍率。打ち方ごとに対応する項目（スマッシュ／ボレー／フォア／バック）が
+      // 飛翔時間に掛かる（小さいほど速い球）。既定（3）なら 1.0＝従来と完全に同じ。
+      const attr = this.you.attr;
+
       if (stroke === 'smash') {
         return {
           target: { x: baseX, y: BALL_R, z: rand(SHOT.SMASH_Z, SHOT.SMASH_Z + SHOT.DRIVE_Z_SPREAD) },
-          flight: SHOT.SMASH_T,
+          flight: SHOT.SMASH_T * attr.smash,
         };
       }
 
       if (stroke === 'volley-forehand' || stroke === 'volley-backhand') {
         // 真正面（距離0）や伸びきり（距離が離れすぎ）は普通のブロック、フォア/バック側に
         // 程よく離れているときだけ鋭く角度をつけた決め球になる（左右どちら側でも対称）。
+        // 能力値「ボレー」が高いほど「程よい距離」の許容幅(WINDOW)が広い＝鋭い決め球に
+        // しやすい。飛翔時間そのものにも同じ能力の倍率が掛かる。
         const sideDist = Math.abs(this.ball.x - this.you.x);
-        const sharpness = clamp(1 - Math.abs(sideDist - VOLLEY.SWEET_DIST) / VOLLEY.WINDOW, 0, 1);
+        const window = VOLLEY.WINDOW * attr.volleySharp;
+        const sharpness = clamp(1 - Math.abs(sideDist - VOLLEY.SWEET_DIST) / window, 0, 1);
         const dir = aim !== 0 ? Math.sign(aim) : -signOr(this.you.x, 1);
         return {
           target: {
@@ -932,7 +961,7 @@
             y: BALL_R,
             z: lerp(VOLLEY.BLOCK_Z, VOLLEY.ANGLE_Z, sharpness) + rand(0, SHOT.DRIVE_Z_SPREAD),
           },
-          flight: lerp(VOLLEY.BLOCK_T, VOLLEY.ANGLE_T, sharpness),
+          flight: lerp(VOLLEY.BLOCK_T, VOLLEY.ANGLE_T, sharpness) * attr.volley,
         };
       }
 
@@ -944,13 +973,15 @@
         const dir = aim !== 0 ? Math.sign(aim) : -signOr(this.you.x, 1);
         return {
           target: { x: dir * rand(DROP.X_MIN, DROP.X_MAX), y: BALL_R, z: rand(DROP.Z_MIN, DROP.Z_MAX) },
-          flight: DROP.T,
+          flight: DROP.T * attr[stroke === 'backhand' ? 'backhand' : 'forehand'],
           clearance: DROP.CLEARANCE,
           spin: 'drop',
         };
       }
 
-      const flight = lob ? SHOT.LOB_T : lerp(SHOT.TAP_T, SHOT.CHARGE_T, charge);
+      // ロブは威力ではなくタッチの球なので能力の倍率は掛けない（CPU/AI 側の cpuShot() と同じ扱い）。
+      const strokeAttr = attr[stroke === 'backhand' ? 'backhand' : 'forehand'];
+      const flight = lob ? SHOT.LOB_T : lerp(SHOT.TAP_T, SHOT.CHARGE_T, charge) * strokeAttr;
       // 溜めるほど深く。速さと深さの両方が変わるので「強い球を打った」感が出る。
       const depth = lerp(SHOT.TAP_Z, SHOT.CHARGE_Z, charge);
 
@@ -959,7 +990,9 @@
         const timing = clamp((contactDz - TIMING_AIM.NEUTRAL_DZ) / TIMING_AIM.HALF_BAND, -1, 1);
         const pullDir = (stroke === 'forehand' ? -1 : 1) * RACKET_SIDE.you;
         const shiftLimit = HALF_W + TIMING_AIM.OUT_MARGIN;
-        x = clamp(baseX + timing * pullDir * TIMING_AIM.MAX_SHIFT, -shiftLimit, shiftLimit);
+        // 能力値「安定感」が高いほど、打点がずれてもコースが曲がりにくい（attr.timing）。
+        const maxShift = TIMING_AIM.MAX_SHIFT * attr.timing;
+        x = clamp(baseX + timing * pullDir * maxShift, -shiftLimit, shiftLimit);
       }
 
       return {
@@ -1165,7 +1198,7 @@
         && at.y >= PLAYER.SMASH_MIN_Y && at.y < PLAYER.REACH_Y // 打てる高さの帯（下は溜めても通常打になる高さ、上は届かない高さ）
         && at.z < PLAYER.NET_MARGIN                            // 自陣に入ってから
         // 立てる場所（コート内へ丸めた位置）からラケットが届くか
-        && Math.hypot(at.x - standX(at.x), at.z - standZ(at.z)) < PLAYER.REACH
+        && Math.hypot(at.x - standX(at.x), at.z - standZ(at.z)) < PLAYER.REACH * this.you.attr.reach
       );
 
       // maxBounces=0：最初の着地でシミュレーションを打ち切る（バウンド後は対象外なので追わない）
@@ -1232,7 +1265,7 @@
         // 目標速度（入力なしなら0）へ、加速度で少しずつ近づける。
         // 急停止・瞬間方向転換にならないので、コート上で滑るような自然さが出る。
         const hasInput = mx !== 0 || mz !== 0;
-        const maxSpeed = PLAYER.SPEED * this.staminaSpeedMult(this.you.stamina);
+        const maxSpeed = PLAYER.SPEED * this.you.attr.speed * this.staminaSpeedMult(this.you.stamina);
         const desiredVx = hasInput ? (mx / len) * maxSpeed : 0;
         const desiredVz = hasInput ? (mz / len) * maxSpeed : 0;
         const rate = (hasInput ? PLAYER.ACCEL : PLAYER.DECEL) * dt;
@@ -1273,11 +1306,12 @@
 
       const owner = this.ball.last;
       if (this.phase === 'rally' && owner !== this.lastBallOwnerSeen) {
+        // 能力値「リーチ・読み」が高い選手ほど反応遅延が短い（attr.react）。
         if (owner === 'you') {
-          this.reactTimers.cpu = PLAYER.CPU_REACT;
-          this.reactTimers.cpuMate = PLAYER.CPU_REACT;
+          this.reactTimers.cpu = PLAYER.CPU_REACT * this.cpu.attr.react;
+          this.reactTimers.cpuMate = PLAYER.CPU_REACT * this.cpuMate.attr.react;
         } else if (owner === 'cpu') {
-          this.reactTimers.youMate = PLAYER.CPU_REACT;
+          this.reactTimers.youMate = PLAYER.CPU_REACT * this.youMate.attr.react;
         }
       }
       this.lastBallOwnerSeen = owner;
@@ -1418,7 +1452,8 @@
       const dx = target.x - actor.x;
       const dz = target.z - actor.z;
       const dist = Math.hypot(dx, dz);
-      const cappedSpeed = speed * this.staminaSpeedMult(actor.stamina);
+      // 能力値「移動速度」×スタミナ。どちらも倍率なので掛ける順序には依存しない。
+      const cappedSpeed = speed * actor.attr.speed * this.staminaSpeedMult(actor.stamina);
       const step = Math.min(cappedSpeed * dt, dist);
       if (dist > 0) {
         actor.x += (dx / dist) * step;
@@ -1590,7 +1625,8 @@
 
       // プレイヤーは溜めキーを押した瞬間の前後だけ打てる。人間が優先（AIパートナーに横取りさせない）
       if (ball.last !== 'you' && ball.z < PLAYER.NET_MARGIN && this.you.swing > 0) {
-        if (reaches(ball, this.you, PLAYER.REACH) && ball.y < PLAYER.REACH_Y) {
+        // 能力値「リーチ・読み」で手の届く範囲が広がる／狭まる（attr.reach）。
+        if (reaches(ball, this.you, PLAYER.REACH * this.you.attr.reach) && ball.y < PLAYER.REACH_Y) {
           this.hit('you');
           this.you.swing = 0;
         }
@@ -1605,7 +1641,8 @@
         && this.doublesResponder('you') === 'youMate') {
         const inRange = ball.y < PLAYER.CPU_REACH_Y && ball.y > PLAYER.CPU_REACH_Y_MIN;
         const canReturn = aiCanReturnNow(this.youMate, ball);
-        if (canReturn && reaches(ball, this.youMate, reactReach(ball.age)) && inRange) this.hit('youMate');
+        const mateReach = reactReach(ball.age, this.youMate.attr.reach);
+        if (canReturn && reaches(ball, this.youMate, mateReach) && inRange) this.hit('youMate');
       }
 
       // CPU は届く範囲なら自動で振る。ダブルスでは応答すべき側（doublesResponder）だけが
@@ -1618,10 +1655,11 @@
           && aiCanReturnNow(this.cpuMate, ball);
         // 反応に使える時間ぶんに狭めた守備範囲で判定する（ai.reactReach 参照）。
         // 打たれてすぐ届く球（スマッシュ・至近距離のボレー）は体の近くしか触れない。
-        const reach = reactReach(ball.age);
-        if (cpuCanReturn && reaches(ball, this.cpu, reach) && inRange) {
+        // 能力値「リーチ・読み」の倍率は選手ごとに違うので、2人ぶん別々に求める。
+        if (cpuCanReturn && reaches(ball, this.cpu, reactReach(ball.age, this.cpu.attr.reach)) && inRange) {
           this.hit('cpu');
-        } else if (cpuMateCanReturn && reaches(ball, this.cpuMate, reach) && inRange) {
+        } else if (cpuMateCanReturn
+          && reaches(ball, this.cpuMate, reactReach(ball.age, this.cpuMate.attr.reach)) && inRange) {
           this.hit('cpuMate');
         }
       }
