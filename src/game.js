@@ -123,12 +123,14 @@
   /**
    * ポイントが決まったときに「何で決めたか」を出すための球種名。
    * 打ち方（stroke）とスピン（spin）とロブかどうかの組み合わせを、観戦者から見た
-   * 呼び名ひとつに畳む。スマッシュ・ボレー・ロブ・サーブは打ち方そのものが球種なので
-   * スピンより優先し（実際これらは常にフラット固定）、通常のグラウンドストロークだけ
-   * スピンで呼び分ける。
+   * 呼び名ひとつに畳む。スマッシュ・ボレー・ロブは打ち方そのものが球種なのでスピンより
+   * 優先し（実際これらは常にフラット固定）、グラウンドストロークとサーブはスピンで呼び分ける。
+   * サーブはさらに狙ったコース（センター／ボディ／ワイド／角度）も添える：エースで決まった
+   * ときに「何が良かったのか」が球種だけでは伝わらないため（以前は一律「サービス」だった）。
    * @param {'forehand'|'backhand'|'smash'|'serve'|'volley-forehand'|'volley-backhand'} stroke
    * @param {'flat'|'top'|'slice'|'drop'} spin
    * @param {boolean} [lob]
+   * @param {string} [course] サーブのときだけ渡すコース名（serveCourse()）
    */
   const SPIN_LABELS = {
     top: 'スピンショット',
@@ -137,9 +139,31 @@
     flat: 'フラットショット',
   };
 
-  function shotLabel(stroke, spin, lob) {
+  /** サーブのスピン別の呼び名。ドロップはサーブでは選べないので持たない。 */
+  const SERVE_SPIN_LABELS = {
+    top: 'スピンサービス',
+    slice: 'スライスサービス',
+    flat: 'フラットサービス',
+  };
+
+  /**
+   * 狙った横位置（センターラインからの距離）を、コースの呼び名に畳む。
+   * 区切りは SERVE.AIM_*_MAX と同じ＝実際に打ち分けている4コースの境界そのもの。
+   * @param {number} magnitude serveAimMagnitude()／cpuServeAimMagnitude() が返す値(m)
+   */
+  function serveCourse(magnitude) {
+    if (magnitude <= SERVE.AIM_T_MAX) return 'センター';
+    if (magnitude <= SERVE.AIM_BODY_MAX) return 'ボディ';
+    if (magnitude <= SERVE.AIM_WIDE_MAX) return 'ワイド';
+    return '角度';
+  }
+
+  function shotLabel(stroke, spin, lob, course) {
     if (stroke === 'smash') return 'スマッシュ';
-    if (stroke === 'serve') return 'サービス';
+    if (stroke === 'serve') {
+      const name = SERVE_SPIN_LABELS[spin] || SERVE_SPIN_LABELS.flat;
+      return course ? `${name}（${course}）` : name;
+    }
     if (typeof stroke === 'string' && stroke.startsWith('volley-')) return 'ボレー';
     if (lob) return 'ロブ';
     return SPIN_LABELS[spin] || SPIN_LABELS.flat;
@@ -722,7 +746,7 @@
       ball.bounces = 0;
       ball.age = 0;
       ball.last = team; // スコア判定・当たり判定はチーム単位（hit() と同じ扱い）
-      this.lastShotBy[team] = shotLabel('serve', spin);
+      this.lastShotBy[team] = shotLabel('serve', spin, false, serveCourse(magnitude));
       this.resetTrail();
 
       this.tossActive = false;

@@ -2884,14 +2884,32 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     g.you.swingCharge = PLAYER.SMASH_MIN_CHARGE + 0.1;
   }) === 'スマッシュ', 'a smash is reported as a smash');
 
-  // サーブ（エースはこれで決まる）
+  // サーブ（エースはこれで決まる）。球種（スピン）とコースまで出す：「サービス」だけでは
+  // 何が良かったのか分からない、というフィードバックを受けた変更。
   {
-    const g = new R.Game({ input: fakeInput, hooks: noHooks });
-    g.start();
-    g.chargeStart('flat');   // トス
-    g.chargeStart('flat');   // 溜め始め
-    g.chargeRelease();       // 打つ
-    ok(g.lastShotBy.you === 'サービス', `a serve is reported as a serve, got ${g.lastShotBy.you}`);
+    const serveLabel = (spin, aimX) => {
+      const g = new R.Game({ input: { ...fakeInput, moveX: aimX }, hooks: noHooks });
+      g.start();
+      g.chargeStart(spin);   // トス
+      g.chargeStart(spin);   // 溜め始め
+      g.chargeRelease();     // 打つ
+      return g.lastShotBy.you;
+    };
+    // 無入力（moveX=0）はボディ狙い。スピンの呼び分けがそのまま出る
+    ok(serveLabel('flat', 0) === 'フラットサービス（ボディ）',
+      `a flat serve is reported with its spin and course, got ${serveLabel('flat', 0)}`);
+    ok(serveLabel('top', 0) === 'スピンサービス（ボディ）',
+      `a topspin serve is reported as a spin serve, got ${serveLabel('top', 0)}`);
+    ok(serveLabel('slice', 0) === 'スライスサービス（ボディ）',
+      `a slice serve is reported as a slice serve, got ${serveLabel('slice', 0)}`);
+    // コースは ←→ の入力で変わる。どちらの向きがワイドになるかはサーブするサイド
+    // （デュース/アド）で入れ替わるので、「2通り打てば片方がセンター、もう片方が外側」で見る。
+    const both = [serveLabel('flat', 1), serveLabel('flat', -1)];
+    ok(both.some((l) => l.includes('センター')), `one of them goes down the T, got ${both.join(' / ')}`);
+    ok(both.some((l) => l.includes('ワイド') || l.includes('角度')),
+      `the other goes outside, got ${both.join(' / ')}`);
+    ok(both.every((l) => l.startsWith('フラットサービス')),
+      'the spin name stays the same whatever the course');
   }
 
   // CPU のロブもロブとして記録される
