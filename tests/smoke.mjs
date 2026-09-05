@@ -2725,6 +2725,11 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     ok(g.ball.bounces >= 1, 'precondition: the lob has bounced');
     // 弾んだ後も打てる高さの帯を通る＝ルール上はスマッシュできる球であることを確かめてから、
     // それでもヒントが出ないことを確認する（＝トリビアルに null なのではない）。
+    // バウンド後にどこまで戻るかは PHYSICS.RESTITUTION のチューニング次第（跳ねすぎの
+    // 調整で 0.72→0.57 まで下げた結果、実戦のロブはもう SMASH_MIN_Y まで戻らない）なので、
+    // ここで見たい「バウンド後にしか打てない球には案内を出さない」だけを取り出せるよう、
+    // 弾んだ直後の上向き速度を帯へ確実に届く値に置き換えてから判定する。
+    g.ball.vy = Math.sqrt(2 * -R.config.PHYSICS.GRAVITY * (SMASH_MIN_Y + 0.2));
     const after = R.physics.predictWindow(
       g.ball, (at) => at.y >= SMASH_MIN_Y && at.y < REACH_Y, 2, 1,
     );
