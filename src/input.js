@@ -59,7 +59,7 @@
      * @param {{onStart:Function, onStartDoubles:Function, onChargeStart:Function,
      *   onChargeRelease:Function, onFormationNet:Function, onFormationBack:Function,
      *   onSelectDifficulty:Function, onSelectSurface:Function, onSelectStyle:Function,
-     *   onSelectToss:Function, isAwaitingToss:Function, isUiClick:Function,
+     *   onSelectToss:Function, isAwaitingToss:Function,
      *   onSkipReplay:Function, isStarted:Function}} handlers
      */
     attach(handlers) {
@@ -109,13 +109,12 @@
         }
       });
 
-      addEventListener('pointerdown', (e) => {
-        if (!handlers.isStarted()) {
-          // スタート画面の中でも、操作パネル（選手設定）の上のクリックだけは開始にしない。
-          // 何がパネルかは表示側（hud）が知っているので、判定はハンドラに委ねる。
-          if (handlers.isUiClick && handlers.isUiClick(e.target)) return;
-          if (!handlers.isAwaitingToss()) handlers.onStart(); // トス結果待ちの間はクリックでは進めない
-        } else if (!this.chargeKey) {
+      addEventListener('pointerdown', () => {
+        // スタート画面のマウス操作はボタン・つまみバー（hud.js が組み立てる DOM）が
+        // すべて受け持つので、ここでは何もしない。以前は「画面のどこをクリックしても開始」
+        // だったが、それだとボタンやつまみを押した瞬間に試合が始まってしまう。
+        if (!handlers.isStarted()) return;
+        if (!this.chargeKey) {
           this.chargeKey = 'Pointer';
           handlers.onChargeStart(this.heldSpin());
         }

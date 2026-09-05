@@ -18,6 +18,8 @@
   let surface = 'hard';
   /** スタート画面で選んだCPU/AIのプレースタイル。既定はなし（未選択のまま開始した場合）。 */
   let cpuStyle = 'none';
+  /** スタート画面で選んだ試合形式。true ＝ ダブルス（既定はシングルス）。 */
+  let doubles = false;
   /** トス（コイントス）に人間が勝ち、サーブ/レシーブの選択を待っている間だけ true。 */
   let awaitingToss = false;
   /** トスを始めた時点で選ばれていたダブルスの有無（トスの選択後にそのまま渡す）。 */
@@ -36,12 +38,12 @@
   });
 
   /** applyCpuLevel/Style/Surface を適用してから実際に試合を始める（トスの結果が決まった後）。 */
-  function beginMatch(doubles, initialServer) {
+  function beginMatch(wantDoubles, initialServer) {
     applyCpuLevel(cpuLevel);
     applyCpuStyle(cpuStyle); // 必ず applyCpuLevel() の後（config.js のコメント参照）
     applySurface(surface);
     hud.hideStartScreen();
-    game.start(doubles, initialServer);
+    game.start(wantDoubles, initialServer);
   }
 
   /**
@@ -49,41 +51,25 @@
    * 人間が勝ったらスタート画面で選ばせ（onSelectToss を待つ）、CPUが勝ったら
    * TOSS.CPU_SERVE_CHANCE の確率で自動的に選んで、選んだ側の結果でそのまま試合を始める。
    */
-  function beginToss(doubles) {
+  function beginToss(wantDoubles) {
     unlock(); // AudioContext はユーザー操作の中でしか起こせない
-    doublesPending = doubles;
+    doublesPending = wantDoubles;
     if (Math.random() < 0.5) {
       awaitingToss = true;
       hud.showTossChoice();
       return;
     }
-    beginMatch(doubles, Math.random() < TOSS.CPU_SERVE_CHANCE ? 'cpu' : 'you');
+    beginMatch(wantDoubles, Math.random() < TOSS.CPU_SERVE_CHANCE ? 'cpu' : 'you');
   }
 
-  // スタート画面の「選手設定」パネル。値を持つのは config で、hud は表示とクリックの
-  // 受け付けだけ、実際の適用（setRating 等）はここで行う＝難易度・サーフェスの選択と同じ流れ。
-  hud.buildRoster({
-    onChange: (who, key, value) => setRating(who, key, value),
-    onReset: () => resetRatings(),
-    onRandom: () => randomizeRatings(),
-  });
-
-  input.attach({
-    isStarted: () => game.started,
-    // 選手設定パネルの中のクリックは「クリックで開始」に使わない（能力値をいじるための
-    // クリックで試合が始まってしまわないように）。DOM の判定は hud 側に任せる。
-    isUiClick: (target) => hud.isRosterClick(target),
-    isAwaitingToss: () => awaitingToss,
-    onStart: () => beginToss(false),
-    onStartDoubles: () => beginToss(true),
-    onSelectToss: (choice) => {
-      awaitingToss = false;
-      beginMatch(doublesPending, choice === 'serve' ? 'you' : 'cpu');
+  // スタート画面の選択。マウス（hud のボタン）とキーボード（input）の両方から同じ関数を
+  // 呼ぶので、どちらで操作しても状態と表示が必ず揃う。表示の更新は hud、実際の適用は
+  // beginMatch() の applyCpuLevel/Style/Surface が行う（config が値の持ち主）。
+  const menu = {
+    onSelectMode: (wantDoubles) => {
+      doubles = wantDoubles;
+      hud.setMode(wantDoubles);
     },
-    onChargeStart: (spin) => game.chargeStart(spin),
-    onChargeRelease: () => game.chargeRelease(),
-    onFormationNet: () => game.setYouMateFormation('net'),
-    onFormationBack: () => game.setYouMateFormation('back'),
     onSelectDifficulty: (level) => {
       cpuLevel = level;
       hud.setDifficulty(level);
@@ -97,6 +83,39 @@
       cpuStyle = name;
       hud.setStyle(name);
     },
+    onPlay: () => beginToss(doubles),
+    onSelectToss: (choice) => {
+      awaitingToss = false;
+      beginMatch(doublesPending, choice === 'serve' ? 'you' : 'cpu');
+    },
+  };
+
+  // スタート画面の「選手設定」パネル。値を持つのは config で、hud は表示とマウス操作の
+  // 受け付けだけ、実際の適用（setRating 等）はここで行う＝難易度・サーフェスの選択と同じ流れ。
+  hud.buildRoster({
+    onChange: (who, key, value) => setRating(who, key, value),
+    onReset: () => resetRatings(),
+    onRandom: () => randomizeRatings(),
+  });
+  hud.buildMenu(menu);
+
+  input.attach({
+    isStarted: () => game.started,
+    isAwaitingToss: () => awaitingToss,
+    onStart: () => beginToss(doubles), // 何かキーを押したら、選んである形式で開始
+    // D は「ダブルスを選んでそのまま開始」。ボタンで選んでから開始するのと同じ結果になる。
+    onStartDoubles: () => {
+      menu.onSelectMode(true);
+      beginToss(true);
+    },
+    onSelectToss: menu.onSelectToss,
+    onChargeStart: (spin) => game.chargeStart(spin),
+    onChargeRelease: () => game.chargeRelease(),
+    onFormationNet: () => game.setYouMateFormation('net'),
+    onFormationBack: () => game.setYouMateFormation('back'),
+    onSelectDifficulty: menu.onSelectDifficulty,
+    onSelectSurface: menu.onSelectSurface,
+    onSelectStyle: menu.onSelectStyle,
     // リプレイのスキップは Space だけ（以前はどのキーでも飛んでしまい、ラリー用の
     // キーに触れただけで意図せずスキップされていた）。
     onSkipReplay: () => world.skipReplay(),

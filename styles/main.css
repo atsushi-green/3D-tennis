@@ -144,29 +144,58 @@ canvas{display:block}
 #smashTip.late{color:#ef6b5a}
 #chargeFill.full{background:#fff;box-shadow:0 0 10px 2px var(--ball)}
 
+/* スタート画面。設定はすべてマウスで操作できる（ボタン＝.seg／つまみバー＝.skillBar）ので、
+   背景そのものはクリックしても何も起きない（cursor も既定のまま）。キーボードでも同じ操作が
+   できるよう、各ボタンには対応するキーを <kbd> で添えてある。 */
 #start{
   position:fixed;inset:0;display:grid;place-items:center;
   background:radial-gradient(120% 90% at 50% 40%,rgba(11,26,43,.55),rgba(11,26,43,.95));
-  pointer-events:auto;cursor:pointer
+  pointer-events:auto
 }
-#start .card{text-align:center;max-width:420px;padding:0 24px}
+#start .card{text-align:center;max-width:560px;max-height:94vh;overflow-y:auto;padding:0 24px}
 #start h1{font-size:40px;margin:0;letter-spacing:-.01em;font-weight:700}
 #start h1 span{color:var(--ball)}
-#start p{color:var(--dim);font-size:13px;line-height:1.8;margin:14px 0 22px}
-#start .cta{display:inline-block;border:1px solid var(--ball);color:var(--ball);
-  padding:9px 20px;font-size:12px;letter-spacing:.16em;text-transform:uppercase}
-#start .cta-alt{display:block;margin-top:14px;border-color:var(--dim);color:var(--dim);
-  font-size:11px;letter-spacing:.1em;text-transform:none;padding:7px 16px}
+#start p{color:var(--dim);font-size:13px;line-height:1.8;margin:10px 0 16px}
 
-/* CPUの強さ選択（スタート画面、キー操作のみ。クリックでは選べない＝#startのクリックは開始に使うため） */
-.diff-opt{margin:0 4px;opacity:.45}
-.diff-opt.on{opacity:1;color:var(--ball);font-weight:700}
+/* 設定1行＝「見出し＋横並びのボタン」。ラベル幅を揃えてボタンの左端を通す */
+.menuRow{display:flex;align-items:center;gap:10px;margin-bottom:8px;text-align:left}
+.menuLabel{flex:0 0 88px;font-size:11px;color:var(--dim);letter-spacing:.06em;white-space:nowrap}
+.segs{display:flex;flex:1;min-width:0;gap:6px;flex-wrap:wrap}
 
-/* 選手設定（能力値）。クリックで直接いじる唯一のパネルなので、#start 全体の
-   「クリックで開始」からは除外してある（main.js#isUiClick → hud.isRosterClick）。 */
-#start .card{max-width:560px;max-height:94vh;overflow-y:auto}
-#start p{margin:10px 0 16px}
-#roster{text-align:left;cursor:default;line-height:1.4}
+/* 選択ボタン（試合形式・強さ・サーフェス・プレースタイル・トスの選択で共通） */
+.seg{
+  flex:1;min-width:56px;text-align:center;cursor:pointer;
+  border:1px solid var(--dim);border-radius:2px;padding:5px 8px;
+  font-size:11px;letter-spacing:.04em;color:var(--line);opacity:.5;
+  transition:opacity .12s,border-color .12s,background-color .12s;
+  white-space:nowrap
+}
+.seg:hover{opacity:.85;border-color:var(--ball)}
+.seg.on{opacity:1;color:var(--ball);border-color:var(--ball);font-weight:700;
+  background:rgba(216,242,74,.10)}
+/* ボタンに添える対応キー。押せる場所そのものではないので、常に控えめに */
+.seg kbd{
+  display:inline-block;margin-left:6px;padding:0 4px;
+  border:1px solid currentColor;border-radius:2px;
+  font:inherit;font-size:9px;font-weight:400;opacity:.7;vertical-align:1px
+}
+
+/* 開始ボタン。この画面で唯一の「決定」なので、選択ボタンより大きく明るくする */
+.playBtn{
+  margin-top:16px;cursor:pointer;
+  border:1px solid var(--ball);border-radius:2px;color:var(--ball);
+  padding:11px 20px;font-size:13px;letter-spacing:.16em;text-transform:uppercase;
+  transition:background-color .12s,color .12s
+}
+.playBtn:hover{background:var(--ball);color:var(--ink);font-weight:700}
+
+/* コイントスに人間が勝ったときだけ出るサーブ／レシーブの選択（既定は非表示）。
+   このときは設定（#menuBody）を隠して、選択だけを残す。 */
+#tossChoice{display:none;margin-top:14px;font-size:12px;color:var(--dim);letter-spacing:.06em}
+#tossChoice.on{display:block}
+.tossSegs{margin-top:8px}
+#roster{text-align:left;cursor:default;line-height:1.4;margin-top:14px;
+  border:1px solid var(--dim);border-radius:2px;padding:8px 12px;color:var(--dim)}
 .rosterHead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
 .rosterBtns{white-space:nowrap}
 .rosterBtn{cursor:pointer;border:1px solid var(--dim);padding:2px 8px;margin-left:6px;opacity:.7}
@@ -178,20 +207,41 @@ canvas{display:block}
 .rosterRow{display:flex;align-items:center;gap:8px;padding:1px 0}
 .rosterRow.off{opacity:.35}
 .rosterName{flex:0 0 88px;font-size:11px;white-space:nowrap}
-.rosterDots{display:flex;gap:3px}
-.rosterDot{width:15px;height:11px;border:1px solid var(--dim);cursor:pointer;opacity:.5}
-.rosterDot:hover{opacity:.9;border-color:var(--ball)}
-.rosterDot.on{background:var(--ball);border-color:var(--ball);opacity:1}
+
+/* 能力値のつまみバー（1〜5）。バーのどこかを押すとその値になり、押したまま左右へ
+   ドラッグすると連続で変わる（hud.js#buildSkillBar）。--knob はつまみの直径で、
+   つまみがバーの内側だけを動くよう hud.js の left 計算にも使う。 */
+.skillWrap{--knob:13px;display:flex;align-items:center;gap:7px;flex:0 0 132px}
+.skillBar{
+  position:relative;flex:1;height:var(--knob);cursor:pointer;
+  touch-action:none /* ドラッグ中に画面がスクロールしないように */
+}
+.skillBar::before{ /* 溝（つまみの高さの中で細い線に見せる） */
+  content:"";position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);
+  height:3px;border-radius:2px;background:rgba(232,238,245,.18)
+}
+.skillFill{
+  position:absolute;left:0;top:50%;transform:translateY(-50%);
+  height:3px;border-radius:2px;background:var(--ball);opacity:.8
+}
+.skillKnob{
+  position:absolute;top:50%;width:var(--knob);height:var(--knob);
+  transform:translateY(-50%);border-radius:50%;
+  background:var(--ball);border:1px solid var(--ball);
+  transition:left .08s ease-out,box-shadow .12s
+}
+.skillBar:hover .skillKnob{box-shadow:0 0 0 3px rgba(216,242,74,.25)}
+.skillValue{width:10px;font-size:11px;color:var(--line);text-align:right;
+  font-variant-numeric:tabular-nums}
 .rosterHint{flex:1;font-size:10px;opacity:.5;text-align:right;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rosterFoot{margin-top:6px;font-size:10px;opacity:.6}
 
-/* トス（コイントス）に人間が勝ったときだけ出るサーブ／レシーブの選択（既定は非表示）。
-   #start .cta-alt{display:block} より詳細度で勝つよう #start を重ねて指定する。 */
-#start #tossChoice{display:none}
-#start #tossChoice.on{display:block}
-
 @media (max-width:520px){
   #keys{font-size:10px;gap:10px}
   #bug .nm{min-width:84px}
+  /* 狭い画面ではラベルを上に折り返して、ボタンとつまみバーの幅を確保する */
+  .menuRow{flex-wrap:wrap;gap:4px}
+  .menuLabel{flex:1 0 100%}
+  .rosterHint{display:none}
 }

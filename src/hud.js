@@ -7,6 +7,8 @@
     WIND, STAMINA, SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, getRating,
   } = RallyOne.config;
   const $ = (id) => document.getElementById(id);
+  /** その行（id）の中の選択ボタンを左から順に。 */
+  const segs = (id) => Array.from($(id).querySelectorAll('.seg'));
 
   class Hud {
     constructor() {
@@ -29,8 +31,8 @@
         callSub: $('callSub'),
         callShot: $('callShot'),
         start: $('start'),
-        startCta: $('startCta'),
-        doublesCta: $('doublesCta'),
+        menuBody: $('menuBody'),
+        playBtn: $('playBtn'),
         tossChoice: $('tossChoice'),
         charge: $('charge'),
         chargeFill: $('chargeFill'),
@@ -42,12 +44,36 @@
         rosterFoot: $('rosterFoot'),
         rosterReset: $('rosterReset'),
         rosterRandom: $('rosterRandom'),
-        diffOpts: [$('diffEasy'), $('diffNormal'), $('diffHard')],
-        surfaceOpts: [$('surfHard'), $('surfClay'), $('surfGrass')],
-        styleOpts: [
-          $('styleNone'), $('styleServeVolley'), $('styleRetriever'), $('styleBaseliner'),
-        ],
+        // 各設定行のボタン。個別に id を振らず、行の中の .seg をまとめて拾う
+        // （選択肢を足すときは index.html に1行足すだけで済む）。
+        modeOpts: segs('modeRow'),
+        diffOpts: segs('diffRow'),
+        surfaceOpts: segs('surfaceRow'),
+        styleOpts: segs('styleRow'),
+        tossOpts: segs('tossChoice'),
       };
+    }
+
+    /**
+     * スタート画面のボタンを配線する（main.js から一度だけ呼ぶ）。押したときに何をするかは
+     * main.js が持っていて、ここは「どのボタンがどのハンドラか」を結ぶだけ＝キーボード側
+     * （input.js）とまったく同じハンドラを呼ぶので、マウスとキーで挙動がずれない。
+     * @param {{onSelectMode:(doubles:boolean)=>void, onSelectDifficulty:Function,
+     *   onSelectSurface:Function, onSelectStyle:Function, onPlay:Function,
+     *   onSelectToss:Function}} handlers
+     */
+    buildMenu(handlers) {
+      const bind = (opts, fn) => opts.forEach((el) => {
+        el.addEventListener('click', () => fn(el.dataset.level));
+      });
+      bind(this.el.modeOpts, (level) => handlers.onSelectMode(level === 'doubles'));
+      bind(this.el.diffOpts, handlers.onSelectDifficulty);
+      bind(this.el.surfaceOpts, handlers.onSelectSurface);
+      bind(this.el.styleOpts, handlers.onSelectStyle);
+      this.el.playBtn.addEventListener('click', () => handlers.onPlay());
+      this.el.tossOpts.forEach((el) => {
+        el.addEventListener('click', () => handlers.onSelectToss(el.dataset.choice));
+      });
     }
 
     /* ------------------------------------------------ 選手設定（能力値） */
@@ -59,16 +85,17 @@
      * 実際の書き換えは main.js（onChange/onReset/onRandom）が config.setRating() 等で行う
      * ＝「難易度・サーフェスの選択は main が config に適用する」という既存の流れと同じ。
      *
-     * 5段階を `<input type=range>` ではなく素の div の並びにしてあるのは、スタート画面が
-     * 「どのキーを押しても開始」という作りで、フォーカスの当たる要素があると矢印キーや
-     * Space で意図せず試合が始まってしまうため（div はフォーカスを取らない）。
+     * 1〜5は div で組んだ「つまみバー」（クリックでその値へ、つまみをドラッグで連続変更）。
+     * `<input type=range>` を使わないのは、スタート画面が「どのキーを押しても開始」という
+     * 作りで、フォーカスの当たる要素があると矢印キーや Space で意図せず試合が始まって
+     * しまうため（div はフォーカスを取らない）。
      *
      * @param {{onChange:(who:string,key:string,value:number)=>void,
      *   onReset:()=>void, onRandom:()=>void}} handlers
      */
     buildRoster(handlers) {
       this.rosterWho = ROSTER[0].key;
-      this.rosterDots = {}; // key ＝ 能力のキー、値 ＝ その行のドット要素の配列
+      this.rosterBars = {}; // key ＝ 能力のキー、値 ＝ その行のバーの部品（renderRoster が使う）
 
       ROSTER.forEach((actor) => {
         const tab = document.createElement('div');
@@ -91,21 +118,7 @@
         name.textContent = skill.label;
         row.appendChild(name);
 
-        const dots = document.createElement('div');
-        dots.className = 'rosterDots';
-        this.rosterDots[skill.key] = [];
-        for (let v = SKILL_MIN; v <= SKILL_MAX; v++) {
-          const dot = document.createElement('div');
-          dot.className = 'rosterDot';
-          dot.title = `${skill.label} ${v}`;
-          dot.addEventListener('click', () => {
-            handlers.onChange(this.rosterWho, skill.key, v);
-            this.renderRoster();
-          });
-          dots.appendChild(dot);
-          this.rosterDots[skill.key].push(dot);
-        }
-        row.appendChild(dots);
+        row.appendChild(this.buildSkillBar(skill, handlers));
 
         const hint = document.createElement('div');
         hint.className = 'rosterHint';
@@ -125,7 +138,62 @@
       this.renderRoster();
     }
 
-    /** 今選ばれている選手の能力値をパネルに反映する（クリックのたびに呼ぶ）。 */
+    /**
+     * 能力1項目ぶんの「つまみバー」。バーのどこかを押すとその位置の値になり、押したまま
+     * 左右へ動かすと連続で変わる（`setPointerCapture` を使うので、つまみからカーソルが
+     * はみ出してもドラッグは続く）。値を持つのは config なので、ここは押された位置を
+     * 1〜5に直して onChange へ渡すだけ。
+     * @param {{key:string,label:string}} skill config.SKILLS の1項目
+     * @param {{onChange:(who:string,key:string,value:number)=>void}} handlers
+     */
+    buildSkillBar(skill, handlers) {
+      const bar = document.createElement('div');
+      bar.className = 'skillBar';
+      bar.title = `${skill.label}（${SKILL_MIN}〜${SKILL_MAX}）`;
+      const fill = document.createElement('div');
+      fill.className = 'skillFill';
+      const knob = document.createElement('div');
+      knob.className = 'skillKnob';
+      const value = document.createElement('div');
+      value.className = 'skillValue';
+      bar.appendChild(fill);
+      bar.appendChild(knob);
+
+      // 押された x 座標を 1〜5 に直す。バーの左端が SKILL_MIN、右端が SKILL_MAX に
+      // ちょうど対応するよう、つまみの幅ぶん内側に縮めた区間で割り当てる。
+      const valueAt = (clientX) => {
+        const rect = bar.getBoundingClientRect();
+        const pad = knob.offsetWidth / 2;
+        const span = Math.max(rect.width - knob.offsetWidth, 1);
+        const f = (clientX - rect.left - pad) / span;
+        const v = Math.round(SKILL_MIN + f * (SKILL_MAX - SKILL_MIN));
+        return Math.min(Math.max(v, SKILL_MIN), SKILL_MAX);
+      };
+      const apply = (e) => {
+        const v = valueAt(e.clientX);
+        if (v === getRating(this.rosterWho, skill.key)) return;
+        handlers.onChange(this.rosterWho, skill.key, v);
+        this.renderRoster();
+      };
+      bar.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); // ドラッグ中にテキスト選択が始まらないように
+        bar.setPointerCapture(e.pointerId);
+        apply(e);
+      });
+      bar.addEventListener('pointermove', (e) => {
+        if (bar.hasPointerCapture(e.pointerId)) apply(e);
+      });
+      bar.addEventListener('pointerup', (e) => bar.releasePointerCapture(e.pointerId));
+
+      const wrap = document.createElement('div');
+      wrap.className = 'skillWrap';
+      wrap.appendChild(bar);
+      wrap.appendChild(value);
+      this.rosterBars[skill.key] = { fill, knob, value };
+      return wrap;
+    }
+
+    /** 今選ばれている選手の能力値をパネルに反映する（操作のたびに呼ぶ）。 */
     renderRoster() {
       const who = this.rosterWho;
       Array.from(this.el.rosterTabs.children).forEach((tab, i) => {
@@ -135,9 +203,13 @@
       SKILLS.forEach((skill) => {
         const value = getRating(who, skill.key);
         total += value;
-        this.rosterDots[skill.key].forEach((dot, i) => {
-          dot.classList.toggle('on', SKILL_MIN + i <= value);
-        });
+        const bar = this.rosterBars[skill.key];
+        const pct = ((value - SKILL_MIN) / (SKILL_MAX - SKILL_MIN)) * 100;
+        bar.fill.style.width = `${pct}%`;
+        // つまみは「バーの内側」を端から端まで動く（calc の 100% はバー幅、
+        // その中でつまみ自身の幅ぶんを差し引いた区間を pct で進む）。
+        bar.knob.style.left = `calc(${pct}% - ${pct / 100} * var(--knob))`;
+        bar.value.textContent = value;
         // 人間（you）には効かない項目は薄く表示する（設定はできるが意味がない、と分かるように）
         const row = this.el.rosterRows.querySelector(`[data-skill="${skill.key}"]`);
         row.classList.toggle('off', !!skill.aiOnly && who === 'you');
@@ -146,14 +218,6 @@
       const neutral = SKILL_DEFAULT * SKILLS.length;
       this.el.rosterFoot.textContent = `${actor.label}（${actor.note}）— 合計 ${total}`
         + `／既定 ${neutral}。すべて${SKILL_DEFAULT}なら今までと同じ強さです。`;
-    }
-
-    /**
-     * そのクリックが選手設定パネルの中で起きたか（＝「クリックで開始」に使ってはいけないか）。
-     * スタート画面はどこをクリックしても始まる作りなので、この中だけは例外にする。
-     */
-    isRosterClick(target) {
-      return !!(target && this.el.roster.contains(target));
     }
 
     /**
@@ -176,6 +240,12 @@
     setStaminaFill(el, fraction) {
       el.style.width = `${Math.max(0, Math.min(1, fraction)) * 100}%`;
       el.classList.toggle('low', fraction < STAMINA.LOW_THRESHOLD);
+    }
+
+    /** スタート画面の試合形式（シングルス／ダブルス）表示を切り替える。 */
+    setMode(doubles) {
+      const level = doubles ? 'doubles' : 'singles';
+      this.el.modeOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === level));
     }
 
     /** スタート画面のCPUの強さ表示を切り替える（実際の適用は config.applyCpuLevel が行う）。 */
@@ -270,8 +340,7 @@
      * （実際の選択の適用は main.js#onSelectToss が行う）。
      */
     showTossChoice() {
-      this.el.startCta.style.display = 'none';
-      this.el.doublesCta.style.display = 'none';
+      this.el.menuBody.style.display = 'none'; // 設定はもう終わっているので、選択だけを残す
       this.el.tossChoice.classList.add('on');
     }
 

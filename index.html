@@ -47,44 +47,67 @@
   <h1>RALLY <span>ONE</span></h1>
   <p>3Dテニス v0.1 — ループの1周目。<br>
      ボールが自コートで2バウンドしたら失点。ラインを割っても失点。</p>
-  <div class="cta" id="startCta">Space / クリックで開始</div>
-  <div class="cta cta-alt" id="doublesCta">D でダブルス（あなた＋AIパートナー vs CPU2人）</div>
-  <div class="cta cta-alt" id="tossChoice">
-    🎾 コイントスに勝ちました！<br>
-    <span class="diff-opt" id="tossServe" data-choice="serve">1 サーブ</span>
-    <span class="diff-opt" id="tossReceive" data-choice="receive">2 レシーブ</span>
-  </div>
-  <div class="cta cta-alt" id="diffRow">
-    CPUの強さ：
-    <span class="diff-opt" id="diffEasy" data-level="easy">1 Easy</span>
-    <span class="diff-opt on" id="diffNormal" data-level="normal">2 Normal</span>
-    <span class="diff-opt" id="diffHard" data-level="hard">3 Hard</span>
-  </div>
-  <div class="cta cta-alt" id="surfaceRow">
-    サーフェス：
-    <span class="diff-opt on" id="surfHard" data-level="hard">4 ハード</span>
-    <span class="diff-opt" id="surfClay" data-level="clay">5 クレー</span>
-    <span class="diff-opt" id="surfGrass" data-level="grass">6 芝</span>
-  </div>
-  <div class="cta cta-alt" id="roster">
-    <div class="rosterHead">
-      <span>選手設定（1〜5・既定3）</span>
-      <span class="rosterBtns">
-        <span class="rosterBtn" id="rosterReset">既定に戻す</span>
-        <span class="rosterBtn" id="rosterRandom">ランダム</span>
-      </span>
+
+  <!-- 設定＋開始ボタン。マウスだけで完結するが、各ボタンの <kbd> が示すキーでも同じ操作が
+       できる（キー操作は input.js、クリックは hud.js#buildMenu が同じハンドラを呼ぶ）。
+       コイントスに勝ったときは、この塊ごと隠して #tossChoice に差し替える。 -->
+  <div id="menuBody">
+    <div class="menuRow" id="modeRow">
+      <div class="menuLabel">試合形式</div>
+      <div class="segs">
+        <span class="seg on" data-level="singles">シングルス<kbd>Space</kbd></span>
+        <span class="seg" data-level="doubles">ダブルス<kbd>D</kbd></span>
+      </div>
     </div>
-    <!-- タブ（誰の設定か）と能力値の行は hud.js が config.SKILLS / config.ROSTER から組み立てる -->
-    <div class="rosterTabs" id="rosterTabs"></div>
-    <div class="rosterRows" id="rosterRows"></div>
-    <div class="rosterFoot" id="rosterFoot"></div>
+    <div class="menuRow" id="diffRow">
+      <div class="menuLabel">CPUの強さ</div>
+      <div class="segs">
+        <span class="seg" data-level="easy">Easy<kbd>1</kbd></span>
+        <span class="seg on" data-level="normal">Normal<kbd>2</kbd></span>
+        <span class="seg" data-level="hard">Hard<kbd>3</kbd></span>
+      </div>
+    </div>
+    <div class="menuRow" id="surfaceRow">
+      <div class="menuLabel">サーフェス</div>
+      <div class="segs">
+        <span class="seg on" data-level="hard">ハード<kbd>4</kbd></span>
+        <span class="seg" data-level="clay">クレー<kbd>5</kbd></span>
+        <span class="seg" data-level="grass">芝<kbd>6</kbd></span>
+      </div>
+    </div>
+    <div class="menuRow" id="styleRow">
+      <div class="menuLabel">プレースタイル</div>
+      <div class="segs">
+        <span class="seg on" data-level="none">なし<kbd>7</kbd></span>
+        <span class="seg" data-level="serveAndVolley">サーブ&amp;ボレー<kbd>8</kbd></span>
+        <span class="seg" data-level="retriever">リトリーバー<kbd>9</kbd></span>
+        <span class="seg" data-level="aggressiveBaseliner">ベースライナー<kbd>0</kbd></span>
+      </div>
+    </div>
+
+    <div id="roster">
+      <div class="rosterHead">
+        <span>選手設定（つまみをドラッグ／既定3）</span>
+        <span class="rosterBtns">
+          <span class="rosterBtn" id="rosterReset">既定に戻す</span>
+          <span class="rosterBtn" id="rosterRandom">ランダム</span>
+        </span>
+      </div>
+      <!-- タブ（誰の設定か）と能力値のスライダーは hud.js が config.SKILLS / config.ROSTER から組み立てる -->
+      <div class="rosterTabs" id="rosterTabs"></div>
+      <div class="rosterRows" id="rosterRows"></div>
+      <div class="rosterFoot" id="rosterFoot"></div>
+    </div>
+
+    <div class="playBtn" id="playBtn">試合開始</div>
   </div>
-  <div class="cta cta-alt" id="styleRow">
-    プレースタイル：
-    <span class="diff-opt on" id="styleNone" data-level="none">7 なし</span>
-    <span class="diff-opt" id="styleServeVolley" data-level="serveAndVolley">8 サーブ&amp;ボレー</span>
-    <span class="diff-opt" id="styleRetriever" data-level="retriever">9 リトリーバー</span>
-    <span class="diff-opt" id="styleBaseliner" data-level="aggressiveBaseliner">0 ベースライナー</span>
+
+  <div id="tossChoice">
+    🎾 コイントスに勝ちました！
+    <div class="segs tossSegs">
+      <span class="seg" data-choice="serve">サーブ<kbd>1</kbd></span>
+      <span class="seg" data-choice="receive">レシーブ<kbd>2</kbd></span>
+    </div>
   </div>
 </div></div>
 
