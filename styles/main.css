@@ -114,6 +114,25 @@ canvas{display:block}
 #chargeFill{height:100%;width:0%;background:var(--ball)}
 
 /* スマッシュが打てる球が来ている間だけ出る一言（コート上のマーカーと対） */
+/* リプレイ中の表示。中継の「REPLAY」テロップと同じ考え方で画面上部の中央に出し、
+   スキップの操作（Space）も一緒に示す。再生していない間は opacity:0 で隠す。 */
+#replayTag{
+  position:absolute;left:50%;top:14px;transform:translateX(-50%);
+  display:flex;align-items:center;gap:8px;
+  font-size:12px;letter-spacing:.18em;text-transform:uppercase;
+  background:rgba(9,20,34,.82);padding:6px 14px;border-radius:2px;
+  opacity:0;transition:opacity .18s
+}
+#replayTag.on{opacity:1}
+#replayTag .dot{
+  width:8px;height:8px;border-radius:50%;background:#ff4d4d;
+  animation:replayBlink 1s steps(1,end) infinite
+}
+#replayTag .skip{
+  font-size:10px;letter-spacing:.1em;text-transform:none;color:var(--dim)
+}
+@keyframes replayBlink{50%{opacity:.15}}
+
 #smashTip{
   position:absolute;left:50%;bottom:72px;transform:translateX(-50%);
   font-size:12px;letter-spacing:.08em;white-space:nowrap;

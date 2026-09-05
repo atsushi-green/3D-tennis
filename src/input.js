@@ -38,8 +38,14 @@
    * 難易度選択（Digit1〜3）とは表示上・時間軸上で重ならない。
    */
   const TOSS_KEYS = { Digit1: 'serve', Digit2: 'receive' };
+  /**
+   * ポイント間のリプレイを飛ばすキー。以前は「どのキーでも飛ばす」だったが、それだと
+   * 次のポイントに備えて構えのキーに触れただけでリプレイが消えてしまうので、
+   * 試合中は他に用のない Space だけに限定する。
+   */
+  const SKIP_REPLAY = ['Space'];
   /** ブラウザのスクロールを止めたいキー */
-  const SWALLOW = MOVE_LEFT.concat(MOVE_RIGHT, MOVE_UP, MOVE_DOWN, SWING_CODES);
+  const SWALLOW = MOVE_LEFT.concat(MOVE_RIGHT, MOVE_UP, MOVE_DOWN, SWING_CODES, SKIP_REPLAY);
 
   class Input {
     constructor() {
@@ -54,7 +60,7 @@
      *   onChargeRelease:Function, onFormationNet:Function, onFormationBack:Function,
      *   onSelectDifficulty:Function, onSelectSurface:Function, onSelectStyle:Function,
      *   onSelectToss:Function, isAwaitingToss:Function, isUiClick:Function,
-     *   onAnyKey:Function, isStarted:Function}} handlers
+     *   onSkipReplay:Function, isStarted:Function}} handlers
      */
     attach(handlers) {
       addEventListener('keydown', (e) => {
@@ -73,9 +79,9 @@
           else handlers.onStart();
           return;
         }
-        // ポイント間のリプレイをスキップするための合図。ラリー中の操作にも毎回飛ぶが、
-        // リプレイ中でなければ何もしないので実害はない（world.js#skipReplay() 参照）。
-        handlers.onAnyKey();
+        // ポイント間のリプレイをスキップする合図。リプレイ中でなければ何もしない
+        // （world.js#skipReplay() 参照）。Space は試合中この用途にしか使わない。
+        if (SKIP_REPLAY.indexOf(e.code) !== -1) handlers.onSkipReplay();
         if (SWING[e.code] && !this.chargeKey) {
           this.chargeKey = e.code;
           handlers.onChargeStart(SWING[e.code]);

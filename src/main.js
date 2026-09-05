@@ -97,7 +97,9 @@
       cpuStyle = name;
       hud.setStyle(name);
     },
-    onAnyKey: () => world.skipReplay(),
+    // リプレイのスキップは Space だけ（以前はどのキーでも飛んでしまい、ラリー用の
+    // キーに触れただけで意図せずスキップされていた）。
+    onSkipReplay: () => world.skipReplay(),
   });
 
   /** hud.setStamina() に渡す4人ぶんの残量をそのつど組み立てる。 */
@@ -138,6 +140,7 @@
         prevPhase = game.phase;
       }
       world.sync(game, dt);
+      hud.setReplay(world.isReplaying());
       hud.setCharge(game.chargeMeter());
       hud.setSmashTip(game.smashHint);
       syncStamina();

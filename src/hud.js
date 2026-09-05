@@ -35,6 +35,7 @@
         charge: $('charge'),
         chargeFill: $('chargeFill'),
         smashTip: $('smashTip'),
+        replayTag: $('replayTag'),
         roster: $('roster'),
         rosterTabs: $('rosterTabs'),
         rosterRows: $('rosterRows'),
@@ -289,6 +290,15 @@
       el.textContent = hint.ready
         ? '⚡ スマッシュ！ 止まって溜め、印の高さで離す'
         : hint.inTime ? '⚡ スマッシュのチャンス — 印まで先回り' : '⚡ スマッシュ — 急げば届く！';
+    }
+
+    /**
+     * リプレイ中の表示（「リプレイ ／ SPACE でスキップ」）。
+     * 再生そのものは表示側（scene/world.js）が持っていて、ここはその状態を出すだけ。
+     * @param {boolean} on world.isReplaying()
+     */
+    setReplay(on) {
+      this.el.replayTag.classList.toggle('on', on);
     }
 
     /** @param {number} fraction 溜め量 0〜1。0以下なら非表示。 */
