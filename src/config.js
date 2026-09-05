@@ -24,7 +24,11 @@
   const PHYSICS = {
     GRAVITY: -14.0,
     BALL_R: 0.11,
-    RESTITUTION: 0.72, // バウンドの反発係数
+    // バウンドの反発係数。ユーザー報告「クレーとハードでボールが高く跳ねすぎる」を受けて
+    // 0.72→0.65 に落とした（跳ね上がりの高さは初速の2乗に比例するので約-18%）。
+    // サーフェス倍率はハード=1が基準なので、ここを下げるとハード／クレーの両方が下がる。
+    // 芝だけは元の弾み方（実効 0.54）を保つため SURFACE_PRESETS 側で倍率を上げ直してある。
+    RESTITUTION: 0.65,
     FRICTION: 0.93,    // 接地時の水平減衰
     STEP: 1 / 240,     // 物理の固定ステップ
     MAX_DT: 0.05,      // 1フレームで進める上限（タブ復帰時の暴走よけ）
@@ -1029,8 +1033,12 @@
    */
   const SURFACE_PRESETS = {
     hard: { RESTITUTION_MULT: 1, FRICTION_MULT: 1 },
-    clay: { RESTITUTION_MULT: 1.08, FRICTION_MULT: 0.90 },
-    grass: { RESTITUTION_MULT: 0.75, FRICTION_MULT: 1.05 },
+    // クレーは「ハードより高く弾む」性格は残しつつ、跳ねすぎの調整で 1.08→1.05 に。
+    // PHYSICS.RESTITUTION の 0.72→0.65 と合わせて、実効 0.778→0.683（高さで約-23%）。
+    clay: { RESTITUTION_MULT: 1.05, FRICTION_MULT: 0.90 },
+    // 芝は元から低いので今回の調整対象外。PHYSICS.RESTITUTION を下げたぶんを
+    // 0.75→0.83 で打ち消し、実効 0.54 を維持する（0.65×0.83 ≒ 0.72×0.75）。
+    grass: { RESTITUTION_MULT: 0.83, FRICTION_MULT: 1.05 },
   };
   // physics.js が毎バウンド参照する「今効いている」倍率。CPU/PLAYER と同じく、新しい
   // オブジェクトに差し替えるのではなく既存オブジェクトのプロパティを書き換える
