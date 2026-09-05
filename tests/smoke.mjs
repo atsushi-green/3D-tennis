@@ -1871,10 +1871,13 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `stretched-shot miss rate falls monotonically too: ${easyMiss.stretch} > ${normalMiss.stretch} > ${hardMiss.stretch}`);
   // 単調なだけでは「Hardを選んでもほとんど変わらない」状態を防げない（変更前もミス率自体は
   // normal より低かった）。ベンチで体感差が出た比率を下限として固定する：
-  // hard は normal の 1/5 以下、easy は normal の 2.5 倍以上。
-  ok(hardMiss.base <= normalMiss.base * 0.2,
-    `hard's miss rate is at most a fifth of normal's: ${hardMiss.base} vs ${normalMiss.base}`);
-  ok(hardMiss.stretch <= normalMiss.stretch * 0.3,
+  // hard は normal の 1/3 以下、easy は normal の 2.5 倍以上。
+  // （比率は当初 1/5・3/10 だったが、「ノーマルが弱すぎる」という指摘で normal 自体を
+  //  旧normalとhardの中点まで引き上げたぶん、両者の差は当然縮まる。それでも hard が
+  //  はっきり別物であることを担保できる線まで緩めてある。）
+  ok(hardMiss.base <= normalMiss.base * (1 / 3),
+    `hard's miss rate is at most a third of normal's: ${hardMiss.base} vs ${normalMiss.base}`);
+  ok(hardMiss.stretch <= normalMiss.stretch * 0.5,
     `hard barely misses even on stretched shots: ${hardMiss.stretch} vs ${normalMiss.stretch}`);
   ok(easyMiss.base >= normalMiss.base * 2.5,
     `easy misses at least 2.5x as often as normal: ${easyMiss.base} vs ${normalMiss.base}`);
@@ -3206,22 +3209,30 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const { predictLanding, integrate, reflectBounce, netHeightAt } = R.physics;
   const { BALL_R, STEP } = R.config.PHYSICS;
 
+  // ドロップはネットぎりぎり（DROP.CLEARANCE=0.12、ボール半径0.11との差はわずか1cm）を
+  // 狙う球なので、狙う左右位置・深さ・風がぶれると実際にネットに掛かることがある
+  // （サイドへ大きく角度をつけた浅いドロップは、ネットの高い側＝ポスト寄りを越える必要が
+  //  あるぶんリスクが高い＝仕様どおり）。ここで見たいのは「弾道と球質」なので、風を無風に
+  // 固定し、狙いのランダム要素も Math.random を固定して毎回同じ1本にする。
   const shoot = (spin, charge, fromZ) => {
-    const g = new R.Game({ input: fakeInput, hooks: noHooks });
-    g.start();
-    g.phase = 'rally';
-    g.serveInFlight = false;
-    g.you.x = 0; g.you.z = fromZ;
-    // 風はこのブロックの検証対象ではないので必ず無風にする（hit() が ball.wind に入れ直すので
-    // ボール側だけ0にしても効かない）。ドロップはネットぎりぎりを狙う球で、横風でネットの
-    // 高い側（ポスト寄り）へ流されると実際に引っ掛かることがあり、テストが時々落ちていた。
-    g.wind = 0;
-    Object.assign(g.ball, { x: 0, y: 0.8, z: fromZ, live: true, bounces: 1, last: 'cpu', wind: 0 });
-    g.you.chargeSpin = spin;
-    g.you.swingCharge = charge;
-    g.you.chargeStroke = 'forehand';
-    g.hit('you');
-    return g.ball;
+    const origRandom = Math.random;
+    Math.random = () => 0.5;
+    try {
+      const g = new R.Game({ input: fakeInput, hooks: noHooks });
+      g.start();
+      g.phase = 'rally';
+      g.serveInFlight = false;
+      g.you.x = 0; g.you.z = fromZ;
+      g.wind = 0; // hit() が ball.wind に入れ直すので、ボール側だけ0にしても効かない
+      Object.assign(g.ball, { x: 0, y: 0.8, z: fromZ, live: true, bounces: 1, last: 'cpu', wind: 0 });
+      g.you.chargeSpin = spin;
+      g.you.swingCharge = charge;
+      g.you.chargeStroke = 'forehand';
+      g.hit('you');
+      return g.ball;
+    } finally {
+      Math.random = origRandom;
+    }
   };
   // 1バウンド目と2バウンド目の位置（＝どこまで転がるか）
   const bounces = (ball) => {
