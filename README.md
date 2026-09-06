@@ -130,6 +130,7 @@
 index.html          DOM（HUD とスタート画面）と script の読み込み順
 styles/main.css     HUD のスタイル
 vendor/three.min.js three.js r128（同梱）
+assets/ogp.png       SNSカード用の画像（1200x630）。元データと焼き直し手順は assets/ogp.html
 src/
   config.js         寸法・物理・難易度・選手の能力値などのチューニング値
   math.js           clamp / rand / approach など
