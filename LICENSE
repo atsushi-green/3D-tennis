@@ -1,0 +1,78 @@
+Rally One — 3D Tennis
+Copyright (c) 2026 atsushi-green. All rights reserved.
+
+日本語（原文）／English translation follows.
+
+────────────────────────────────────────────────────────
+■ 利用条件（日本語・正文）
+────────────────────────────────────────────────────────
+
+本ソフトウェア（以下「本作品」）の著作権は著作者に帰属します。
+著作者は、本作品について以下のことのみを許諾します。
+
+【許諾すること】
+  1. 公開されているウェブサイト上で本作品をプレイすること。
+  2. 個人的に閲覧・学習する目的で、ソースコードを読むこと。
+
+【許諾しないこと（事前の書面による許諾が必要です）】
+  1. 改変、翻案、二次的著作物の作成、およびそれらの公開・配布。
+  2. 複製物の再配布、再ホスティング、ミラーリング、埋め込み配信。
+  3. 商用利用（有償・無償を問わず、営利目的の一切の利用を含む）。
+  4. 本作品またはその一部を、他のソフトウェア・サービスへ組み込むこと。
+
+【保証の否認】
+  本作品は「現状のまま」提供され、明示黙示を問わずいかなる保証もありません。
+  本作品の使用または使用不能から生じたいかなる損害についても、著作者は
+  責任を負いません。
+
+【第三者ソフトウェアについて】
+  本リポジトリの `vendor/three.min.js` は three.js（Copyright (c) 2010-2021
+  Three.js Authors）であり、MIT License の下で配布されています。上記の条件は
+  three.js には適用されず、three.js は引き続き MIT License に従います。
+  ライセンス表示はファイル先頭のヘッダに保持しています。
+
+【GitHub 上での取り扱いについての注記】
+  本リポジトリは GitHub 上で公開されているため、GitHub の利用規約により、
+  GitHub の利用者は本リポジトリを閲覧および fork することができます。
+  この点は上記の条件に優先します。ただし fork した内容について、改変物の
+  公開・再配布・商用利用を行うことは、本ライセンスの下では許諾されません。
+
+【問い合わせ】
+  上記を超える利用を希望する場合は、GitHub リポジトリの Issue にて
+  著作者へご連絡ください。
+
+────────────────────────────────────────────────────────
+■ Terms of Use (English translation, for reference only.
+  In case of any discrepancy, the Japanese text above prevails.)
+────────────────────────────────────────────────────────
+
+All rights in this software (the "Work") are reserved by the author.
+The author grants ONLY the following permissions:
+
+  1. Playing the Work on the publicly hosted website.
+  2. Reading the source code for personal viewing and study.
+
+The following are NOT permitted without prior written permission:
+
+  1. Modification, adaptation, or creation of derivative works, and the
+     publication or distribution thereof.
+  2. Redistribution, re-hosting, mirroring, or embedded distribution of
+     copies.
+  3. Commercial use of any kind.
+  4. Incorporation of the Work, in whole or in part, into other software
+     or services.
+
+THE WORK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED. THE AUTHOR SHALL NOT BE LIABLE FOR ANY DAMAGES ARISING FROM THE
+USE OF OR INABILITY TO USE THE WORK.
+
+Third-party software: `vendor/three.min.js` is three.js
+(Copyright (c) 2010-2021 Three.js Authors), distributed under the MIT
+License. The terms above do not apply to three.js, which remains under
+the MIT License.
+
+Note on GitHub: because this repository is public on GitHub, GitHub's
+Terms of Service allow GitHub users to view and fork it. That right takes
+precedence over the terms above; however, publishing, redistributing, or
+commercially using modified versions is still not permitted under this
+license.

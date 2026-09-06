@@ -2,6 +2,9 @@
 
 ブラウザで動く3Dテニス。ビルド不要、サーバー不要、ネット接続も不要。
 
+**▶ 遊ぶ: https://atsushi-green.github.io/3D-tennis/**
+（ラリー中はキーボードが必要なので **PC 推奨**。スマホではスタート画面までしか操作できません）
+
 ## 動かす
 
 **`index.html` をダブルクリックするだけ。** ブラウザが開いたら、スタート画面で設定して「試合開始」を押す（キーボードなら Space）。
@@ -180,3 +183,10 @@ src/
 - ロジック層の回帰テストは `node tests/smoke.mjs`。three.js も DOM も使わず、Node だけで検証する。
 - タスクのバックログは [docs/ROADMAP.md](./docs/ROADMAP.md)。`/loop 2h /evolve` のように定期実行すると、
   そこから1件ずつ拾って実装・テスト・コミットする（詳細は [.claude/skills/evolve/SKILL.md](./.claude/skills/evolve/SKILL.md)）。
+
+## ライセンス
+
+著作権は著作者に帰属します（[LICENSE](./LICENSE)）。**公開サイトで遊ぶことと、ソースを読むことだけ**を許諾しています。
+改変・二次配布・再ホスティング・商用利用は許諾していません。
+
+同梱している three.js（`vendor/three.min.js`）だけは MIT License で、上記の条件は適用されません。
