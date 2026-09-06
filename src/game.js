@@ -48,6 +48,21 @@
   }
 
   /**
+   * 打点が「打てる区間のどこ」だったか。+1＝リーチの円に入った瞬間（体のいちばん前）、
+   * 0＝真横、-1＝円を抜ける直前（引きつけきり）。
+   * ボールの通り道がリーチの円を横切る弦の長さは、ボールが左右にどれだけずれているかで
+   * 変わる（真正面の球は前後に広く、体の横をかすめる球は狭い）。前後差(m)をそのまま
+   * 使うと同じ振り方でもコースしだいで引っ張り／流しが入れ替わってしまうので、
+   * その弦の半分で割って正規化する。
+   * @param {number} reach この選手の実効リーチ(m)
+   */
+  function contactTiming(ball, player, reach) {
+    const lat = Math.abs(ball.x - player.x);
+    const half = Math.sqrt(Math.max(reach * reach - lat * lat, 0.01));
+    return clamp((ball.z - player.z) / half, -1, 1);
+  }
+
+  /**
    * 'you'/'youMate' は world +x 側、'cpu'/'cpuMate' は180°回転しているので
    * world -x 側がそれぞれのラケット側（モデルの構造上、腕は常にローカル+x側に作られる）。
    */
@@ -887,7 +902,7 @@
       // 打ち方に対応する能力（フォア／バック／ボレー／スマッシュ）と安定感を、倍率だけの
       // 小さなオブジェクトに畳んで渡す（ai.js は「誰が打つか」を知らないままでいられる）。
       const shot = who === 'you'
-        ? this.playerShot(stroke, ball.z - player.z)
+        ? this.playerShot(stroke, contactTiming(ball, player, PLAYER.REACH * player.attr.reach))
         : isSmash
           ? cpuSmashShot(aimAt, aimDir, smashStretch, shotSkill(player.attr, 'smash'))
           : isVolley
@@ -962,9 +977,9 @@
      * ボレー（'volley-forehand'|'volley-backhand'）も溜めの影響は受けず、代わりに
      * ボールとプレイヤーの左右距離（サービスラインより前で拾った場合のみ）で威力・角度が決まる。
      * @param {'forehand'|'backhand'|'smash'|'volley-forehand'|'volley-backhand'} [stroke]
-     * @param {number} [contactDz] 打点の z - プレイヤーの z（前にあるほど大きい）
+     * @param {number} [contactRel] 打点のタイミング（contactTiming() の +1〜-1）
      */
-    playerShot(stroke = 'forehand', contactDz = TIMING_AIM.NEUTRAL_DZ) {
+    playerShot(stroke = 'forehand', contactRel = TIMING_AIM.NEUTRAL_REL) {
       const lob = this.input.lob;
       const aim = this.input.moveX * INPUT_X_TO_WORLD;
       const charge = this.you.swingCharge;
@@ -1022,7 +1037,9 @@
 
       let x = baseX;
       if (!lob) {
-        const timing = clamp((contactDz - TIMING_AIM.NEUTRAL_DZ) / TIMING_AIM.HALF_BAND, -1, 1);
+        // 引っ張り側（前で捉えた）と流し側（引きつけた）で帯の広さが違う（config 参照）。
+        const off = contactRel - TIMING_AIM.NEUTRAL_REL;
+        const timing = clamp(off / (off >= 0 ? TIMING_AIM.PULL_BAND : TIMING_AIM.FLOW_BAND), -1, 1);
         const pullDir = (stroke === 'forehand' ? -1 : 1) * RACKET_SIDE.you;
         const shiftLimit = HALF_W + TIMING_AIM.OUT_MARGIN;
         // 能力値「安定感」が高いほど、打点がずれてもコースが曲がりにくい（attr.timing）。
