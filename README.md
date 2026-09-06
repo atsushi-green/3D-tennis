@@ -136,7 +136,7 @@ src/
   game.js           ルールと状態遷移（three.js にも DOM にも触らない）
   input.js          キーボード／ポインタ入力
   hud.js            スコアボード・コール表示・スタート画面のGUI（DOM に触る唯一の場所）
-  audio.js          Web Audio による効果音
+  audio.js          Web Audio による効果音（打ち方・スピン・サーフェスで音色を変える3層合成）
   scene/
     renderer.js     レンダラー・カメラ・ライト
     court.js        コート面（ラインは CanvasTexture）とスタンド

@@ -797,6 +797,98 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   }
 }
 
+// --- 打球音・バウンド音のリアル化：hooks.sound に「何をどう打ったか」が渡る ---
+// (audio.js 側の合成そのものは AudioContext が要るのでここでは検証できない。
+//  game.js が渡す引数と、config.js の音色テーブルが揃っていることだけを見る)
+{
+  const sounds = [];
+  const hooksWithSound = { ...noHooks, sound: (name, ...args) => sounds.push({ name, args }) };
+  const last = (name) => sounds.filter((s) => s.name === name).slice(-1)[0].args;
+
+  // サーブ：溜め量に加えて球種（フラット/スピン/スライス）が渡る
+  {
+    const g = new R.Game({ input: fakeInput, hooks: hooksWithSound });
+    g.start();
+    g.you.chargeSpin = 'slice';
+    g.serve('you');
+    const [charge, spin] = last('serve');
+    ok(typeof charge === 'number' && spin === 'slice',
+      `sfx.serve gets the serve's spin, got charge=${charge} spin=${spin}`);
+  }
+
+  // ラリー：チーム・打ち方・溜め量・スピンの4つが渡る
+  {
+    const g = new R.Game({ input: fakeInput, hooks: hooksWithSound });
+    g.start();
+    g.serve('you');
+    Object.assign(g.ball, { bounces: 1, x: g.cpu.x, y: 1.0, z: g.cpu.z, vy: -1 });
+    g.hit('cpu');
+    const [team, stroke, charge, spin] = last('hit');
+    ok(team === 'cpu' && typeof stroke === 'string' && typeof charge === 'number'
+      && ['flat', 'top', 'slice', 'drop'].includes(spin),
+      `sfx.hit gets team/stroke/charge/spin, got ${team} ${stroke} ${charge} ${spin}`);
+  }
+
+  // バウンド：スピンと「跳ねる前の速さ」が渡る（reflectBounce が減速させる前の値）
+  {
+    const g = new R.Game({ input: fakeInput, hooks: hooksWithSound });
+    g.start();
+    g.serve('you');
+    Object.assign(g.ball, {
+      bounces: 0, x: 1.0, y: 0, z: 3, vx: 3, vy: -4, vz: 12, spin: 'top',
+    });
+    const before = Math.hypot(3, -4, 12);
+    g.bounce();
+    const [spin, speed] = last('bounce');
+    ok(spin === 'top', `sfx.bounce gets the ball's spin, got ${spin}`);
+    ok(Math.abs(speed - before) < 1e-9,
+      `sfx.bounce gets the pre-bounce speed (${before.toFixed(2)}), got ${speed}`);
+  }
+}
+
+// --- 音色テーブル（config.AUDIO）が打ち方・サーフェスぶん揃っていて、実際に聞き分けられる差がある ---
+{
+  const { AUDIO } = R.config;
+  const S = AUDIO.IMPACT.STROKE;
+  const layers = ['NOISE_VOL', 'NOISE_HZ', 'NOISE_Q', 'NOISE_DUR', 'BODY_VOL', 'BODY_HZ', 'BODY_DROP', 'BODY_DUR'];
+  // audio.js#strokeVoice / sfx.serve が引ける名前がすべて存在すること
+  for (const name of ['flat', 'top', 'slice', 'drop', 'volley', 'smash', 'serve', 'serveTop', 'serveSlice']) {
+    ok(S[name] && layers.every((k) => typeof S[name][k] === 'number'),
+      `AUDIO.IMPACT.STROKE.${name} defines every layer`);
+  }
+  // 「聞き分けられる」＝実際に差がついていること
+  ok(S.slice.BRUSH_VOL > S.top.BRUSH_VOL && S.top.BRUSH_VOL > S.flat.BRUSH_VOL,
+    'slice hisses more than topspin, and topspin more than flat (BRUSH_VOL)');
+  ok(S.slice.NOISE_HZ > S.flat.NOISE_HZ && S.flat.NOISE_HZ > S.top.NOISE_HZ,
+    'slice is the thinnest/highest and topspin the dullest (NOISE_HZ)');
+  ok(S.smash.NOISE_VOL > S.flat.NOISE_VOL && S.flat.NOISE_VOL > S.drop.NOISE_VOL,
+    'a smash is the loudest impact and a drop shot the softest');
+  ok(S.volley.BODY_DUR < S.flat.BODY_DUR && S.volley.NOISE_DUR < S.flat.NOISE_DUR,
+    'a blocked volley is the shortest impact');
+
+  const B = AUDIO.BOUNCE;
+  for (const name of Object.keys(R.config.SURFACE_PRESETS)) {
+    ok(B.SURFACE[name], `AUDIO.BOUNCE.SURFACE covers the '${name}' court`);
+  }
+  ok(B.SURFACE.hard.BODY_HZ > B.SURFACE.clay.BODY_HZ && B.SURFACE.clay.BODY_HZ > B.SURFACE.grass.BODY_HZ,
+    'hard courts ring highest, grass lowest');
+  ok(B.SURFACE.clay.NOISE_DUR > B.SURFACE.hard.NOISE_DUR,
+    'clay keeps a longer gritty hiss than hard');
+  ok(B.SPIN.top.VOL > B.SPIN.flat.VOL && B.SPIN.flat.VOL > B.SPIN.drop.VOL,
+    'a topspin bounce kicks louder than flat, and a drop shot dies quietest');
+  ok(B.SPIN.slice.SKID_VOL > 0 && B.SPIN.flat.SKID_VOL === 0,
+    'only the sliding shots (slice/drop) get a skid hiss');
+  ok(B.SPEED_MIN_MULT < 1 && B.SPEED_MAX_MULT > 1 && B.SPEED_REF > 0,
+    'bounce volume scales around a reference landing speed');
+
+  // SURFACE.NAME は audio.js がバウンド音を選ぶのに使う（applySurface で切り替わること）
+  R.config.applySurface('clay');
+  ok(R.config.SURFACE.NAME === 'clay', 'applySurface() updates SURFACE.NAME for the bounce voice');
+  R.config.applySurface('hard');
+  ok(R.config.SURFACE.NAME === 'hard', 'applySurface() switches SURFACE.NAME back');
+}
+
+
 // --- 移動は加速度ベース：急に最高速にならず、離しても急停止しない（滑るような自然さ） ---
 {
   const input = { moveX: 0, moveZ: 1, lob: false };

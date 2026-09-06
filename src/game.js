@@ -764,7 +764,7 @@
       const serveCharge = who === 'you' ? this.you.swingCharge : 0;
       ball.impact = FX.IMPACT_DURATION * lerp(1, FX.CHARGE_TIME_BOOST, serveCharge);
       ball.impactPower = serveCharge;
-      this.hooks.sound('serve', serveCharge);
+      this.hooks.sound('serve', serveCharge, spin); // 球種で音色が変わる（audio.js#sfx.serve）
       this.hooks.clearCall();
     }
 
@@ -931,7 +931,8 @@
       player.anim = stroke === 'smash' ? PLAYER.SMASH_ANIM : PLAYER.SWING_ANIM;
       player.stroke = stroke;
       this.lastShotBy[TEAM_OF[who]] = shotLabel(stroke, spin, shot.lob);
-      this.hooks.sound('hit', TEAM_OF[who], stroke, charge); // 音程はチーム単位（誰が打っても同じ）
+      // 音程はチーム単位（誰が打っても同じ）。音色は打ち方(stroke)とスピンで変わる。
+      this.hooks.sound('hit', TEAM_OF[who], stroke, charge, spin);
     }
 
     /** 誰か（serve()/hit()の呼び出し元）が新しく打った瞬間、軌跡をその打点1点から描き直す。 */
@@ -1570,6 +1571,8 @@
     /** @returns {boolean} このバウンドでポイントが決まったか */
     bounce() {
       const ball = this.ball;
+      // 着地の音量に使う「地面へ突っ込んだ速さ」。reflectBounce() が速度を書き換える前に取る。
+      const impactSpeed = Math.hypot(ball.vx, ball.vy, ball.vz);
       // トップスピンは高く弾み、スライスは低く滑る（フラットは倍率1＝従来通り）。反発係数・
       // 摩擦の実装は physics.js の reflectBounce() に一本化してあり（predictBounceApex() も
       // 同じ実装を使う）、ここではその結果の座標を読むだけ。
@@ -1583,7 +1586,9 @@
         this.trail.push({ x: ball.x, y: ball.y, z: ball.z });
       }
       ball.bounces++;
-      this.hooks.sound('bounce');
+      // 音は跳ねる前の速さで鳴らす（reflectBounce() が速度を落とした後だと、
+      // 速い球ほど反発で失う量が大きいぶん音量差が潰れて全部同じ大きさに聞こえる）。
+      this.hooks.sound('bounce', ball.spin || 'flat', impactSpeed);
 
       if (ball.bounces === 1) {
         // サーブがまだ一度も返されていない間の1バウンド目は、通常のラリーの着地判定

@@ -515,15 +515,141 @@
   };
 
   /**
-   * 効果音の揺らぎ。毎回全く同じ音だと単調に聞こえるので、鳴らすたびに
-   * 周波数・長さ・音量を軽くランダムに振り、波形も数種から選ぶ。
-   * 溜め量やフォア/バックなど既存の意図的な音程差を覆い隠さない程度の幅に留める。
+   * 効果音の合成パラメータ（実装は `audio.js`）。単純な正弦波1本ではなく、
+   * 「ノイズ＝ガットが弾ける／地面と擦れる高い成分」＋「ボディ＝ボールとフレームの
+   * 胴鳴り（低く、当たった瞬間から急激に下がる）」＋「ブラシ＝擦る余韻」の3層を
+   * 重ねて1つの打球音・バウンド音にする。層ごとの音量・周波数・長さを打ち方
+   * （フラット／トップスピン／スライス／ボレー／スマッシュ／サーブ／ドロップ）と
+   * サーフェス（ハード／クレー／芝）で変えることで、聞き分けられるようにする。
+   * さらに毎回全く同じ音だと単調に聞こえるので、鳴らすたびに周波数・長さ・音量を
+   * *_JITTER のぶんだけ軽くランダムに振る（打ち方ごとの差を覆い隠さない幅に留める）。
    */
   const AUDIO = {
     PITCH_JITTER: 0.035, // 周波数を ±3.5% ランダムに揺らす
     DUR_JITTER: 0.12,    // 長さを ±12% ランダムに揺らす
     VOL_JITTER: 0.08,    // 音量を ±8% ランダムに揺らす
-    WAVES: ['triangle', 'sine'], // 毎回どちらかをランダムに選ぶ（どちらも柔らかい音色なので違和感が出にくい）
+    WAVES: ['triangle', 'sine'], // tone()（ポイント音）が毎回どちらかをランダムに選ぶ
+    // ノイズ層の材料。毎回作り直すと打球のたびに数千サンプル生成することになるので、
+    // 一度だけ焼いて使い回し、再生のたびに開始位置をランダムにずらして違う音に聞かせる
+    // （歓声 CROWD.MAX_DUR ぶんの長さが要る）。
+    NOISE_BUFFER_SEC: 4.0,
+    ATTACK: 0.002, // 各層の立ち上がり。0だとプツッというデジタルなクリックが乗る
+
+    /**
+     * ラケットのインパクト音。層の意味：
+     * - NOISE_*  ガットがボールを弾く「パコッ」の芯。バンドパスの中心が高いほど鋭い
+     * - BODY_*   フレーム／ボールの胴鳴り。BODY_DROP は減衰し終わりの周波数の倍率
+     * - BRUSH_*  擦る音（ハイパス通しのノイズ）。回転をかけるショットほど長く残す
+     */
+    IMPACT: {
+      TEAM_PITCH: { you: 1, cpu: 0.86 }, // 相手側の打球は少し低く鳴らして聞き分けられるようにする
+      BACKHAND_PITCH_MULT: 0.9,          // バックはフォアよりわずかに低く・こもった音に
+      CHARGE_PITCH: 0.22, // 溜め(0〜1)がこの割合だけ音を高くする
+      CHARGE_GAIN: 0.55,  // 同じく音量を上げる
+      CHARGE_DUR: 0.25,   // 同じく余韻を伸ばす
+      STROKE: {
+        // フラット：芯で捉えた乾いた「パコン」。ノイズが高く強く、擦る音は無い
+        flat: {
+          NOISE_VOL: 0.34, NOISE_HZ: 1500, NOISE_Q: 1.2, NOISE_DUR: 0.045,
+          BODY_VOL: 0.24, BODY_HZ: 300, BODY_DROP: 0.55, BODY_DUR: 0.09,
+          BRUSH_VOL: 0, BRUSH_HZ: 3000, BRUSH_DUR: 0.06,
+        },
+        // トップスピン：擦り上げるので芯は鈍く、代わりにブラシ音が残る
+        top: {
+          NOISE_VOL: 0.21, NOISE_HZ: 1100, NOISE_Q: 1.0, NOISE_DUR: 0.055,
+          BODY_VOL: 0.18, BODY_HZ: 250, BODY_DROP: 0.60, BODY_DUR: 0.11,
+          BRUSH_VOL: 0.11, BRUSH_HZ: 2600, BRUSH_DUR: 0.14,
+        },
+        // スライス：薄く切るので胴鳴りが小さく、高い「シャッ」という擦過音が最も長い
+        slice: {
+          NOISE_VOL: 0.16, NOISE_HZ: 2300, NOISE_Q: 2.0, NOISE_DUR: 0.038,
+          BODY_VOL: 0.10, BODY_HZ: 380, BODY_DROP: 0.72, BODY_DUR: 0.05,
+          BRUSH_VOL: 0.14, BRUSH_HZ: 4200, BRUSH_DUR: 0.17,
+        },
+        // ドロップ：触るだけ。全層とも小さく短い
+        drop: {
+          NOISE_VOL: 0.10, NOISE_HZ: 820, NOISE_Q: 1.4, NOISE_DUR: 0.028,
+          BODY_VOL: 0.08, BODY_HZ: 260, BODY_DROP: 0.80, BODY_DUR: 0.045,
+          BRUSH_VOL: 0.05, BRUSH_HZ: 3600, BRUSH_DUR: 0.10,
+        },
+        // ボレー：振らずにブロックするので、最も短く詰まった「トッ」
+        volley: {
+          NOISE_VOL: 0.20, NOISE_HZ: 900, NOISE_Q: 1.7, NOISE_DUR: 0.026,
+          BODY_VOL: 0.16, BODY_HZ: 230, BODY_DROP: 0.78, BODY_DUR: 0.05,
+          BRUSH_VOL: 0, BRUSH_HZ: 3000, BRUSH_DUR: 0.06,
+        },
+        // スマッシュ：最も大きく鋭い「バコン」。振り抜きの風切り音も少し足す
+        smash: {
+          NOISE_VOL: 0.40, NOISE_HZ: 1900, NOISE_Q: 0.9, NOISE_DUR: 0.06,
+          BODY_VOL: 0.27, BODY_HZ: 340, BODY_DROP: 0.45, BODY_DUR: 0.13,
+          BRUSH_VOL: 0.12, BRUSH_HZ: 3200, BRUSH_DUR: 0.10,
+        },
+        // サーブ（フラット）：スマッシュに次ぐ鋭さ
+        serve: {
+          NOISE_VOL: 0.31, NOISE_HZ: 1700, NOISE_Q: 1.0, NOISE_DUR: 0.05,
+          BODY_VOL: 0.22, BODY_HZ: 320, BODY_DROP: 0.50, BODY_DUR: 0.10,
+          BRUSH_VOL: 0.08, BRUSH_HZ: 3000, BRUSH_DUR: 0.09,
+        },
+        // スピンサーブ（キック）：擦り上げるぶん芯が鈍り、ブラシ音が伸びる
+        serveTop: {
+          NOISE_VOL: 0.24, NOISE_HZ: 1250, NOISE_Q: 1.1, NOISE_DUR: 0.055,
+          BODY_VOL: 0.21, BODY_HZ: 270, BODY_DROP: 0.58, BODY_DUR: 0.12,
+          BRUSH_VOL: 0.14, BRUSH_HZ: 2800, BRUSH_DUR: 0.16,
+        },
+        // スライスサーブ：薄く切る高い擦過音
+        serveSlice: {
+          NOISE_VOL: 0.20, NOISE_HZ: 2200, NOISE_Q: 1.8, NOISE_DUR: 0.042,
+          BODY_VOL: 0.13, BODY_HZ: 360, BODY_DROP: 0.68, BODY_DUR: 0.07,
+          BRUSH_VOL: 0.15, BRUSH_HZ: 4000, BRUSH_DUR: 0.18,
+        },
+      },
+    },
+
+    /**
+     * バウンド音。サーフェス（`SURFACE.NAME`）で地面の鳴り方を、スピンで弾み方を変え、
+     * さらに着地時の速度で音量をスケールさせる（緩い球は小さく、速い球は大きく）。
+     */
+    BOUNCE: {
+      SPEED_REF: 22,      // この速度(m/s)で等倍。速いほど大きく鳴る
+      SPEED_MIN_MULT: 0.45,
+      SPEED_MAX_MULT: 1.35,
+      SURFACE: {
+        // ハード：硬く明るい「タンッ」
+        hard: {
+          NOISE_VOL: 0.19, NOISE_HZ: 1400, NOISE_Q: 0.9, NOISE_DUR: 0.045,
+          BODY_VOL: 0.20, BODY_HZ: 210, BODY_DROP: 0.55, BODY_DUR: 0.09,
+        },
+        // クレー：砂に食われて胴鳴りが小さく、ざらついたノイズが長く残る
+        clay: {
+          NOISE_VOL: 0.30, NOISE_HZ: 520, NOISE_Q: 0.6, NOISE_DUR: 0.09,
+          BODY_VOL: 0.17, BODY_HZ: 165, BODY_DROP: 0.62, BODY_DUR: 0.07,
+        },
+        // 芝：最も柔らかく低い「ボスッ」
+        grass: {
+          NOISE_VOL: 0.22, NOISE_HZ: 380, NOISE_Q: 0.7, NOISE_DUR: 0.06,
+          BODY_VOL: 0.15, BODY_HZ: 140, BODY_DROP: 0.70, BODY_DUR: 0.06,
+        },
+      },
+      // スピンごとの倍率と、滑る球だけに足す擦過音(SKID)。
+      SPIN: {
+        flat: { VOL: 1, HZ: 1, DUR: 1, SKID_VOL: 0 },
+        // トップスピンは食い込んで重く高く弾む
+        top: { VOL: 1.25, HZ: 1.15, DUR: 1.0, SKID_VOL: 0 },
+        // スライスは低く滑る＝擦過音つきで長め
+        slice: { VOL: 0.9, HZ: 0.9, DUR: 1.35, SKID_VOL: 0.12 },
+        // ドロップは死ぬように止まる
+        drop: { VOL: 0.55, HZ: 0.85, DUR: 0.7, SKID_VOL: 0.05 },
+      },
+      SKID_HZ: 3000,  // 擦過音のハイパス
+      SKID_DUR: 0.18,
+    },
+
+    /** ネットコードに当たったときの鈍い音（ガット/テープの damped な振動）。 */
+    NET_IN: {
+      NOISE_VOL: 0.10, NOISE_HZ: 700, NOISE_Q: 3.0, NOISE_DUR: 0.05,
+      BODY_VOL: 0.16, BODY_HZ: 150, BODY_DROP: 0.6, BODY_DUR: 0.16,
+    },
+
     /**
      * 観客のざわめき／歓声。ポイントが決まった瞬間（既存の sfx.point と同時）に鳴らす。
      * ラリーの長さ（game.js#rallyShots）で音量・長さが伸び、決まり方（エース／ウィナー／
@@ -1043,19 +1169,20 @@
    * クレー＝高く弾んで減速（反発を強め、水平方向の減衰を強める＝ラリーが長引きドロップが効く）。
    */
   const SURFACE_PRESETS = {
-    hard: { RESTITUTION_MULT: 1, FRICTION_MULT: 1 },
+    hard: { NAME: 'hard', RESTITUTION_MULT: 1, FRICTION_MULT: 1 },
     // クレーは「ハードより高く弾む」性格は残しつつ、跳ねすぎの調整で 1.08→1.05 に。
     // PHYSICS.RESTITUTION の 0.72→0.57 と合わせて実効 0.778→0.599（高さで約-41%）。
-    clay: { RESTITUTION_MULT: 1.05, FRICTION_MULT: 0.90 },
+    clay: { NAME: 'clay', RESTITUTION_MULT: 1.05, FRICTION_MULT: 0.90 },
     // 芝は元から低いので調整の対象外だが、倍率をそのままにすると PHYSICS.RESTITUTION を
     // 下げたぶんだけ芝も落ちて「死んだコート」になる。0.75→0.83→0.88 と上げ直して
     // 実効 0.54→0.50 に留め、ハード（0.57）より確実に低い、という関係だけを保つ。
-    grass: { RESTITUTION_MULT: 0.88, FRICTION_MULT: 1.05 },
+    grass: { NAME: 'grass', RESTITUTION_MULT: 0.88, FRICTION_MULT: 1.05 },
   };
   // physics.js が毎バウンド参照する「今効いている」倍率。CPU/PLAYER と同じく、新しい
   // オブジェクトに差し替えるのではなく既存オブジェクトのプロパティを書き換える
   // （applySurface() 参照）ので、他ファイルは読み込み時に参照ごと受け取っておける。
-  const SURFACE = { RESTITUTION_MULT: 1, FRICTION_MULT: 1 };
+  // NAME は物理には使わないが、audio.js がバウンド音の音色をサーフェスで変えるのに読む。
+  const SURFACE = { NAME: 'hard', RESTITUTION_MULT: 1, FRICTION_MULT: 1 };
 
   /** @param {'hard'|'clay'|'grass'} name */
   function applySurface(name) {
