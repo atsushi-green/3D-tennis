@@ -57,9 +57,9 @@
    * 立ち上がり(AUDIO.ATTACK)だけ持たせて指数的に減衰するエンベロープ。
    * ATTACK が 0 だと頭にプツッというデジタルなクリックが乗る。
    */
-  function envelope(ac, vol, dur, attack) {
+  function envelope(ac, vol, dur, attack, at = 0) {
     const gain = ac.createGain();
-    const t0 = ac.currentTime;
+    const t0 = ac.currentTime + at;
     const a = Math.min(attack === undefined ? AUDIO.ATTACK : attack, dur * 0.5);
     gain.gain.setValueAtTime(SILENCE, t0);
     gain.gain.linearRampToValueAtTime(Math.max(vol, SILENCE), t0 + a);
@@ -68,13 +68,15 @@
   }
 
   /**
-   * フィルタを通したノイズを1発鳴らす（ノイズ層／ブラシ層／擦過音）。
-   * @param {{vol:number, hz:number, dur:number, q?:number, type?:string}} o
+   * フィルタを通したノイズを1発鳴らす（ノイズ層／ブラシ層／擦過音／拍手の1粒）。
+   * @param {{vol:number, hz:number, dur:number, q?:number, type?:string, at?:number}} o
+   *   at ＝ 今から何秒後に鳴らすか（拍手を時間差でばらまくのに使う。既定は即時）
    */
   function noiseVoice(ac, o) {
     const vol = jVol(o.vol);
     if (!(vol > SILENCE)) return;
     const dur = jDur(o.dur);
+    const at = o.at || 0;
     const buffer = noiseBuffer(ac);
     const src = ac.createBufferSource();
     src.buffer = buffer;
@@ -82,8 +84,8 @@
     filter.type = o.type || 'bandpass';
     filter.frequency.value = jHz(o.hz);
     filter.Q.value = o.q === undefined ? 1 : o.q;
-    const t0 = ac.currentTime;
-    src.connect(filter).connect(envelope(ac, vol, dur)).connect(ac.destination);
+    const t0 = ac.currentTime + at;
+    src.connect(filter).connect(envelope(ac, vol, dur, undefined, at)).connect(ac.destination);
     src.start(t0, Math.random() * Math.max(0, buffer.duration - dur));
     src.stop(t0 + dur);
   }
@@ -147,31 +149,18 @@
     }
   }
 
-  /** ポイントが決まったときの合図音。打撃音ではないので単純なトーンのまま。 */
-  function tone(freq, dur, vol) {
-    const ac = context();
-    if (!ac) return;
-    try {
-      const osc = ac.createOscillator();
-      osc.type = AUDIO.WAVES[Math.floor(Math.random() * AUDIO.WAVES.length)];
-      osc.frequency.value = jHz(freq);
-      const d = jDur(dur);
-      osc.connect(envelope(ac, jVol(vol), d, 0)).connect(ac.destination);
-      osc.start();
-      osc.stop(ac.currentTime + d);
-    } catch (e) {
-      /* 音が出ないだけなのでゲームは続行 */
-    }
-  }
-
   /**
-   * 観客のざわめき／歓声。ホワイトノイズをバンドパスフィルタで曲げ、沸き上がって
+   * 観客のざわめき／歓声＋拍手。ホワイトノイズをバンドパスフィルタで曲げ、沸き上がって
    * 収まる山なりの音量エンベロープを掛けるだけの簡易合成（音源ファイルは使わない）。
-   * ラリーの長さ（rallyShots）で音量・長さが伸び、決まり方（outcome）で盛り上がりの倍率が変わる。
+   * ラリーの長さ（rallyShots）で音量・長さが伸び、決まり方（outcome）で盛り上がりの倍率が、
+   * 勝った側（winner）で音量と明るさが変わる（自分が取れば大きく明るく沸く）。
+   * 歓声だけだと風の音に近く決着の瞬間が分かりにくいので、乾いた短いノイズ＝拍手の粒を
+   * CLAP.WINDOW 秒の中にばらまいて重ねる。
    * @param {number} rallyShots このポイントで何本打たれたか（サーブも1本）
    * @param {'ace'|'winner'|'error'|'doubleFault'} outcome 決まり方
+   * @param {'you'|'cpu'} winner 取った側
    */
-  function crowd(rallyShots, outcome) {
+  function crowd(rallyShots, outcome, winner) {
     const ac = context();
     if (!ac) return;
     try {
@@ -179,9 +168,12 @@
       // EXCITEMENT_SHOTS本で盛り上がりが頭打ちになる目安。エースは定義上ラリー1本
       // （サーブのみ）なので、ここが常に0のまま＝BASE_VOL/BASE_DURより育たない。
       const excitement = clamp((Math.max(1, rallyShots || 1) - 1) / (C.EXCITEMENT_SHOTS - 1), 0, 1);
+      const sideVol = C.WINNER_VOL_MULT[winner] === undefined ? 1 : C.WINNER_VOL_MULT[winner];
+      const sideHz = C.WINNER_FILTER_MULT[winner] === undefined ? 1 : C.WINNER_FILTER_MULT[winner];
       const dur = jDur(lerp(C.BASE_DUR, C.MAX_DUR, excitement));
-      const vol = jVol(lerp(C.BASE_VOL, C.MAX_VOL, excitement) * (C.OUTCOME_VOL_MULT[outcome] || 1));
-      const freq = lerp(C.FILTER_BASE_HZ, C.FILTER_EXCITED_HZ, excitement);
+      const vol = jVol(lerp(C.BASE_VOL, C.MAX_VOL, excitement)
+        * (C.OUTCOME_VOL_MULT[outcome] || 1) * sideVol);
+      const freq = lerp(C.FILTER_BASE_HZ, C.FILTER_EXCITED_HZ, excitement) * sideHz;
 
       const buffer = noiseBuffer(ac);
       const src = ac.createBufferSource();
@@ -195,6 +187,21 @@
       src.connect(filter).connect(envelope(ac, vol, dur, C.ATTACK)).connect(ac.destination);
       src.start(t0, Math.random() * Math.max(0, buffer.duration - dur));
       src.stop(t0 + dur);
+
+      // 拍手。粒ごとに開始時刻をずらすことで、揃った1発ではなくパチパチとばらける。
+      const P = C.CLAP;
+      const claps = Math.round(lerp(P.MIN, P.MAX, excitement)
+        * (C.OUTCOME_VOL_MULT[outcome] || 1) * sideVol);
+      for (let i = 0; i < claps; i++) {
+        noiseVoice(ac, {
+          type: 'highpass',
+          vol: P.VOL,
+          hz: P.HZ,
+          q: 0.7,
+          dur: P.DUR,
+          at: P.DELAY + Math.random() * P.WINDOW,
+        });
+      }
     } catch (e) {
       /* 音が出ないだけなのでゲームは続行 */
     }
@@ -283,10 +290,13 @@
     },
     /** ネットコードに当たる鈍い音（低く長め＝テープ/ガットの damped な振動）。 */
     netIn: () => layered(AUDIO.NET_IN),
-    point: (winner, outcome, rallyShots) => {
-      tone(winner === 'you' ? 660 : 220, 0.16, 0.14);
-      crowd(rallyShots, outcome);
-    },
+    /**
+     * ポイントが決まった瞬間。以前はここで「ポン」という電子音を鳴らして音程で
+     * どちらが取ったかを示していたが、他の音を実際の打球音に寄せた結果それだけが
+     * 浮いて聞こえるようになったため廃止した（config.js の CROWD.WINNER_VOL_MULT
+     * のコメント参照）。今は歓声と拍手の大きさ・明るさだけで勝敗が分かる。
+     */
+    point: (winner, outcome, rallyShots) => crowd(rallyShots, outcome, winner),
   };
 
   RallyOne.audio = { unlock, sfx };

@@ -881,6 +881,16 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(B.SPEED_MIN_MULT < 1 && B.SPEED_MAX_MULT > 1 && B.SPEED_REF > 0,
     'bounce volume scales around a reference landing speed');
 
+  // ポイントが決まったときの「ポン」という電子音は廃止し、歓声と拍手だけで勝敗を示す
+  const C = AUDIO.CROWD;
+  ok(AUDIO.WAVES === undefined,
+    'the single-oscillator point beep (and its WAVES table) is gone');
+  ok(C.WINNER_VOL_MULT.you > C.WINNER_VOL_MULT.cpu
+    && C.WINNER_FILTER_MULT.you > C.WINNER_FILTER_MULT.cpu,
+    'the crowd swells louder and brighter when you win the point than when the CPU does');
+  ok(C.CLAP && C.CLAP.MAX > C.CLAP.MIN && C.CLAP.WINDOW > 0 && C.CLAP.DUR > 0,
+    'applause scatters more claps as the point gets more exciting');
+
   // SURFACE.NAME は audio.js がバウンド音を選ぶのに使う（applySurface で切り替わること）
   R.config.applySurface('clay');
   ok(R.config.SURFACE.NAME === 'clay', 'applySurface() updates SURFACE.NAME for the bounce voice');
