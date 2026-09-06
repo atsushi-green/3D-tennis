@@ -205,17 +205,19 @@
         // 既定（全項目3）ならすべて 1.0＝設定を触らない限り従来と完全に同じ挙動になる。
         attr: ATTRS.you,
       };
+      // chaseDist＝この球を追って走った距離、settleT＝目標地点に着いてから動かずに
+      // 待っている秒数（どちらも moveTowards() が更新する。hit() の「余裕」判定に使う）。
       this.cpu = {
-        x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, chaseDist: 0, stroke: 'forehand', prep: null, stamina: 1,
+        x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, stamina: 1,
         attr: ATTRS.cpu,
       };
       // ダブルス（this.doubles === true）のときだけ動く AI パートナー。シングルスでは未使用のまま。
       this.youMate = {
-        x: 0, z: DOUBLES.NET_Z_YOU, anim: 0, speed: 0, chaseDist: 0, stroke: 'forehand', prep: null, stamina: 1,
+        x: 0, z: DOUBLES.NET_Z_YOU, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, stamina: 1,
         attr: ATTRS.youMate,
       };
       this.cpuMate = {
-        x: 0, z: DOUBLES.NET_Z_CPU, anim: 0, speed: 0, chaseDist: 0, stroke: 'forehand', prep: null, stamina: 1,
+        x: 0, z: DOUBLES.NET_Z_CPU, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, stamina: 1,
         attr: ATTRS.cpuMate,
       };
 
@@ -864,6 +866,14 @@
         ? 0
         : clamp((player.chaseDist - CPU.STRETCH_DIST_MIN)
           / (CPU.STRETCH_DIST_MAX - CPU.STRETCH_DIST_MIN), 0, 1);
+      // スマッシュだけは走行距離では「苦しさ」を測れない。ai.smashApproach() は高く
+      // 上がった球に対して落下点へ先回りし、そこで待ってから叩く動きをするので、
+      // 走った距離は長い（＝stretch は最大）のに打つ瞬間は棒立ちで余裕たっぷり、という
+      // 組み合わせが普通に起きる。これが「ダブルスの味方が、十分間に合っているのに
+      // 弱いスマッシュしか打てない」の正体だったので、落下点で待てていた時間
+      // （settleT）のぶんだけ苦しさを打ち消す（SMASH_SETTLE_T 秒待てていれば余裕＝0）。
+      const smashStretch = stretch
+        * (1 - clamp(player.settleT / CPU.SMASH_SETTLE_T, 0, 1));
       // ダブルスはラリーが長引きやすく、同じロブ選択率・同じ山なり化の度合いでも
       // 1ポイント中の絶対数が増えて目立つため、DOUBLES.LOB_SCALE / ARC_SCALE で
       // 抑える（config.js のコメント参照）。
@@ -879,7 +889,7 @@
       const shot = who === 'you'
         ? this.playerShot(stroke, ball.z - player.z)
         : isSmash
-          ? cpuSmashShot(aimAt, aimDir, stretch, shotSkill(player.attr, 'smash'))
+          ? cpuSmashShot(aimAt, aimDir, smashStretch, shotSkill(player.attr, 'smash'))
           : isVolley
             ? cpuVolleyShot(aimAt, aimDir, stretch, ball.y, shotSkill(player.attr, 'volley'))
             : cpuShot(aimAt, aimDir, stretch, lobScale, arcScale, shotSkill(player.attr, baseStroke));
@@ -1487,6 +1497,10 @@
       const moved = Math.hypot(actor.x - before.x, actor.z - before.z);
       actor.speed = moved / dt;
       actor.chaseDist += moved;
+      // 目標地点に着いて動かずにいる間だけ積む「待てている時間」。走り出したら0に戻る。
+      // 走行距離(chaseDist)だけでは「遠くまで走ったが、先回りして落下点で待っていた」
+      // 状況が「苦しい」と誤判定されるので、その打ち消しに使う（hit() のスマッシュ）。
+      actor.settleT = actor.speed <= CPU.SETTLE_SPEED ? actor.settleT + dt : 0;
       this.drainStamina(actor, moved);
     }
 

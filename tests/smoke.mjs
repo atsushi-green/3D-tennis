@@ -3550,6 +3550,64 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(mateSpot !== null && mateSpot.z < 0, 'the partner does the same on its own (z<0) half');
 }
 
+// --- CPU/AI：先回りの対象と「スマッシュ」の判定条件が食い違わない ---
+// (退行テスト: 先回りの条件だけ「頂点3.0m以上＝完全なロブ」と厳しかった頃は、頂点が
+//  2.3〜2.9m の浮いた球は先回りの対象外のまま走って追いかけ、走行中に打点の高さの条件
+//  （CPU.SMASH_MIN_Y）だけ満たして「追い込まれたスマッシュ」＝最弱の一撃になっていた。
+//  ダブルスの味方が下手なスマッシュしか打てない主因だった)
+{
+  const { CPU, DOUBLES, PHYSICS } = R.config;
+  const { smashApproach } = R.ai;
+  const { solveShot } = R.physics;
+  const from = { x: 0, y: 1.0, z: -HALF_L + 1 };
+  // ロブほど高くはないが、ネット際の選手の頭上を 2.6m まで浮いて越えてくる球
+  const floater = {
+    ...from,
+    ...solveShot(from, { x: 0, y: PHYSICS.BALL_R, z: 8.0 }, 1.15),
+    bounces: 0, age: 0, spin: 'flat', wind: 0,
+  };
+  const atNet = { x: 0, z: DOUBLES.NET_Z_CPU };
+  const spot = smashApproach(floater, atNet, 1);
+  ok(spot !== null, 'a floating high ball (not a full lob) is also met in the air');
+  ok(CPU.SMASH_LOB_PEAK < CPU.SMASH_MIN_Y + 0.5,
+    `the interception threshold stays close to the height that hit() calls a smash, got ${CPU.SMASH_LOB_PEAK} vs ${CPU.SMASH_MIN_Y}`);
+}
+
+// --- CPU/AI：落下点で待ってから叩いたスマッシュはフルパワー（走った距離では弱くならない） ---
+// (退行テスト: 苦しさ(stretch)を「その球を追って走った距離」だけで測っていた頃は、
+//  ロブに先回りして落下点で待っていた＝十分間に合っている場合でも、そこまで走った距離の
+//  ぶんだけ最弱のスマッシュになっていた。ユーザー報告「ダブルスの味方のスマッシュが下手。
+//  十分間に合っていても弱い」)
+{
+  const { CPU } = R.config;
+  const smashSpeed = (settleT) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.cpu.x = 0; g.cpu.z = 4;
+    g.cpu.chaseDist = CPU.STRETCH_DIST_MAX; // コートの端から端まで走ってきた
+    g.cpu.settleT = settleT;
+    Object.assign(g.ball, {
+      x: 0.3, y: CPU.SMASH_MIN_Y + 0.25, z: 4, vx: 0, vy: -3, vz: -2, bounces: 0, last: 'you', age: 1,
+    });
+    g.hit('cpu');
+    ok(g.cpu.stroke === 'smash', `precondition: it is a smash, got ${g.cpu.stroke}`);
+    return Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz);
+  };
+  const origRandom = Math.random;
+  Math.random = () => 0.5; // 狙いのばらつきが速さの差を上回らないように
+  let running;
+  let settled;
+  try {
+    running = smashSpeed(0);                     // 走りながら叩いた
+    settled = smashSpeed(CPU.SMASH_SETTLE_T);    // 落下点で待ってから叩いた
+  } finally {
+    Math.random = origRandom;
+  }
+  ok(settled > running * 1.5,
+    `a smash hit after settling under the ball is far stronger: settled=${settled.toFixed(1)} running=${running.toFixed(1)}`);
+}
+
 // --- CPU/AI：ネットへ詰めている間は、下がらずに前で迎え撃つ位置を返す（netRushPosition） ---
 {
   const { CPU } = R.config;
