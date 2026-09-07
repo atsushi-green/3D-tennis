@@ -32,6 +32,8 @@
   const STYLE_KEYS = {
     Digit7: 'none', Digit8: 'serveAndVolley', Digit9: 'retriever', Digit0: 'aggressiveBaseliner',
   };
+  /** スタート画面でのみ有効。ガイド付きモード（打つ方向の表示）の入/切を切り替える */
+  const GUIDE_KEYS = ['KeyG'];
   /**
    * トス（コイントス）に勝った人間だけが選ぶ。スタート画面の各種選択が終わった後の
    * 別画面（handlers.isAwaitingToss()）でだけ意味を持つので、Digit1/2 を使い回しても
@@ -59,6 +61,7 @@
      * @param {{onStart:Function, onStartDoubles:Function, onChargeStart:Function,
      *   onChargeRelease:Function, onFormationNet:Function, onFormationBack:Function,
      *   onSelectDifficulty:Function, onSelectSurface:Function, onSelectStyle:Function,
+     *   onToggleGuide:Function,
      *   onSelectToss:Function, isAwaitingToss:Function,
      *   onSkipReplay:Function, isStarted:Function}} handlers
      */
@@ -76,6 +79,7 @@
           else if (DIFFICULTY_KEYS[e.code]) handlers.onSelectDifficulty(DIFFICULTY_KEYS[e.code]);
           else if (SURFACE_KEYS[e.code]) handlers.onSelectSurface(SURFACE_KEYS[e.code]);
           else if (STYLE_KEYS[e.code]) handlers.onSelectStyle(STYLE_KEYS[e.code]);
+          else if (GUIDE_KEYS.indexOf(e.code) !== -1) handlers.onToggleGuide();
           else handlers.onStart();
           return;
         }

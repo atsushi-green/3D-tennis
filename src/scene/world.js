@@ -37,10 +37,11 @@
     const impactFlash = scene3d.createImpactFlash();
     const trail = scene3d.createTrail();
     const smashHint = scene3d.createSmashHint();
+    const swingGuide = scene3d.createSwingGuide();
     scene.add(
       you, cpu, youMate, cpuMate, ballMesh,
       shadows.ball, shadows.you, shadows.cpu, shadows.youMate, shadows.cpuMate,
-      impactFlash, trail, smashHint,
+      impactFlash, trail, smashHint, swingGuide,
     );
 
     addEventListener('resize', stage.resize);
@@ -193,6 +194,7 @@
           applyFrame(frame, dt, false);
           scene3d.updateTrail(trail, NO_TRAIL); // 再生そのものが「振り返り」なので軌跡は隠す
           scene3d.placeSmashHint(smashHint, null);
+          scene3d.placeSwingGuide(swingGuide, null, state.you);
           placeReplayCamera(frame, dt);
           return;
         }
@@ -210,6 +212,8 @@
       scene3d.updateTrail(trail, state.phase === 'rally' ? NO_TRAIL : state.trail);
       // スマッシュの先回り地点。打てる球が来ていないフレームは state.smashHint が null になる。
       scene3d.placeSmashHint(smashHint, state.smashHint);
+      // ガイド付きモードの「いま離したらここへ飛ぶ」。それ以外は state.swingGuide が null。
+      scene3d.placeSwingGuide(swingGuide, state.swingGuide, state.you);
 
       syncCamera(state.you, dt);
     }

@@ -965,6 +965,30 @@
   };
 
   /**
+   * ガイド付きモード（スタート画面で選ぶ）。溜めている間ずっと「いまキーを離したら、
+   * どのタイミングで当たって、どこへ飛ぶか」をコート上の目印と画面下の目盛りで見せる。
+   * 表示専用で、打球そのものには一切影響しない（game.js#swingGuidePreview が作る値を
+   * scene/hint.js と hud.js が描くだけ）。
+   * 「引きつけているつもりでも流れている感じがしない」＝タイミングと結果の対応が
+   * 見えないことが分かりにくさの正体なので、その対応をそのまま画面に出す。
+   */
+  const GUIDE = {
+    // |timing| がこれ以下なら「素直」（狙ったところへ真っすぐ）と表示する。
+    NEUTRAL_BAND: 0.3,
+    // 相手コートの奥は画面上では小さく映るので、輪も線もはっきり見える太さにする。
+    RING_R: 1.15,      // 予想着地点に置く輪の半径(m)
+    RING_W: 0.24,      // 輪の太さ(m)
+    DOT_R: 0.34,       // 輪の中心に置く点の半径(m)
+    LINE_W: 0.22,      // 打点から着地点へ引く線の太さ(m)
+    OPACITY: 0.92,
+    LINE_OPACITY: 0.5,
+    COLOR_PULL: 0xff9f45,  // 引っ張り（早く振り出した）
+    COLOR_STRAIGHT: 0xe8eef5, // 素直
+    COLOR_FLOW: 0x5ad2ff,  // 流し（引きつけて振った）
+    COLOR_EARLY: 0x8a99ab, // いま離すと空振り（まだボールが来ていない）
+  };
+
+  /**
    * ラリー中の直近1打の軌跡表示。誰が打ったか（you/cpu/youMate/cpuMate）に関わらず、
    * IN/OUTにも関わらず、常に一番新しい1本だけ残す（次に誰かが打った瞬間に描き直す）。
    * ラリー中は隠し、ポイントが決まった後にだけ見せる（world.js 参照）。落下予測マーカーを
@@ -1458,7 +1482,7 @@
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
-    CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT,
+    CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT, GUIDE,
     SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, REPLAY, STAMINA, TOSS, OFFICIALS,
     STANDS, SPECTATORS,
     SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, ATTR_SPREAD, ATTRS, NEUTRAL_ATTR,

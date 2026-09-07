@@ -51,6 +51,17 @@
   <div id="call"><div class="big" id="callBig"></div><div class="sub" id="callSub"></div><div class="shot" id="callShot"></div></div>
   <div id="replayTag"><span class="dot"></span>リプレイ<span class="skip">SPACE でスキップ</span></div>
   <div id="charge"><div id="chargeFill"></div></div>
+  <!-- ガイド付きモードのタイミング目盛り。溜めている間だけ出る（hud.setSwingGuide が制御）。
+       左＝早く振り出す（引っ張り）、右＝引きつける（流し）で、針が「いま離したら」の位置。 -->
+  <div id="guide">
+    <div id="guideText"></div>
+    <div id="guideBar">
+      <div class="guideZone pull">引っ張り</div>
+      <div class="guideZone straight">素直</div>
+      <div class="guideZone flow">流し</div>
+      <div id="guideNeedle"></div>
+    </div>
+  </div>
   <div id="smashTip"></div>
   <div id="keys">
     <span><b>←→</b> 左右 / 打つ方向</span>
@@ -95,6 +106,13 @@
         <span class="seg on" data-level="hard">ハード<kbd>4</kbd></span>
         <span class="seg" data-level="clay">クレー<kbd>5</kbd></span>
         <span class="seg" data-level="grass">芝<kbd>6</kbd></span>
+      </div>
+    </div>
+    <div class="menuRow" id="guideRow">
+      <div class="menuLabel">ガイド</div>
+      <div class="segs">
+        <span class="seg on" data-level="off">なし<kbd>G</kbd></span>
+        <span class="seg" data-level="on">打つ方向を表示<kbd>G</kbd></span>
       </div>
     </div>
     <div class="menuRow" id="styleRow">

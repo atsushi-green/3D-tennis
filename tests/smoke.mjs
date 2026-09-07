@@ -1184,6 +1184,85 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `the pull-to-flow range is wide enough to aim with, got ${TIMING_AIM.FLOW_BAND_T + TIMING_AIM.PULL_BAND_T}s`);
 }
 
+// --- ガイド付きモード：溜めている間、「いま離したらどこへ飛ぶか」を出す ---
+{
+  const { PLAYER, GUIDE } = R.config;
+  /** 自分に向かってまっすぐ飛んでくる、バウンド済みの球を作って溜め始めた状態 */
+  const charging = (guideOn) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.setGuide(guideOn);
+    g.phase = 'rally';
+    g.you.x = 0; g.you.z = -8;
+    Object.assign(g.ball, {
+      x: 0.4, y: 1.2, z: -2.0, vx: 0, vy: -1.0, vz: -14,
+      bounces: 1, live: true, last: 'cpu', spin: 'flat', wind: 0, age: 0.5,
+    });
+    g.chargeStart('flat');
+    return g;
+  };
+
+  // ガイドを切っていれば何も出ない（既定はガイドなし）
+  {
+    const g = charging(false);
+    g.update(1 / 60);
+    ok(g.swingGuide === null, 'no guide unless the guided mode is on');
+    ok(new R.Game({ input: fakeInput, hooks: noHooks }).guide === false,
+      'the guided mode is off by default');
+  }
+
+  // 溜めながら待つほど、引っ張り→素直→流しへ連続的に変わっていく
+  {
+    const g = charging(true);
+    const seen = [];
+    for (let i = 0; i < 40 && g.you.charging && g.phase === 'rally'; i++) {
+      g.update(1 / 60);
+      if (g.swingGuide) seen.push({ ...g.swingGuide });
+    }
+    ok(seen.length > 5, `the guide is produced every frame while charging, got ${seen.length}`);
+    ok(seen[0].tooEarly === true,
+      'while the ball is still far, it says releasing now would miss entirely');
+    const last = seen[seen.length - 1];
+    ok(last.tooEarly === false && last.timing < -0.9,
+      `by the time the ball is on you it reads as a full flow shot, got timing=${last.timing}`);
+    ok(seen.some((s) => Math.abs(s.timing) <= GUIDE.NEUTRAL_BAND),
+      'and it passes through the straight (no shift) zone on the way');
+    // タイミングが遅くなる（＝待ち時間が短くなる）順に並んでいること
+    const waits = seen.map((s) => s.waited);
+    ok(waits.every((w, i) => i === 0 || w <= waits[i - 1] + 1e-9),
+      'the waiting time counts down as the ball approaches');
+  }
+
+  // ガイドの着地点は、実際にその待ち時間で打ったときの狙いと一致する
+  {
+    const g = charging(true);
+    for (let i = 0; i < 18 && g.you.charging && g.phase === 'rally'; i++) g.update(1 / 60);
+    const guide = g.swingGuide;
+    ok(!!guide && !guide.tooEarly, 'precondition: the guide is showing a real shot');
+    const shot = g.playerShot(g.you.chargeStroke || 'forehand', guide.waited);
+    ok(Math.abs(shot.target.x - guide.x) < 1e-9,
+      `the guide shows the same course the shot would take: guide=${guide.x} shot=${shot.target.x}`);
+  }
+
+  // 打った瞬間（溜めが終わる）と、ラリー以外の場面では出さない
+  {
+    const g = charging(true);
+    g.update(1 / 60);
+    ok(g.swingGuide !== null, 'precondition: showing while charging');
+    g.chargeRelease();
+    g.update(1 / 60);
+    ok(g.swingGuide === null, 'the guide disappears once the swing is released');
+  }
+
+  // スイングの有効時間より遠い球には「まだ早い」を出す（＝いま離すと空振り）
+  {
+    const g = charging(true);
+    g.ball.z = -8 + PLAYER.REACH + 6; // 6m 先＝どう見ても届かない
+    g.update(1 / 60);
+    ok(g.swingGuide.tooEarly === true, 'a ball that far away cannot be hit by releasing now');
+  }
+}
+
 // --- サーブは「長く溜めるほど強い」のではなく、ちょうど良いタイミングで離すと最強、
 //     早すぎても遅すぎても弱くなる（三角形のカーブ） ---
 {

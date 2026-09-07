@@ -60,6 +60,32 @@
   const ACTORS = Object.keys(TEAM_OF);
 
   /**
+   * 振り出しの早さ（スイングがボールを待った秒数）を -1〜+1 に直したもの。
+   * +1＝早く振り出した＝引っ張り、0＝素直、-1＝引きつけて振った＝流し。
+   */
+  function swingTiming(waited) {
+    const off = waited - TIMING_AIM.NEUTRAL_WAIT_T;
+    return clamp(off / (off >= 0 ? TIMING_AIM.PULL_BAND_T : TIMING_AIM.FLOW_BAND_T), -1, 1);
+  }
+
+  /**
+   * タイミングによるコースのずれを足した、着地点の左右(x)。
+   * フォアとバックでは体を横切る向きが逆なので、引っ張る方向も逆になる（pullDir）。
+   * ガイド表示（swingGuidePreview）も同じ式を通す＝ガイドと実際の打球が必ず一致する。
+   * @param {number} baseX ←→ の狙い（タイミングを加える前の着地点の左右）
+   * @param {number} timing swingTiming() の -1〜+1
+   * @param {number} timingAttr 能力値「安定感」の倍率（高いほどずれにくい）
+   */
+  function aimWithTiming(baseX, stroke, timing, timingAttr) {
+    const pullDir = (stroke === 'forehand' ? -1 : 1) * RACKET_SIDE.you;
+    const shiftLimit = HALF_W + TIMING_AIM.OUT_MARGIN;
+    return clamp(
+      baseX + timing * pullDir * TIMING_AIM.MAX_SHIFT * timingAttr,
+      -shiftLimit, shiftLimit,
+    );
+  }
+
+  /**
    * ボールが今の速度のまま直進した場合、プレイヤーの奥行き(z)まで届く瞬間の x 座標（仮想延長線）。
    * バウンドは vx/vz を同じ係数で減速させるだけで比（＝軌道の向き）は変えないので、
    * バウンドをまたいでもこの直線予測はそのまま成立する。まだボールが遠いうちに判定しても、
@@ -246,6 +272,17 @@
       this.started = false;
       /** true ならダブルス（you+youMate vs cpu+cpuMate）。既定はシングルス。 */
       this.doubles = false;
+      /**
+       * ガイド付きモード（スタート画面で選ぶ）。true の間、溜めている最中ずっと
+       * 「いま離したらどこへ飛ぶか」を swingGuide に入れ続ける。表示専用。
+       */
+      this.guide = false;
+      /**
+       * ガイド付きモードの表示内容。毎フレーム swingGuidePreview() が入れ直す
+       * （ガイドを出す場面でなければ null）。smashHint と同じく表示専用の値で、
+       * ゲームの判定はここを一切読まない（scene/hint.js と hud.js だけが使う）。
+       */
+      this.swingGuide = null;
       /** ダブルスの AI パートナー(youMate)に指示する定位置。'net'（前へ）か 'back'（下がれ）。 */
       this.youMateFormation = 'net';
       /** true の間、ボールはトス中（重力で上下するだけ）。溜めキーを離して打つまで待つ。 */
@@ -959,6 +996,69 @@
         : TIMING_AIM.NEUTRAL_WAIT_T;
     }
 
+    /**
+     * ガイド付きモードの入/切（スタート画面から。試合中に切り替えても壊れない）。
+     * @param {boolean} on
+     */
+    setGuide(on) {
+      this.guide = !!on;
+      if (!this.guide) this.swingGuide = null;
+    }
+
+    /**
+     * いま溜めキーを離したとして、スイングがボールを待つ秒数（＝swingWaited() の予測値）。
+     * checkSwings() が実際に当たりを取るのと同じ条件を、予測した軌道の上で探す。
+     * 走って追いついている最中でも「今の立ち位置のまま待った場合」で見積もる（表示用の
+     * 目安なので、実際に動きながら打てば多少ずれる）。
+     * @returns {number|null} すでに届く位置なら0。スイングの有効時間内に届かないなら null
+     *   （＝いま離すと空振り）。
+     */
+    waitUntilInReach() {
+      const ball = this.ball;
+      const you = this.you;
+      const reach = PLAYER.REACH * you.attr.reach;
+      // サーブは1バウンドするまで打てない（checkSwings() の mustBounceFirst と同じ条件）
+      const canHit = (at, bounces) => at.z < PLAYER.NET_MARGIN && at.y < PLAYER.REACH_Y
+        && !(this.serveInFlight && bounces < 1)
+        && Math.hypot(at.x - you.x, at.z - you.z) < reach;
+      if (canHit(ball, ball.bounces)) return 0;
+      const window = predictWindow(ball, (at) => canHit(at, at.bounces), PLAYER.SWING_WINDOW, 1);
+      return window ? window.enter.t : null;
+    }
+
+    /**
+     * ガイド付きモードの表示内容。「いまキーを離したら、どのタイミング（引っ張り／素直／
+     * 流し）で当たって、どこへ飛ぶか」。着地点は実際に打つときと同じ式（aimWithTiming）を
+     * 通すので、ガイドと実際の打球は必ず一致する（深さのばらつき SHOT.DRIVE_Z_SPREAD の
+     * ぶんだけ前後する）。
+     * @returns {{timing:number, x:number, z:number, waited:number, tooEarly:boolean}|null}
+     */
+    swingGuidePreview() {
+      if (!this.guide || this.phase !== 'rally' || !this.you.charging) return null;
+      const ball = this.ball;
+      if (!ball.live || ball.last === 'you') return null;
+
+      const wait = this.waitUntilInReach();
+      // まだボールが遠い＝いま離しても当たらない。「早すぎる」ことだけ伝える（コースは、
+      // 一番早く当たったときと同じ＝引っ張り最大の向きを出しておく）。
+      const tooEarly = wait === null;
+      const timing = swingTiming(tooEarly ? PLAYER.SWING_WINDOW : wait);
+      const stroke = this.you.chargeStroke || classifyStroke('you', ball, this.you);
+      const lob = this.input.lob;
+      const charge = clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1);
+      const baseX = this.input.moveX * INPUT_X_TO_WORLD !== 0
+        ? this.input.moveX * INPUT_X_TO_WORLD * SHOT.AIM_X
+        : -signOr(this.you.x, 1) * SHOT.DEFAULT_X;
+      return {
+        timing,
+        tooEarly,
+        waited: tooEarly ? PLAYER.SWING_WINDOW : wait,
+        lob,
+        x: lob ? baseX : aimWithTiming(baseX, stroke, timing, this.you.attr.timing),
+        z: lob ? SHOT.LOB_Z : lerp(SHOT.TAP_Z, SHOT.CHARGE_Z, charge),
+      };
+    }
+
     /** 誰か（serve()/hit()の呼び出し元）が新しく打った瞬間、軌跡をその打点1点から描き直す。 */
     resetTrail() {
       this.trail = [{ x: this.ball.x, y: this.ball.y, z: this.ball.z }];
@@ -1035,20 +1135,10 @@
       // 溜めるほど深く。速さと深さの両方が変わるので「強い球を打った」感が出る。
       const depth = lerp(SHOT.TAP_Z, SHOT.CHARGE_Z, charge);
 
-      let x = baseX;
-      if (!lob) {
-        // +1＝早く振り出した（引っ張り）、-1＝引きつけて振った（流し）。
-        // 引っ張り側と流し側で帯の広さが違う（config 参照）。
-        const off = waited - TIMING_AIM.NEUTRAL_WAIT_T;
-        const timing = clamp(
-          off / (off >= 0 ? TIMING_AIM.PULL_BAND_T : TIMING_AIM.FLOW_BAND_T), -1, 1,
-        );
-        const pullDir = (stroke === 'forehand' ? -1 : 1) * RACKET_SIDE.you;
-        const shiftLimit = HALF_W + TIMING_AIM.OUT_MARGIN;
-        // 能力値「安定感」が高いほど、打点がずれてもコースが曲がりにくい（attr.timing）。
-        const maxShift = TIMING_AIM.MAX_SHIFT * attr.timing;
-        x = clamp(baseX + timing * pullDir * maxShift, -shiftLimit, shiftLimit);
-      }
+      // 能力値「安定感」が高いほど、タイミングがずれてもコースが曲がりにくい（attr.timing）。
+      const x = lob
+        ? baseX
+        : aimWithTiming(baseX, stroke, swingTiming(waited), attr.timing);
 
       return {
         target: {
@@ -1163,6 +1253,7 @@
 
       // 構えの決定（updatePrep）が「スマッシュで打てる位置にいるか」を見るので、先に更新する。
       this.smashHint = this.smashSpot();
+      this.swingGuide = this.swingGuidePreview();
       this.updatePrep();
 
       // トスの自動リセットなど、このフレームの stepBall() の結果を見てから

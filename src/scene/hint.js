@@ -5,7 +5,7 @@
 (function (RallyOne) {
   'use strict';
 
-  const { SMASH_HINT } = RallyOne.config;
+  const { GUIDE, SMASH_HINT } = RallyOne.config;
   const { clamp } = RallyOne.math;
   const scene3d = RallyOne.scene = RallyOne.scene || {};
 
@@ -86,5 +86,78 @@
     pole.position.y = hint.y / 2;
     mark.position.y = hint.y;
     mark.rotation.y += 0.06; // ゆっくり回して、止まっている輪と区別しやすくする
+  };
+
+  /* ------------------------------------------------ ガイド付きモードの打球方向 */
+
+  function guideMaterial(opacity) {
+    return new THREE.MeshBasicMaterial({
+      color: GUIDE.COLOR_STRAIGHT,
+      transparent: true,
+      opacity,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+  }
+
+  /**
+   * ガイド付きモードで出す「いま離したらここへ飛ぶ」の目印。予想着地点の輪と、
+   * 打点からそこへ引く線の2つ。どこへ飛ぶかの計算は game.js の swingGuidePreview()
+   * （純ロジック）が持ち、ここは描くだけ（スマッシュのヒントと同じ役割分担）。
+   */
+  scene3d.createSwingGuide = function createSwingGuide() {
+    const group = new THREE.Group();
+    const ringMat = guideMaterial(GUIDE.OPACITY);
+    const lineMat = guideMaterial(GUIDE.LINE_OPACITY);
+
+    const ring = groundRing(GUIDE.RING_R - GUIDE.RING_W, GUIDE.RING_R, ringMat);
+    // 輪の中心にも小さな塗り。遠い（＝画面上では小さい）相手コートの奥でも
+    // 「そこが狙い」と一目で分かるようにする。
+    const dot = groundRing(0, GUIDE.DOT_R, ringMat);
+    // 打点から着地点へ引く線。長さ1の板として作り、scale.y で実際の距離まで伸ばす
+    // （PlaneGeometry は XY 平面に作られるので、寝かせた後のローカル y が奥行きになる）。
+    const line = new THREE.Mesh(new THREE.PlaneGeometry(GUIDE.LINE_W, 1), lineMat);
+    line.rotation.x = -Math.PI / 2;
+    line.position.y = GROUND_Y;
+
+    group.add(ring, dot, line);
+    group.visible = false;
+    group.userData = { ringMat, lineMat, ring, dot, line };
+    return group;
+  };
+
+  /**
+   * @param {THREE.Group} group createSwingGuide() が返したもの
+   * @param {{x:number, z:number, timing:number, tooEarly:boolean}|null} guide
+   *   RallyOne.Game#swingGuide。null（ガイドを出す場面ではない）なら隠す。
+   * @param {{x:number, z:number}} from 打つ人の位置（線の始点）
+   */
+  scene3d.placeSwingGuide = function placeSwingGuide(group, guide, from) {
+    if (!guide) {
+      group.visible = false;
+      return;
+    }
+    const {
+      ringMat, lineMat, ring, dot, line,
+    } = group.userData;
+    group.visible = true;
+
+    // 引っ張り／素直／流し／まだ早い（いま離すと空振り）を色で見分ける
+    const color = guide.tooEarly ? GUIDE.COLOR_EARLY
+      : guide.timing > GUIDE.NEUTRAL_BAND ? GUIDE.COLOR_PULL
+        : guide.timing < -GUIDE.NEUTRAL_BAND ? GUIDE.COLOR_FLOW : GUIDE.COLOR_STRAIGHT;
+    ringMat.color.setHex(color);
+    lineMat.color.setHex(color);
+    ringMat.opacity = guide.tooEarly ? GUIDE.OPACITY * 0.5 : GUIDE.OPACITY;
+
+    ring.position.set(guide.x, GROUND_Y, guide.z);
+    dot.position.set(guide.x, GROUND_Y, guide.z);
+
+    const dx = guide.x - from.x;
+    const dz = guide.z - from.z;
+    const dist = Math.hypot(dx, dz);
+    line.position.set(from.x + dx / 2, GROUND_Y, from.z + dz / 2);
+    line.rotation.z = Math.atan2(dx, dz); // 寝かせた板の向き（x,z 平面での向き）
+    line.scale.y = dist;
   };
 })(window.RallyOne = window.RallyOne || {});

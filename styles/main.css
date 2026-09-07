@@ -149,6 +149,37 @@ canvas{display:block}
 #smashTip.late{color:#ef6b5a}
 #chargeFill.full{background:#fff;box-shadow:0 0 10px 2px var(--ball)}
 
+/* ガイド付きモードのタイミング目盛り（溜めている間だけ出る）。
+   左＝早く振り出す（引っ張り）、右＝引きつける（流し）。針が「いま離したら」の位置で、
+   コート上の輪（scene/hint.js）と同じ色で今どちら向きに飛ぶかを示す。 */
+#guide{
+  position:absolute;left:50%;bottom:96px;transform:translateX(-50%);
+  width:260px;opacity:0;transition:opacity .12s;text-align:center
+}
+#guide.on{opacity:1}
+#guideText{font-size:12px;letter-spacing:.08em;margin-bottom:5px;color:var(--line)}
+#guideBar{
+  position:relative;display:flex;height:16px;border-radius:2px;overflow:hidden;
+  background:rgba(9,20,34,.7);border:1px solid rgba(232,238,245,.18)
+}
+.guideZone{
+  flex:1;display:grid;place-items:center;
+  font-size:9px;letter-spacing:.04em;color:rgba(232,238,245,.55)
+}
+.guideZone.pull{background:rgba(255,159,69,.22)}
+.guideZone.straight{flex:0 0 34%;background:rgba(232,238,245,.14)}
+.guideZone.flow{background:rgba(90,210,255,.22)}
+#guideNeedle{
+  position:absolute;top:-2px;bottom:-2px;width:3px;margin-left:-1.5px;
+  background:var(--line);box-shadow:0 0 6px rgba(0,0,0,.6);transition:left .05s linear
+}
+#guide.early #guideNeedle{background:#8a99ab}
+#guide.early #guideText{color:#8a99ab}
+#guide.pull #guideNeedle{background:#ff9f45}
+#guide.pull #guideText{color:#ff9f45}
+#guide.flow #guideNeedle{background:#5ad2ff}
+#guide.flow #guideText{color:#5ad2ff}
+
 /* スタート画面。設定はすべてマウスで操作できる（ボタン＝.seg／つまみバー＝.skillBar）ので、
    背景そのものはクリックしても何も起きない（cursor も既定のまま）。キーボードでも同じ操作が
    できるよう、各ボタンには対応するキーを <kbd> で添えてある。 */

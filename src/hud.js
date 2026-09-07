@@ -4,7 +4,7 @@
 
   const { pointLabel } = RallyOne.scoring;
   const {
-    WIND, STAMINA, SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, getRating,
+    GUIDE, WIND, STAMINA, SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, getRating,
   } = RallyOne.config;
   const $ = (id) => document.getElementById(id);
   /** その行（id）の中の選択ボタンを左から順に。 */
@@ -37,6 +37,9 @@
         charge: $('charge'),
         chargeFill: $('chargeFill'),
         smashTip: $('smashTip'),
+        guide: $('guide'),
+        guideText: $('guideText'),
+        guideNeedle: $('guideNeedle'),
         replayTag: $('replayTag'),
         roster: $('roster'),
         rosterTabs: $('rosterTabs'),
@@ -50,6 +53,7 @@
         diffOpts: segs('diffRow'),
         surfaceOpts: segs('surfaceRow'),
         styleOpts: segs('styleRow'),
+        guideOpts: segs('guideRow'),
         tossOpts: segs('tossChoice'),
       };
     }
@@ -70,6 +74,7 @@
       bind(this.el.diffOpts, handlers.onSelectDifficulty);
       bind(this.el.surfaceOpts, handlers.onSelectSurface);
       bind(this.el.styleOpts, handlers.onSelectStyle);
+      bind(this.el.guideOpts, (level) => handlers.onSelectGuide(level === 'on'));
       this.el.playBtn.addEventListener('click', () => handlers.onPlay());
       this.el.tossOpts.forEach((el) => {
         el.addEventListener('click', () => handlers.onSelectToss(el.dataset.choice));
@@ -263,6 +268,12 @@
       this.el.styleOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === name));
     }
 
+    /** ガイド付きモードの選択表示（値そのものは main.js が持ち、game.setGuide() へ渡す）。 */
+    setGuide(on) {
+      const level = on ? 'on' : 'off';
+      this.el.guideOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === level));
+    }
+
     /**
      * 風向き・強さの表示（ポイントごとに Game#newPoint() から呼ばれる）。
      * @param {number} accel 横方向の加速度(m/s²)。world +x はカメラの都合で画面の左に映るので、
@@ -359,6 +370,30 @@
       el.textContent = hint.ready
         ? '⚡ スマッシュ！ 止まって溜め、印の高さで離す'
         : hint.inTime ? '⚡ スマッシュのチャンス — 印まで先回り' : '⚡ スマッシュ — 急げば届く！';
+    }
+
+    /**
+     * ガイド付きモードのタイミング目盛り。「いま溜めキーを離したら、引っ張り／素直／流しの
+     * どれになるか」を針の位置と言葉で出す。値の計算は game.js の swingGuidePreview()
+     * （純ロジック）が持ち、ここは出すだけ（コート上の輪 scene/hint.js と対）。
+     * @param {{timing:number, tooEarly:boolean, lob:boolean}|null} guide
+     *   RallyOne.Game#swingGuide。null（ガイドを出す場面ではない）なら非表示。
+     */
+    setSwingGuide(guide) {
+      const el = this.el.guide;
+      el.classList.toggle('on', !!guide);
+      if (!guide) return;
+      const pull = guide.timing > GUIDE.NEUTRAL_BAND;
+      const flow = guide.timing < -GUIDE.NEUTRAL_BAND;
+      el.classList.toggle('early', guide.tooEarly);
+      el.classList.toggle('pull', !guide.tooEarly && pull);
+      el.classList.toggle('flow', !guide.tooEarly && flow);
+      // 目盛りは左＝引っ張り(+1)、右＝流し(-1)。timing をそのまま 0〜100% に直す。
+      this.el.guideNeedle.style.left = `${(1 - guide.timing) * 50}%`;
+      this.el.guideText.textContent = guide.tooEarly
+        ? 'まだ早い — 離すと空振り'
+        : guide.lob ? 'ロブ（タイミングは効かない）'
+          : pull ? '◀ 引っ張り' : flow ? '流し ▶' : '素直（狙ったところへ）';
     }
 
     /**

@@ -20,6 +20,8 @@
   let cpuStyle = 'none';
   /** スタート画面で選んだ試合形式。true ＝ ダブルス（既定はシングルス）。 */
   let doubles = false;
+  /** スタート画面で選んだガイド付きモード。true ＝ 打つ方向のガイドを出す（既定は なし）。 */
+  let guide = false;
   /** トス（コイントス）に人間が勝ち、サーブ/レシーブの選択を待っている間だけ true。 */
   let awaitingToss = false;
   /** トスを始めた時点で選ばれていたダブルスの有無（トスの選択後にそのまま渡す）。 */
@@ -43,6 +45,7 @@
     applyCpuStyle(cpuStyle); // 必ず applyCpuLevel() の後（config.js のコメント参照）
     applySurface(surface);
     hud.hideStartScreen();
+    game.setGuide(guide);
     game.start(wantDoubles, initialServer);
   }
 
@@ -83,6 +86,14 @@
       cpuStyle = name;
       hud.setStyle(name);
     },
+    // ガイド付きモードは試合中でも切り替わって困らない（表示専用）ので、選んだ時点で
+    // そのまま game へ渡す。次の試合にもそのまま引き継がれる。
+    onSelectGuide: (on) => {
+      guide = on;
+      hud.setGuide(on);
+      game.setGuide(on);
+    },
+    onToggleGuide: () => menu.onSelectGuide(!guide),
     onPlay: () => beginToss(doubles),
     onSelectToss: (choice) => {
       awaitingToss = false;
@@ -116,6 +127,7 @@
     onSelectDifficulty: menu.onSelectDifficulty,
     onSelectSurface: menu.onSelectSurface,
     onSelectStyle: menu.onSelectStyle,
+    onToggleGuide: () => menu.onToggleGuide(),
     // リプレイのスキップは Space だけ（以前はどのキーでも飛んでしまい、ラリー用の
     // キーに触れただけで意図せずスキップされていた）。
     onSkipReplay: () => world.skipReplay(),
@@ -162,6 +174,7 @@
       hud.setReplay(world.isReplaying());
       hud.setCharge(game.chargeMeter());
       hud.setSmashTip(game.smashHint);
+      hud.setSwingGuide(game.swingGuide);
       syncStamina();
     }
     world.render();
