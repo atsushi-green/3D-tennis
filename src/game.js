@@ -48,21 +48,6 @@
   }
 
   /**
-   * 打点が「打てる区間のどこ」だったか。+1＝リーチの円に入った瞬間（体のいちばん前）、
-   * 0＝真横、-1＝円を抜ける直前（引きつけきり）。
-   * ボールの通り道がリーチの円を横切る弦の長さは、ボールが左右にどれだけずれているかで
-   * 変わる（真正面の球は前後に広く、体の横をかすめる球は狭い）。前後差(m)をそのまま
-   * 使うと同じ振り方でもコースしだいで引っ張り／流しが入れ替わってしまうので、
-   * その弦の半分で割って正規化する。
-   * @param {number} reach この選手の実効リーチ(m)
-   */
-  function contactTiming(ball, player, reach) {
-    const lat = Math.abs(ball.x - player.x);
-    const half = Math.sqrt(Math.max(reach * reach - lat * lat, 0.01));
-    return clamp((ball.z - player.z) / half, -1, 1);
-  }
-
-  /**
    * 'you'/'youMate' は world +x 側、'cpu'/'cpuMate' は180°回転しているので
    * world -x 側がそれぞれのラケット側（モデルの構造上、腕は常にローカル+x側に作られる）。
    */
@@ -902,7 +887,7 @@
       // 打ち方に対応する能力（フォア／バック／ボレー／スマッシュ）と安定感を、倍率だけの
       // 小さなオブジェクトに畳んで渡す（ai.js は「誰が打つか」を知らないままでいられる）。
       const shot = who === 'you'
-        ? this.playerShot(stroke, contactTiming(ball, player, PLAYER.REACH * player.attr.reach))
+        ? this.playerShot(stroke, this.swingWaited())
         : isSmash
           ? cpuSmashShot(aimAt, aimDir, smashStretch, shotSkill(player.attr, 'smash'))
           : isVolley
@@ -960,6 +945,20 @@
       this.hooks.sound('hit', TEAM_OF[who], stroke, charge, spin);
     }
 
+    /**
+     * 今の1打で「スイングがボールを待った時間」(秒)。溜めキーを離してから実際に当たるまで
+     * 何秒かかったか＝どれだけ早めに振り出したか、で、引っ張り／流しの打ち分けに使う
+     * （TIMING_AIM 参照）。this.you.swing は離した瞬間に SWING_WINDOW から減り始めるので、
+     * その残りから逆算できる。
+     * スイングを介さずに hit('you') を直接呼んだ場合（テストなど）は、狙いがずれない
+     * 「素直なタイミング」を返す。
+     */
+    swingWaited() {
+      return this.you.swing > 0
+        ? PLAYER.SWING_WINDOW - this.you.swing
+        : TIMING_AIM.NEUTRAL_WAIT_T;
+    }
+
     /** 誰か（serve()/hit()の呼び出し元）が新しく打った瞬間、軌跡をその打点1点から描き直す。 */
     resetTrail() {
       this.trail = [{ x: this.ball.x, y: this.ball.y, z: this.ball.z }];
@@ -970,16 +969,17 @@
      * （chargeRelease() が計算した this.you.swingCharge、0〜1）で決まる。
      * 無入力ならクロス気味に返す。
      *
-     * 打点のタイミングでもコースがずれる：ボールを前（遠く）で捉えるほど「引っ張り」、
-     * 引きつけて近くで打つほど「流れる」。フォアとバックでは体を横切る向きが逆なので、
-     * 引っ張る方向も逆になる（pullDir で吸収する）。ロブは対象外。
+     * 振り出すタイミングでもコースがずれる：ボールが来るより早く振り出すほど（waited が
+     * 長いほど）体の前で捉えた形＝「引っ張り」、引きつけて振るほど「流れる」。フォアと
+     * バックでは体を横切る向きが逆なので、引っ張る方向も逆になる（pullDir で吸収する）。
+     * ロブは対象外。
      * スマッシュはフォア/バックの区別も打点タイミングのずれもなく、←→ でだけ狙う。
      * ボレー（'volley-forehand'|'volley-backhand'）も溜めの影響は受けず、代わりに
      * ボールとプレイヤーの左右距離（サービスラインより前で拾った場合のみ）で威力・角度が決まる。
      * @param {'forehand'|'backhand'|'smash'|'volley-forehand'|'volley-backhand'} [stroke]
-     * @param {number} [contactRel] 打点のタイミング（contactTiming() の +1〜-1）
+     * @param {number} [waited] スイングがボールを待った時間(秒)。swingWaited() 参照
      */
-    playerShot(stroke = 'forehand', contactRel = TIMING_AIM.NEUTRAL_REL) {
+    playerShot(stroke = 'forehand', waited = TIMING_AIM.NEUTRAL_WAIT_T) {
       const lob = this.input.lob;
       const aim = this.input.moveX * INPUT_X_TO_WORLD;
       const charge = this.you.swingCharge;
@@ -1037,9 +1037,12 @@
 
       let x = baseX;
       if (!lob) {
-        // 引っ張り側（前で捉えた）と流し側（引きつけた）で帯の広さが違う（config 参照）。
-        const off = contactRel - TIMING_AIM.NEUTRAL_REL;
-        const timing = clamp(off / (off >= 0 ? TIMING_AIM.PULL_BAND : TIMING_AIM.FLOW_BAND), -1, 1);
+        // +1＝早く振り出した（引っ張り）、-1＝引きつけて振った（流し）。
+        // 引っ張り側と流し側で帯の広さが違う（config 参照）。
+        const off = waited - TIMING_AIM.NEUTRAL_WAIT_T;
+        const timing = clamp(
+          off / (off >= 0 ? TIMING_AIM.PULL_BAND_T : TIMING_AIM.FLOW_BAND_T), -1, 1,
+        );
         const pullDir = (stroke === 'forehand' ? -1 : 1) * RACKET_SIDE.you;
         const shiftLimit = HALF_W + TIMING_AIM.OUT_MARGIN;
         // 能力値「安定感」が高いほど、打点がずれてもコースが曲がりにくい（attr.timing）。

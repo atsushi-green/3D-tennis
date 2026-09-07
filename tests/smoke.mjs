@@ -1073,15 +1073,15 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(out === 0, `full-charge shots should still land in: ${out}/100 went long`);
 }
 
-// --- 打点のタイミングでコースがずれる（早い=引っ張る／遅い=流れる、フォアとバックで逆） ---
+// --- 振り出すタイミングでコースがずれる（早い=引っ張る／遅い=流れる、フォアとバックで逆） ---
 {
-  const { NEUTRAL_REL, PULL_BAND, FLOW_BAND, MAX_SHIFT } = R.config.TIMING_AIM;
+  const { NEUTRAL_WAIT_T, PULL_BAND_T, FLOW_BAND_T, MAX_SHIFT } = R.config.TIMING_AIM;
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.you.x = 0; // baseX を固定するため
 
-  const early = NEUTRAL_REL + PULL_BAND; // timing = +1（前で捉えた＝早い）
-  const late = NEUTRAL_REL - FLOW_BAND;  // timing = -1（引きつけた＝遅い）
-  const neutral = NEUTRAL_REL;           // timing = 0（ずれない）
+  const early = NEUTRAL_WAIT_T + PULL_BAND_T; // timing = +1（長く待った＝早く振り出した）
+  const late = NEUTRAL_WAIT_T - FLOW_BAND_T;  // timing = -1（引きつけて振った）
+  const neutral = NEUTRAL_WAIT_T;             // timing = 0（ずれない）
 
   const foreEarly = g.playerShot('forehand', early).target.x;
   const foreLate = g.playerShot('forehand', late).target.x;
@@ -1089,6 +1089,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const backEarly = g.playerShot('backhand', early).target.x;
   const backLate = g.playerShot('backhand', late).target.x;
 
+  ok(late <= 1 / 60 + 1e-9,
+    `the flow end is reachable within a frame of the ball arriving, needs waited=${late.toFixed(3)}s`);
   ok(Math.abs(foreEarly - foreNeutral - (-MAX_SHIFT)) < 1e-9,
     `forehand early pulls by -MAX_SHIFT, got shift=${(foreEarly - foreNeutral).toFixed(2)}`);
   ok(Math.abs(foreLate - foreNeutral - MAX_SHIFT) < 1e-9,
@@ -1117,14 +1119,14 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(Math.abs(aimPlusEarly - aimOnly - (-MAX_SHIFT)) < 1e-9,
     `arrow-key aim composes with timing shift, got diff=${(aimPlusEarly - aimOnly).toFixed(2)}`);
 
-  // 通常のタイミング（打てる区間の中ほど）ならコート内に収まる
+  // 素直なタイミングならコート内に収まる
   let out = 0;
   for (let i = 0; i < 100; i++) {
     const gg = new R.Game({ input: fakeInput, hooks: noHooks });
     gg.start();
     gg.phase = 'rally';
     gg.you.x = 0; gg.you.z = -5;
-    gg.ball.x = 0.3; gg.ball.y = 1.0; gg.ball.z = -5 + (0.5 + Math.random() * 0.7);
+    gg.ball.x = 0.3; gg.ball.y = 1.0; gg.ball.z = -5 + 0.9;
     gg.ball.bounces = 1; // 既にバウンド済みの通常のグラウンドストローク（ボレー扱いにしない）
     gg.hit('you');
     if (R.physics.predictLanding(gg.ball).z > HALF_L) out++;
@@ -1132,36 +1134,54 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(out === 0, `normal-timing shots should still land in: ${out}/100 went long`);
 }
 
-// --- 打点のタイミングは「打てる区間のどこで捉えたか」で測る（左右のずれで結果が変わらない） ---
-// (退行テスト: 前後差(m)そのままで測っていた頃は、リーチの円をボールが横切る弦の長さが
-//  左右のずれで変わるぶん、同じ「手が届いた瞬間に振る」でも引っ張りになったり流しに
-//  なったりばらついていた＝狙って流し方向へ打てなかった)
+// --- 打ち分けは「スイングがボールを待った時間」で決まる（打点の位置ではない） ---
+// (退行テスト: 打点の前後位置で測っていた頃は、ボールが手の届く範囲にいる時間が
+//  実測48ms・最短8msしかないため、引っ張りと流しを撃ち分ける猶予が1〜3フレームしかなく、
+//  実際には「間に合ううちに振る」＝常に引っ張りにしかならなかった＝流し方向へ打てない)
 {
   const { PLAYER, TIMING_AIM } = R.config;
-  const reach = PLAYER.REACH; // 能力値が既定なら実効リーチはこれ
-  // 手が届いた瞬間（円の縁）に振ると、左右のどこを通る球でも「いちばん前で捉えた」＝引っ張り。
-  // 引きつけて体の真横で打つと、同じくどのコースでも流しになる。
-  const shiftFor = (lat, dz) => {
+  // 溜めキーを離してからボールが来るまでの待ち時間だけを変えて、同じ打点で打つ
+  const landingFor = (waitFrames) => {
     const g = new R.Game({ input: fakeInput, hooks: noHooks });
     g.start();
     g.phase = 'rally';
     g.you.x = 0; g.you.z = -5;
-    g.ball.x = lat; g.ball.y = 1.0; g.ball.z = -5 + dz;
+    g.ball.x = 0.3; g.ball.y = 1.0; g.ball.z = -5 + 0.9;
     g.ball.bounces = 1;
+    g.chargeRelease(); // ここで振り出す（swing = SWING_WINDOW）
+    g.you.swing = PLAYER.SWING_WINDOW - waitFrames / 60; // waitFrames ぶん待ってから当たった
     g.hit('you');
     return R.physics.predictLanding(g.ball).x;
   };
-  const edge = (lat) => Math.sqrt(reach * reach - lat * lat) * 0.99; // 円の縁ぎりぎり
-  const nearFront = [0.2, 0.8, 1.3].map((lat) => shiftFor(lat, edge(lat)));
-  const drawnIn = [0.2, 0.8, 1.3].map((lat) => shiftFor(lat, 0.05));
-  ok(nearFront.every((x) => x < -1),
-    `hitting at the front edge always pulls, whatever the ball's sideways offset: ${nearFront.map((x) => x.toFixed(1)).join(',')}`);
-  ok(drawnIn.every((x) => x > 1),
-    `drawing the ball in to the body always flows, whatever the sideways offset: ${drawnIn.map((x) => x.toFixed(1)).join(',')}`);
-  ok(TIMING_AIM.FLOW_BAND > TIMING_AIM.PULL_BAND,
-    'the flow side of the timing band is the wider one (flow is the harder shot to time)');
-  ok(TIMING_AIM.NEUTRAL_REL >= 0.7,
-    `the neutral contact point sits near the front edge, so drawing the ball in flows, got ${TIMING_AIM.NEUTRAL_REL}`);
+  // 狙う深さのばらつき（SHOT.DRIVE_Z_SPREAD）が着地点の左右にも効くので、乱数は固定する
+  const origRandom = Math.random;
+  Math.random = () => 0.5;
+  let drawnIn;
+  let onTime;
+  let early;
+  try {
+    drawnIn = landingFor(0); // ボールが来てから離した＝待ち時間ゼロ＝流し
+    onTime = landingFor(Math.round(TIMING_AIM.NEUTRAL_WAIT_T * 60));
+    early = landingFor(Math.round((TIMING_AIM.NEUTRAL_WAIT_T + TIMING_AIM.PULL_BAND_T) * 60));
+  } finally {
+    Math.random = origRandom;
+  }
+  const { MAX_SHIFT } = TIMING_AIM;
+  ok(drawnIn > onTime + MAX_SHIFT * 0.7,
+    `releasing as the ball arrives flows well to the other side: drawnIn=${drawnIn.toFixed(1)} onTime=${onTime.toFixed(1)}`);
+  ok(early < onTime - MAX_SHIFT * 0.7,
+    `releasing early pulls the other way: early=${early.toFixed(1)} onTime=${onTime.toFixed(1)}`);
+  // ←→ の狙いのほうが強い（タイミングだけで狙いと逆サイドへは飛ばない）
+  ok(MAX_SHIFT < R.config.SHOT.AIM_X,
+    `the arrow-key aim outweighs the timing shift: aim=${R.config.SHOT.AIM_X} shift=${MAX_SHIFT}`);
+
+  // 打ち分けに使える幅（0〜HALF_BAND_T×2）が、スイングの有効時間に収まっていること。
+  // ここがはみ出していると、目一杯引っ張ろうとしただけで空振りになる。
+  ok(TIMING_AIM.NEUTRAL_WAIT_T + TIMING_AIM.PULL_BAND_T <= PLAYER.SWING_WINDOW,
+    `a full pull still connects: needs ${TIMING_AIM.NEUTRAL_WAIT_T + TIMING_AIM.PULL_BAND_T}s of a ${PLAYER.SWING_WINDOW}s window`);
+  // かつ、打ち分けの幅が実測の「ボールが打てる範囲にいる時間」(約48ms)より広いこと
+  ok(TIMING_AIM.FLOW_BAND_T + TIMING_AIM.PULL_BAND_T >= 0.08,
+    `the pull-to-flow range is wide enough to aim with, got ${TIMING_AIM.FLOW_BAND_T + TIMING_AIM.PULL_BAND_T}s`);
 }
 
 // --- サーブは「長く溜めるほど強い」のではなく、ちょうど良いタイミングで離すと最強、
