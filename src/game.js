@@ -1374,7 +1374,9 @@
       // サーブ待ち中（phase==='serve'）は動かさない。newPoint() が置いたレシーブの構え位置
       // （サーブが狙う対角のボックス付近）から、サーブが打たれる前に homePosition()（センター）
       // へ歩いて戻ってしまうと、実際にサーブが来る頃には構えが崩れてしまう。
-      if (this.phase === 'serve') {
+      // フォールトのコール中（'fault'）も同じ：どうせ直後の beginServe() でスタンスへ
+      // 置き直されるので、その1秒ほどのために定位置へ歩き出させない。
+      if (this.phase === 'serve' || this.phase === 'fault') {
         this.cpu.speed = 0;
         return;
       }
@@ -1416,9 +1418,10 @@
      * 毎フレーム寄っていってフットフォルトに見えるし、レシーバー側もまだ来ていない
      * サーブへの構えを崩されてしまう（＝レシーブできない一因）。ボールが実際に
      * 生きる（phase==='rally'）まではみな静止させる。
+     * フォールトのコール中（phase==='fault'）も同じ理由で静止させる。
      */
     moveDoublesTeams(dt) {
-      if (this.phase === 'serve') {
+      if (this.phase === 'serve' || this.phase === 'fault') {
         this.cpu.speed = 0;
         this.cpuMate.speed = 0;
         this.youMate.speed = 0;
@@ -1669,12 +1672,21 @@
      * @param {string} reason 'ネット'|'アウト'
      */
     serveFault(reason) {
-      if (this.serveNumber === 1) {
-        this.serveNumber = 2;
-        this.retryServe(reason);
-      } else {
+      if (this.serveNumber !== 1) {
         this.endPoint(opponent(this.server), 'ダブルフォルト');
+        return;
       }
+      this.serveNumber = 2;
+      // まず「フォールト」とコールし、一拍おいてからセカンドサーブの構えに入る。
+      // 以前はここで即 beginServe() していたため、ネット／アウトになった瞬間に画面が
+      // 次のサーブへ切り替わってしまい、1本目が失敗したことに気づけなかった。
+      // この間は phase を 'fault' にして、入力（トス・スイング）も CPU/AI の動きも
+      // 止めておく（サーブ待ちの 'serve' のままにすると、そのまま次のトスが上がる）。
+      this.phase = 'fault';
+      this.serveInFlight = false;
+      this.ball.live = false; // 転がり続けずにその場で止める（ポイントが決まったときと同じ扱い）
+      this.hooks.call('フォールト', reason);
+      this.after(TIMING.FAULT_CALL, () => this.retryServe(reason));
     }
 
     checkSwings() {

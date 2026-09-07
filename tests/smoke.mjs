@@ -488,7 +488,9 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const ended = bounceAt(g, 1.0, COURT.SERVICE + 1);
   ok(ended === true, 'a serve landing past the service line ends this attempt (fault)');
   ok(g.serveNumber === 2, 'first fault moves to the second serve');
-  ok(g.phase === 'serve', 'does not end the point, goes back to waiting to serve');
+  ok(g.phase === 'fault', 'the fault is called first, instead of jumping straight into the next serve');
+  g.tickTimers(R.config.TIMING.FAULT_CALL + 0.01);
+  ok(g.phase === 'serve', 'after the call it goes back to waiting to serve');
   ok(g.ball.live === false, 'ball is reset, not mid-flight');
   ok(g.server === 'you', 'server stays the same after a fault');
   ok(g.match.points.you === 0 && g.match.points.cpu === 0, 'no point is awarded on a single fault');
@@ -503,12 +505,45 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(g.match.points.you === 0, "the server doesn't score on a double fault");
 }
 
+// --- 1本目のフォールトは「フォールト」とコールし、一拍おいてからセカンドサーブに入る ---
+// (退行テスト: 以前はフォールトした瞬間にセカンドサーブの構えへ切り替わっていたため、
+//  1本目が失敗したことに気づけず、溜めキーを押したままだとそのまま次のトスが上がっていた)
+{
+  const { TIMING } = R.config;
+  const calls = [];
+  const input = { moveX: 0, moveZ: 0, lob: false };
+  const g = new R.Game({ input, hooks: { ...noHooks, call: (big, sub) => calls.push([big, sub]) } });
+  g.start();
+  g.serve('you');
+  bounceAt(g, 1.0, COURT.SERVICE + 1); // 1本目がサービスボックスの外＝フォールト
+
+  ok(calls.some(([big, sub]) => big === 'フォールト' && sub === 'アウト'),
+    `"フォールト" is called with the reason, got ${JSON.stringify(calls)}`);
+  ok(g.phase === 'fault', `the game waits in the fault call, got phase=${g.phase}`);
+  ok(g.ball.live === false, 'the ball stops where it landed instead of rolling on');
+
+  // コールの間はトスも打球も始まらない（溜めキーを押しっぱなしでも次のサーブに入らない）
+  g.chargeStart('flat');
+  g.update(1 / 60);
+  ok(g.tossActive === false && g.phase === 'fault',
+    'holding the charge key during the call does not start the next toss');
+
+  // コールが明けてからセカンドサーブの構えに入る
+  g.tickTimers(TIMING.FAULT_CALL);
+  ok(g.phase === 'serve', `the second serve starts only after TIMING.FAULT_CALL, got phase=${g.phase}`);
+  ok(calls[calls.length - 1][0] === 'セカンドサーブ',
+    `and it is announced as the second serve, got ${JSON.stringify(calls[calls.length - 1])}`);
+  ok(g.serveNumber === 2, 'still the same point, now on the second serve');
+  ok(g.match.points.you === 0 && g.match.points.cpu === 0, 'no point is awarded');
+}
+
 // --- 1本目がフォールトしても、2本目が入れば普通にラリーへ進む ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start();
   g.serve('you');
   bounceAt(g, 1.0, COURT.SERVICE + 1); // 1本目アウト
+  g.tickTimers(R.config.TIMING.FAULT_CALL + 0.01); // 「フォールト」のコールが明けるまで待つ
   ok(g.serveNumber === 2, 'precondition: on the second serve');
 
   tossAndHit(g); // セカンドサーブを普通に打つ
@@ -548,7 +583,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   g.ball.z = 3;
   g.stepBall(1 / 240);
   ok(g.serveNumber === 2, 'an out-of-bounds first serve retries as a fault, not an instant loss');
-  ok(g.phase === 'serve', 'does not end the point');
+  ok(g.phase === 'fault', 'does not end the point');
   ok(g.match.points.you === 0 && g.match.points.cpu === 0, 'no point is awarded');
 }
 
@@ -652,7 +687,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       Math.random = origRandom;
     }
     ok(g.serveNumber === 2, 'a serve clipping the net is always a fault, never a net-in');
-    ok(g.phase === 'serve', 'the point does not continue as a live rally');
+    ok(g.phase === 'fault', 'the point does not continue as a live rally');
   }
 }
 
