@@ -96,11 +96,16 @@ canvas{display:block}
 #call .shot.on{display:inline-block}
 #call.on{opacity:1}
 
+/* 操作の一覧。項目が増えても画面からはみ出さないよう、行の途中で折り返す
+   （1行固定だと狭い画面で左右が切れて、端の項目が読めなくなる） */
 #keys{
   position:absolute;left:50%;bottom:16px;transform:translateX(-50%);
-  display:flex;gap:18px;font-size:11px;color:var(--dim);letter-spacing:.06em;
-  background:rgba(9,20,34,.6);padding:7px 14px;border-radius:2px;white-space:nowrap
+  display:flex;flex-wrap:wrap;justify-content:center;gap:6px 18px;
+  width:max-content;max-width:96vw;
+  font-size:11px;color:var(--dim);letter-spacing:.06em;
+  background:rgba(9,20,34,.6);padding:7px 14px;border-radius:2px
 }
+#keys span{white-space:nowrap}
 #keys b{color:var(--line);font-weight:600}
 
 /* Space を溜めている間だけ出るテイクバックメーター */
