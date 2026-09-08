@@ -1235,6 +1235,56 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `the pull-to-flow range is wide enough to aim with, got ${TIMING_AIM.FLOW_BAND_T + TIMING_AIM.PULL_BAND_T}s`);
 }
 
+// --- 打ち分けが段階的に跳ばない（離すタイミングの細かさが結果に出る） ---
+// (退行テスト: スイングの有効時間(you.swing)を1フレーム(1/60秒)ぶんまとめて減らしていた
+//  頃は、当たり判定が 1/240秒 刻みなのに待ち時間は 1/60秒 刻みでしか測れず、離す距離を
+//  2cm ずつ変えても結果は7段階、流し側にいたっては2段階（-0.27 と -0.93）しかなかった
+//  ＝「引きつけると急に大きく曲がる」カクついた打ち分けになっていた)
+{
+  const { TIMING_AIM } = R.config;
+  const landings = new Set();
+  const timings = [];
+  const origHit = R.Game.prototype.hit;
+  for (let d = 1.0; d <= 4.0; d += 0.05) {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.you.x = 0; g.you.z = -8;
+    Object.assign(g.ball, {
+      x: 0.3, y: 1.1, z: -8 + d, vx: 0, vy: -0.3, vz: -9,
+      bounces: 1, live: true, last: 'cpu', spin: 'flat', wind: 0, age: 0.5,
+    });
+    let waited = null;
+    R.Game.prototype.hit = function hit(who) {
+      if (who === 'you' && waited === null) waited = this.swingWaited();
+      origHit.call(this, who);
+    };
+    try {
+      g.chargeStart('flat');
+      g.chargeRelease();
+      for (let i = 0; i < 30 && waited === null && g.phase === 'rally'; i++) g.update(1 / 60);
+    } finally {
+      R.Game.prototype.hit = origHit;
+    }
+    if (waited !== null) {
+      const off = waited - TIMING_AIM.NEUTRAL_WAIT_T;
+      const timing = Math.max(-1, Math.min(1,
+        off / (off >= 0 ? TIMING_AIM.PULL_BAND_T : TIMING_AIM.FLOW_BAND_T)));
+      timings.push(timing);
+      landings.add(timing.toFixed(2));
+    }
+  }
+  ok(landings.size >= 15,
+    `releasing a little later gives a little more flow, not a jump: ${landings.size} distinct steps`);
+  const flowSteps = [...new Set(timings.filter((t) => t < 0).map((t) => t.toFixed(2)))];
+  ok(flowSteps.length >= 4,
+    `the flow half alone is graded, not on/off: ${flowSteps.length} steps (${flowSteps.join(',')})`);
+  // 隣り合う段の差（＝1段階でどれだけコースが変わるか）が大きすぎないこと
+  const sorted = [...timings].sort((a, b) => a - b);
+  const gap = sorted.reduce((max, t, i) => (i === 0 ? max : Math.max(max, t - sorted[i - 1])), 0);
+  ok(gap <= 0.35, `no single step jumps more than a third of the range, got ${gap.toFixed(2)}`);
+}
+
 // --- ガイド付きモード：溜めている間、「いま離したらどこへ飛ぶか」を出す ---
 {
   const { PLAYER, GUIDE } = R.config;

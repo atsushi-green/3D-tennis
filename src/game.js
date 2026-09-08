@@ -1253,7 +1253,6 @@
       this.tickTimers(dt);
 
       const swingBefore = this.you.swing;
-      this.you.swing = Math.max(0, this.you.swing - dt);
       this.you.anim = Math.max(0, this.you.anim - dt);
       this.cpu.anim = Math.max(0, this.cpu.anim - dt);
       if (this.doubles) {
@@ -1266,7 +1265,14 @@
 
       // 物理は固定ステップで刻む（フレームレート非依存）
       for (let remaining = dt; remaining > 0; remaining -= STEP) {
-        this.stepBall(Math.min(remaining, STEP));
+        const step = Math.min(remaining, STEP);
+        // スイングの有効時間も物理と同じ刻みで減らす。当たり判定（checkSwings）は
+        // このループの中＝1/240秒刻みで見ているのに、ここを1フレーム（1/60秒）ぶん
+        // まとめて引いていたため、「振ってから当たるまでの待ち時間」(swingWaited) が
+        // 1/60秒刻みでしか測れず、引っ張り／流しの度合いが段階的に跳んでいた
+        // （実測：離す距離を2cm刻みで変えても7段階しか出ず、流し側は2段階しかなかった）。
+        this.you.swing = Math.max(0, this.you.swing - step);
+        this.stepBall(step);
       }
 
       // 直近の1打が飛んでいる間だけ軌跡を伸ばす。誰かに打ち返された瞬間は resetTrail() が
