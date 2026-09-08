@@ -174,7 +174,7 @@
       hud.setReplay(world.isReplaying());
       hud.setCharge(game.chargeMeter());
       hud.setSmashTip(game.smashHint);
-      hud.setSwingGuide(game.swingGuide);
+      hud.setSwingGuide(game.swingGuide, game.you.x);
       syncStamina();
     }
     world.render();

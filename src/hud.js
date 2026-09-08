@@ -6,6 +6,14 @@
   const {
     GUIDE, WIND, STAMINA, SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, getRating,
   } = RallyOne.config;
+  /** ガイドで「タイミングが効かない」と伝えるときの打ち方の呼び名。 */
+  const STROKE_LABEL = {
+    smash: 'スマッシュ',
+    'volley-forehand': 'ボレー',
+    'volley-backhand': 'ボレー',
+    forehand: 'ロブ／ドロップ',
+    backhand: 'ロブ／ドロップ',
+  };
   const $ = (id) => document.getElementById(id);
   /** その行（id）の中の選択ボタンを左から順に。 */
   const segs = (id) => Array.from($(id).querySelectorAll('.seg'));
@@ -376,24 +384,34 @@
      * ガイド付きモードのタイミング目盛り。「いま溜めキーを離したら、引っ張り／素直／流しの
      * どれになるか」を針の位置と言葉で出す。値の計算は game.js の swingGuidePreview()
      * （純ロジック）が持ち、ここは出すだけ（コート上の輪 scene/hint.js と対）。
-     * @param {{timing:number, tooEarly:boolean, lob:boolean}|null} guide
-     *   RallyOne.Game#swingGuide。null（ガイドを出す場面ではない）なら非表示。
+     * @param {{timing:number, tooEarly:boolean, timingMatters:boolean, stroke:string,
+     *   x:number}|null} guide RallyOne.Game#swingGuide。null（ガイドを出す場面ではない）なら非表示。
+     * @param {number} playerX 打つ人の x。矢印を「画面のどちら側へ飛ぶか」にするのに使う
+     *   （world +x はカメラの都合で画面の左に映る。setWind() と同じ約束）。
      */
-    setSwingGuide(guide) {
+    setSwingGuide(guide, playerX) {
       const el = this.el.guide;
       el.classList.toggle('on', !!guide);
       if (!guide) return;
-      const pull = guide.timing > GUIDE.NEUTRAL_BAND;
-      const flow = guide.timing < -GUIDE.NEUTRAL_BAND;
+      // 打点タイミングでコースが変わらない打ち方（ボレー・スマッシュ・ロブ・ドロップ）の
+      // ときは、引っ張り／流しの色分けをせず「効かない」ことをそのまま出す。
+      const pull = guide.timingMatters && guide.timing > GUIDE.NEUTRAL_BAND;
+      const flow = guide.timingMatters && guide.timing < -GUIDE.NEUTRAL_BAND;
       el.classList.toggle('early', guide.tooEarly);
       el.classList.toggle('pull', !guide.tooEarly && pull);
       el.classList.toggle('flow', !guide.tooEarly && flow);
       // 目盛りは左＝引っ張り(+1)、右＝流し(-1)。timing をそのまま 0〜100% に直す。
       this.el.guideNeedle.style.left = `${(1 - guide.timing) * 50}%`;
+      // 矢印は「画面のどちら側へ飛ぶか」。引っ張り／流しがどちら向きになるかはフォアと
+      // バックで逆なので、言葉に固定の矢印を付けると必ず半分は嘘になる（実際に飛ぶ側を出す）。
+      const dx = guide.x - playerX;
+      const arrow = dx > 0.4 ? '◀' : dx < -0.4 ? '▶' : '↑';
+      const label = !guide.timingMatters
+        ? `${STROKE_LABEL[guide.stroke] || 'この球'}（タイミングは効かない）`
+        : pull ? '引っ張り' : flow ? '流し' : '素直（狙ったところへ）';
       this.el.guideText.textContent = guide.tooEarly
         ? 'まだ早い — 離すと空振り'
-        : guide.lob ? 'ロブ（タイミングは効かない）'
-          : pull ? '◀ 引っ張り' : flow ? '流し ▶' : '素直（狙ったところへ）';
+        : `${arrow} ${label}`;
     }
 
     /**

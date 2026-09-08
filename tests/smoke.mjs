@@ -1075,7 +1075,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 
 // --- 振り出すタイミングでコースがずれる（早い=引っ張る／遅い=流れる、フォアとバックで逆） ---
 {
-  const { NEUTRAL_WAIT_T, PULL_BAND_T, FLOW_BAND_T, MAX_SHIFT } = R.config.TIMING_AIM;
+  const { NEUTRAL_WAIT_T, PULL_BAND_T, FLOW_BAND_T, EDGE_X } = R.config.TIMING_AIM;
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.you.x = 0; // baseX を固定するため
 
@@ -1091,16 +1091,19 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 
   ok(late <= 1 / 60 + 1e-9,
     `the flow end is reachable within a frame of the ball arriving, needs waited=${late.toFixed(3)}s`);
-  ok(Math.abs(foreEarly - foreNeutral - (-MAX_SHIFT)) < 1e-9,
-    `forehand early pulls by -MAX_SHIFT, got shift=${(foreEarly - foreNeutral).toFixed(2)}`);
-  ok(Math.abs(foreLate - foreNeutral - MAX_SHIFT) < 1e-9,
-    `forehand late flows by +MAX_SHIFT, got shift=${(foreLate - foreNeutral).toFixed(2)}`);
+  // 目一杯ずらすと、狙いがどこであれ「ずれる側のコートの端」へ届く
+  ok(Math.abs(foreEarly + EDGE_X) < 1e-9,
+    `a full pull lands at the pull-side edge, got ${foreEarly.toFixed(2)}`);
+  ok(Math.abs(foreLate - EDGE_X) < 1e-9,
+    `a full flow lands at the flow-side edge, got ${foreLate.toFixed(2)}`);
+  ok(Math.abs(foreNeutral - (-R.config.SHOT.DEFAULT_X)) < 1e-9,
+    `neutral timing keeps the arrow-key aim untouched, got ${foreNeutral.toFixed(2)}`);
 
   // フォアとバックでは体を横切る向きが逆なので、同じ早い/遅いでもずれる方向が逆になる
-  ok(Math.sign(backEarly - foreNeutral) === -Math.sign(foreEarly - foreNeutral),
-    `backhand early should pull the OPPOSITE way from forehand early: fore=${(foreEarly - foreNeutral).toFixed(2)} back=${(backEarly - foreNeutral).toFixed(2)}`);
-  ok(Math.sign(backLate - foreNeutral) === -Math.sign(foreLate - foreNeutral),
-    `backhand late should flow the OPPOSITE way from forehand late: fore=${(foreLate - foreNeutral).toFixed(2)} back=${(backLate - foreNeutral).toFixed(2)}`);
+  ok(Math.sign(backEarly) === -Math.sign(foreEarly),
+    `backhand early pulls the OPPOSITE way from forehand early: fore=${foreEarly.toFixed(2)} back=${backEarly.toFixed(2)}`);
+  ok(Math.sign(backLate) === -Math.sign(foreLate),
+    `backhand late flows the OPPOSITE way from forehand late: fore=${foreLate.toFixed(2)} back=${backLate.toFixed(2)}`);
 
   // ロブはタイミングの影響を受けない
   const input2 = { moveX: 0, moveZ: 0, lob: true };
@@ -1110,14 +1113,15 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const lobLate = gLob.playerShot('forehand', late).target.x;
   ok(lobEarly === lobLate, `lob ignores timing, got early=${lobEarly} late=${lobLate}`);
 
-  // ←→ の方向指定と足し算で合成される（タイミングだけが上書きするわけではない）
+  // ←→ の方向指定は「タイミングがずれていないとき」の狙いを決め、タイミングはそこから
+  // コートの端へ寄せる（足し算ではない）。方向キーを押していても端は越えない。
   const input3 = { moveX: -1, moveZ: 0, lob: false }; // 画面右 = world +x
   const gAim = new R.Game({ input: input3, hooks: noHooks });
   gAim.you.x = 0;
-  const aimOnly = gAim.playerShot('forehand', neutral).target.x;
-  const aimPlusEarly = gAim.playerShot('forehand', early).target.x;
-  ok(Math.abs(aimPlusEarly - aimOnly - (-MAX_SHIFT)) < 1e-9,
-    `arrow-key aim composes with timing shift, got diff=${(aimPlusEarly - aimOnly).toFixed(2)}`);
+  ok(Math.abs(gAim.playerShot('forehand', neutral).target.x - R.config.SHOT.AIM_X) < 1e-9,
+    'with neutral timing the ball goes exactly where the arrow key aims');
+  ok(Math.abs(gAim.playerShot('forehand', late).target.x - EDGE_X) < 1e-9,
+    'a full flow still lands at the edge, not past it, even when aiming that way too');
 
   // 素直なタイミングならコート内に収まる
   let out = 0;
@@ -1132,6 +1136,55 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     if (R.physics.predictLanding(gg.ball).z > HALF_L) out++;
   }
   ok(out === 0, `normal-timing shots should still land in: ${out}/100 went long`);
+}
+
+// --- どの狙い・どの打ち方からでも、引きつければ必ず「流し」側へ届く ---
+// (退行テスト: タイミングのずれを狙いに「足す」形だった頃は、ずれ幅(1.3m)より狙い
+//  （←→ で2.7m、無入力でも1.4m）のほうが大きく、目一杯引きつけても反対側へ出られなかった。
+//  実測：方向キーなしのフォアで着地点はど真ん中(-0.1m)止まり、←を押しながらだと-1.4mのまま
+//  ＝ユーザー報告「素通りするくらい引き寄せて待っても真ん中までしか飛ばない」)
+{
+  const { NEUTRAL_WAIT_T, PULL_BAND_T, FLOW_BAND_T } = R.config.TIMING_AIM;
+  const { setRating, resetRatings } = R.config;
+  const cases = [];
+  for (const consistency of [1, 3, 5]) {          // 能力値「安定感」（ずれにくさ）
+    resetRatings();
+    setRating('you', 'consistency', consistency);
+    for (const stroke of ['forehand', 'backhand']) {
+      for (const moveX of [0, -1, 1]) {            // 方向キーなし／→／←
+        for (const youX of [2, -2]) {              // 自分がコートのどちら側にいるか
+          const g = new R.Game({ input: { moveX, moveZ: 0, lob: false }, hooks: noHooks });
+          g.you.x = youX;
+          const flowSide = stroke === 'forehand' ? 1 : -1; // 流しの向き（world x）
+          const flow = g.playerShot(stroke, NEUTRAL_WAIT_T - FLOW_BAND_T).target.x;
+          const pull = g.playerShot(stroke, NEUTRAL_WAIT_T + PULL_BAND_T).target.x;
+          cases.push({
+            consistency, stroke, moveX, youX, flow, pull,
+            // 「流し側へ届く」＝コートの真ん中を越えて自分のラケット側へ出ること。
+            // 能力値「安定感」を上げているとずれ幅そのものは小さくなる（そういう能力）が、
+            // それでも必ず反対側へは出る。
+            flowOk: flow * flowSide > 0,
+            pullOk: pull * flowSide < 0,
+            far: consistency !== 3 || flow * flowSide > 1.5,
+          });
+        }
+      }
+    }
+  }
+  resetRatings();
+  const badFlow = cases.filter((c) => !c.flowOk);
+  const badPull = cases.filter((c) => !c.pullOk);
+  ok(badFlow.length === 0,
+    `drawing the ball in always reaches the flow side: ${badFlow.length}/${cases.length} failed`
+    + (badFlow[0] ? ` e.g. ${badFlow[0].stroke} moveX=${badFlow[0].moveX} x=${badFlow[0].flow.toFixed(2)}` : ''));
+  ok(badPull.length === 0,
+    `swinging early always reaches the pull side: ${badPull.length}/${cases.length} failed`);
+  const timid = cases.filter((c) => !c.far);
+  ok(timid.length === 0,
+    `with default skills it is not just barely across, but a real angle: ${timid.length} too timid`);
+  // そしてどれもコートの中（サイドラインの内側）に収まる
+  const wide = cases.filter((c) => Math.abs(c.flow) > HALF_W || Math.abs(c.pull) > HALF_W);
+  ok(wide.length === 0, `and none of them sail past the sideline: ${wide.length}/${cases.length}`);
 }
 
 // --- 打ち分けは「スイングがボールを待った時間」で決まる（打点の位置ではない） ---
@@ -1166,14 +1219,12 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   } finally {
     Math.random = origRandom;
   }
-  const { MAX_SHIFT } = TIMING_AIM;
-  ok(drawnIn > onTime + MAX_SHIFT * 0.7,
+  ok(drawnIn > onTime + 2,
     `releasing as the ball arrives flows well to the other side: drawnIn=${drawnIn.toFixed(1)} onTime=${onTime.toFixed(1)}`);
-  ok(early < onTime - MAX_SHIFT * 0.7,
+  ok(early < onTime - 2,
     `releasing early pulls the other way: early=${early.toFixed(1)} onTime=${onTime.toFixed(1)}`);
-  // ←→ の狙いのほうが強い（タイミングだけで狙いと逆サイドへは飛ばない）
-  ok(MAX_SHIFT < R.config.SHOT.AIM_X,
-    `the arrow-key aim outweighs the timing shift: aim=${R.config.SHOT.AIM_X} shift=${MAX_SHIFT}`);
+  ok(Math.abs(drawnIn) < HALF_W && Math.abs(early) < HALF_W,
+    `and neither extreme sails past the sideline: flow=${drawnIn.toFixed(1)} pull=${early.toFixed(1)}`);
 
   // 打ち分けに使える幅（0〜HALF_BAND_T×2）が、スイングの有効時間に収まっていること。
   // ここがはみ出していると、目一杯引っ張ろうとしただけで空振りになる。
@@ -1233,15 +1284,41 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       'the waiting time counts down as the ball approaches');
   }
 
-  // ガイドの着地点は、実際にその待ち時間で打ったときの狙いと一致する
+  // ガイドの着地点は、実際にその待ち時間で打ったときの着地点そのもの（左右も深さも）
   {
     const g = charging(true);
     for (let i = 0; i < 18 && g.you.charging && g.phase === 'rally'; i++) g.update(1 / 60);
     const guide = g.swingGuide;
     ok(!!guide && !guide.tooEarly, 'precondition: the guide is showing a real shot');
-    const shot = g.playerShot(g.you.chargeStroke || 'forehand', guide.waited);
-    ok(Math.abs(shot.target.x - guide.x) < 1e-9,
-      `the guide shows the same course the shot would take: guide=${guide.x} shot=${shot.target.x}`);
+    ok(guide.timingMatters === true, 'precondition: a groundstroke, where timing does change the course');
+    const shot = g.playerShot(guide.stroke, guide.waited, true);
+    ok(Math.abs(shot.target.x - guide.x) < 1e-9 && Math.abs(shot.target.z - guide.z) < 1e-9,
+      `the guide shows the same spot the shot would land: guide=(${guide.x},${guide.z}) shot=(${shot.target.x},${shot.target.z})`);
+  }
+
+  // 打点タイミングが効かない打ち方（ボレー・スマッシュ）は、ガイドもそう言う
+  // (退行テスト: グラウンドストロークのつもりで方向を出していたため、ネット前のボレーや
+  //  スマッシュになる球でも「引っ張り／流し」と表示していた＝ガイドが嘘をついていた)
+  {
+    const g = charging(true);
+    g.you.z = -3; // サービスラインより前＝ノーバウンドで触ればボレー
+    g.ball.bounces = 0;
+    g.ball.z = -2.2; g.ball.y = 1.0;
+    g.update(1 / 60);
+    ok(g.swingGuide.stroke.startsWith('volley-'),
+      `a no-bounce ball taken inside the service line reads as a volley, got ${g.swingGuide.stroke}`);
+    ok(g.swingGuide.timingMatters === false, 'and the guide says the timing does not change its course');
+  }
+  {
+    const g = charging(true);
+    g.you.chargeTime = R.config.CHARGE.MAX_TIME; // しっかり溜めた＝スマッシュの条件
+    g.ball.bounces = 0;
+    g.ball.y = R.config.PLAYER.SMASH_MIN_Y + 0.3;
+    g.ball.z = g.you.z + 0.5;
+    g.ball.vy = -2;
+    g.update(1 / 60);
+    ok(g.swingGuide.stroke === 'smash', `a high ball with a full charge reads as a smash, got ${g.swingGuide.stroke}`);
+    ok(g.swingGuide.timingMatters === false, 'and the timing does not change a smash either');
   }
 
   // 打った瞬間（溜めが終わる）と、ラリー以外の場面では出さない

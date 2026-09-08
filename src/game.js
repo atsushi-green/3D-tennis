@@ -69,20 +69,23 @@
   }
 
   /**
-   * タイミングによるコースのずれを足した、着地点の左右(x)。
-   * フォアとバックでは体を横切る向きが逆なので、引っ張る方向も逆になる（pullDir）。
-   * ガイド表示（swingGuidePreview）も同じ式を通す＝ガイドと実際の打球が必ず一致する。
+   * タイミングでずらした後の、着地点の左右(x)。
+   * ←→ の狙い(baseX)から、ずれる側のコートの端(TIMING_AIM.EDGE_X)へ、タイミングの
+   * 強さぶんだけ寄せる。フォアとバックでは体を横切る向きが逆なので、引っ張る方向も
+   * 逆になる（pullDir）。ガイド表示（swingGuidePreview）も同じ式を通す＝ガイドと
+   * 実際の打球が必ず一致する。
+   *
+   * 「一定の距離を足す」形にしないのは、それだと狙いより小さいずれ幅では絶対に反対側へ
+   * 届かないため（config.js の EDGE_X のコメント参照）。端へ寄せる形なら、どんな狙いから
+   * でも目一杯引きつければ必ず流し側へ、早く振れば必ず引っ張り側へ届く。
    * @param {number} baseX ←→ の狙い（タイミングを加える前の着地点の左右）
    * @param {number} timing swingTiming() の -1〜+1
-   * @param {number} timingAttr 能力値「安定感」の倍率（高いほどずれにくい）
+   * @param {number} timingAttr 能力値「安定感」の倍率（高いほど＝1未満ほどずれにくい）
    */
   function aimWithTiming(baseX, stroke, timing, timingAttr) {
     const pullDir = (stroke === 'forehand' ? -1 : 1) * RACKET_SIDE.you;
-    const shiftLimit = HALF_W + TIMING_AIM.OUT_MARGIN;
-    return clamp(
-      baseX + timing * pullDir * TIMING_AIM.MAX_SHIFT * timingAttr,
-      -shiftLimit, shiftLimit,
-    );
+    const edge = (timing >= 0 ? pullDir : -pullDir) * TIMING_AIM.EDGE_X;
+    return lerp(baseX, edge, clamp(Math.abs(timing) * timingAttr, 0, 1));
   }
 
   /**
@@ -1006,14 +1009,14 @@
     }
 
     /**
-     * いま溜めキーを離したとして、スイングがボールを待つ秒数（＝swingWaited() の予測値）。
-     * checkSwings() が実際に当たりを取るのと同じ条件を、予測した軌道の上で探す。
-     * 走って追いついている最中でも「今の立ち位置のまま待った場合」で見積もる（表示用の
-     * 目安なので、実際に動きながら打てば多少ずれる）。
-     * @returns {number|null} すでに届く位置なら0。スイングの有効時間内に届かないなら null
-     *   （＝いま離すと空振り）。
+     * いま溜めキーを離したとして、どこで・いつボールを捉えるか。checkSwings() が実際に
+     * 当たりを取るのと同じ条件を、予測した軌道の上で探す。走って追いついている最中でも
+     * 「今の立ち位置のまま待った場合」で見積もる（表示用の目安なので、実際に動きながら
+     * 打てば多少ずれる）。
+     * @returns {{t:number, x:number, y:number, z:number, bounces:number}|null}
+     *   すでに届く位置なら t=0。スイングの有効時間内に届かないなら null（＝いま離すと空振り）。
      */
-    waitUntilInReach() {
+    predictContact() {
       const ball = this.ball;
       const you = this.you;
       const reach = PLAYER.REACH * you.attr.reach;
@@ -1021,9 +1024,28 @@
       const canHit = (at, bounces) => at.z < PLAYER.NET_MARGIN && at.y < PLAYER.REACH_Y
         && !(this.serveInFlight && bounces < 1)
         && Math.hypot(at.x - you.x, at.z - you.z) < reach;
-      if (canHit(ball, ball.bounces)) return 0;
+      if (canHit(ball, ball.bounces)) {
+        return {
+          t: 0, x: ball.x, y: ball.y, z: ball.z, bounces: ball.bounces,
+        };
+      }
       const window = predictWindow(ball, (at) => canHit(at, at.bounces), PLAYER.SWING_WINDOW, 1);
-      return window ? window.enter.t : null;
+      return window ? window.enter : null;
+    }
+
+    /**
+     * ガイド用：その打点で振ったら、どの打ち方になるか（hit() の判定と同じ条件）。
+     * スマッシュ・ボレー・ドロップショットは打点タイミングでコースが変わらない打ち方なので、
+     * ガイドでもそう見せる必要がある（グラウンドストロークのつもりで方向を出すと嘘になる）。
+     * @param {{y:number, bounces:number}|null} contact predictContact() の結果
+     * @param {number} charge いまの溜め量(0〜1)
+     */
+    previewStroke(contact, charge) {
+      const at = contact || this.ball;
+      const base = this.you.chargeStroke || classifyStroke('you', this.ball, this.you);
+      if (at.y >= PLAYER.SMASH_MIN_Y && charge >= PLAYER.SMASH_MIN_CHARGE) return 'smash';
+      if (at.bounces === 0 && this.you.z > -COURT.SERVICE) return `volley-${base}`;
+      return base;
     }
 
     /**
@@ -1038,24 +1060,27 @@
       const ball = this.ball;
       if (!ball.live || ball.last === 'you') return null;
 
-      const wait = this.waitUntilInReach();
+      const contact = this.predictContact();
       // まだボールが遠い＝いま離しても当たらない。「早すぎる」ことだけ伝える（コースは、
       // 一番早く当たったときと同じ＝引っ張り最大の向きを出しておく）。
-      const tooEarly = wait === null;
-      const timing = swingTiming(tooEarly ? PLAYER.SWING_WINDOW : wait);
-      const stroke = this.you.chargeStroke || classifyStroke('you', ball, this.you);
-      const lob = this.input.lob;
+      const tooEarly = contact === null;
+      const waited = tooEarly ? PLAYER.SWING_WINDOW : contact.t;
       const charge = clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1);
-      const baseX = this.input.moveX * INPUT_X_TO_WORLD !== 0
-        ? this.input.moveX * INPUT_X_TO_WORLD * SHOT.AIM_X
-        : -signOr(this.you.x, 1) * SHOT.DEFAULT_X;
+      const stroke = this.previewStroke(contact, charge);
+      // 実際に打つときと同じ関数を通す（preview=true でばらつきだけ中央値に固定）ので、
+      // ここに出る着地点は「いま離したら本当に飛ぶ場所」そのものになる。
+      const shot = this.playerShot(stroke, waited, true);
       return {
-        timing,
+        timing: swingTiming(waited),
         tooEarly,
-        waited: tooEarly ? PLAYER.SWING_WINDOW : wait,
-        lob,
-        x: lob ? baseX : aimWithTiming(baseX, stroke, timing, this.you.attr.timing),
-        z: lob ? SHOT.LOB_Z : lerp(SHOT.TAP_Z, SHOT.CHARGE_Z, charge),
+        waited,
+        stroke,
+        // 打点タイミングでコースが変わるのはグラウンドストロークだけ。ロブ・ドロップ
+        // ショット・ボレー・スマッシュは、引きつけても早振りしても同じところへ飛ぶ。
+        timingMatters: (stroke === 'forehand' || stroke === 'backhand')
+          && !shot.lob && shot.spin !== 'drop',
+        x: shot.target.x,
+        z: shot.target.z,
       };
     }
 
@@ -1078,8 +1103,13 @@
      * ボールとプレイヤーの左右距離（サービスラインより前で拾った場合のみ）で威力・角度が決まる。
      * @param {'forehand'|'backhand'|'smash'|'volley-forehand'|'volley-backhand'} [stroke]
      * @param {number} [waited] スイングがボールを待った時間(秒)。swingWaited() 参照
+     * @param {boolean} [preview] true なら狙いのばらつき（深さの散らし）を中央値に固定する。
+     *   ガイド表示（swingGuidePreview）が「実際に打ったらどこへ飛ぶか」を毎フレーム
+     *   同じ値で出すために使う（乱数のままだと目印が毎フレーム跳ねる）。
      */
-    playerShot(stroke = 'forehand', waited = TIMING_AIM.NEUTRAL_WAIT_T) {
+    playerShot(stroke = 'forehand', waited = TIMING_AIM.NEUTRAL_WAIT_T, preview = false) {
+      /** 狙いのばらつき。プレビューでは中央値に固定する。 */
+      const spread = preview ? (a, b) => (a + b) / 2 : rand;
       const lob = this.input.lob;
       const aim = this.input.moveX * INPUT_X_TO_WORLD;
       const charge = this.you.swingCharge;
@@ -1091,7 +1121,7 @@
 
       if (stroke === 'smash') {
         return {
-          target: { x: baseX, y: BALL_R, z: rand(SHOT.SMASH_Z, SHOT.SMASH_Z + SHOT.DRIVE_Z_SPREAD) },
+          target: { x: baseX, y: BALL_R, z: spread(SHOT.SMASH_Z, SHOT.SMASH_Z + SHOT.DRIVE_Z_SPREAD) },
           flight: SHOT.SMASH_T * attr.smash,
         };
       }
@@ -1109,7 +1139,7 @@
           target: {
             x: dir * lerp(VOLLEY.BLOCK_X, VOLLEY.ANGLE_X, sharpness),
             y: BALL_R,
-            z: lerp(VOLLEY.BLOCK_Z, VOLLEY.ANGLE_Z, sharpness) + rand(0, SHOT.DRIVE_Z_SPREAD),
+            z: lerp(VOLLEY.BLOCK_Z, VOLLEY.ANGLE_Z, sharpness) + spread(0, SHOT.DRIVE_Z_SPREAD),
           },
           flight: lerp(VOLLEY.BLOCK_T, VOLLEY.ANGLE_T, sharpness) * attr.volley,
         };
@@ -1122,7 +1152,9 @@
       if (!lob && this.you.chargeSpin === 'slice' && charge <= DROP.MAX_CHARGE) {
         const dir = aim !== 0 ? Math.sign(aim) : -signOr(this.you.x, 1);
         return {
-          target: { x: dir * rand(DROP.X_MIN, DROP.X_MAX), y: BALL_R, z: rand(DROP.Z_MIN, DROP.Z_MAX) },
+          target: {
+            x: dir * spread(DROP.X_MIN, DROP.X_MAX), y: BALL_R, z: spread(DROP.Z_MIN, DROP.Z_MAX),
+          },
           flight: DROP.T * attr[stroke === 'backhand' ? 'backhand' : 'forehand'],
           clearance: DROP.CLEARANCE,
           spin: 'drop',
@@ -1144,7 +1176,7 @@
         target: {
           x,
           y: BALL_R,
-          z: lob ? SHOT.LOB_Z : rand(depth, depth + SHOT.DRIVE_Z_SPREAD),
+          z: lob ? SHOT.LOB_Z : spread(depth, depth + SHOT.DRIVE_Z_SPREAD),
         },
         flight,
         lob,

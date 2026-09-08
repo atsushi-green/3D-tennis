@@ -142,10 +142,13 @@
     } = group.userData;
     group.visible = true;
 
-    // 引っ張り／素直／流し／まだ早い（いま離すと空振り）を色で見分ける
+    // 引っ張り／素直／流し／まだ早い（いま離すと空振り）を色で見分ける。
+    // ボレー・スマッシュ・ロブ・ドロップはタイミングでコースが変わらない打ち方なので、
+    // 引っ張り／流しの色は出さない（HUD 側の文言と揃える）。
+    const timing = guide.timingMatters ? guide.timing : 0;
     const color = guide.tooEarly ? GUIDE.COLOR_EARLY
-      : guide.timing > GUIDE.NEUTRAL_BAND ? GUIDE.COLOR_PULL
-        : guide.timing < -GUIDE.NEUTRAL_BAND ? GUIDE.COLOR_FLOW : GUIDE.COLOR_STRAIGHT;
+      : timing > GUIDE.NEUTRAL_BAND ? GUIDE.COLOR_PULL
+        : timing < -GUIDE.NEUTRAL_BAND ? GUIDE.COLOR_FLOW : GUIDE.COLOR_STRAIGHT;
     ringMat.color.setHex(color);
     lineMat.color.setHex(color);
     ringMat.opacity = guide.tooEarly ? GUIDE.OPACITY * 0.5 : GUIDE.OPACITY;
