@@ -99,7 +99,6 @@ canvas{display:block}
 /* 操作の一覧。項目が増えても画面からはみ出さないよう、行の途中で折り返す
    （1行固定だと狭い画面で左右が切れて、端の項目が読めなくなる） */
 #keys{
-  position:absolute;left:50%;bottom:16px;transform:translateX(-50%);
   display:flex;flex-wrap:wrap;justify-content:center;gap:6px 18px;
   width:max-content;max-width:96vw;
   font-size:11px;color:var(--dim);letter-spacing:.06em;
@@ -109,8 +108,14 @@ canvas{display:block}
 #keys b{color:var(--line);font-weight:600}
 
 /* Space を溜めている間だけ出るテイクバックメーター */
+/* 画面下の縦積み。上から ガイド／スマッシュの案内／溜めバー／操作一覧。
+   出ていない項目も場所は残す（opacity で消す）ので、出入りで位置が跳ねない。 */
+#bottom{
+  position:absolute;left:0;right:0;bottom:16px;
+  display:flex;flex-direction:column;align-items:center;gap:8px
+}
+
 #charge{
-  position:absolute;left:50%;bottom:56px;transform:translateX(-50%);
   width:200px;height:7px;border-radius:4px;overflow:hidden;
   background:rgba(9,20,34,.65);border:1px solid rgba(232,238,245,.18);
   opacity:0;transition:opacity .1s
@@ -139,7 +144,6 @@ canvas{display:block}
 @keyframes replayBlink{50%{opacity:.15}}
 
 #smashTip{
-  position:absolute;left:50%;bottom:72px;transform:translateX(-50%);
   font-size:12px;letter-spacing:.08em;white-space:nowrap;
   background:rgba(9,20,34,.7);padding:5px 12px;border-radius:2px;
   color:#4ad9f2;opacity:0;transition:opacity .12s
@@ -153,9 +157,12 @@ canvas{display:block}
    左＝早く振り出す（引っ張り）、右＝引きつける（流し）。針が「いま離したら」の位置で、
    コート上の輪（scene/hint.js）と同じ色で今どちら向きに飛ぶかを示す。 */
 #guide{
-  position:absolute;left:50%;bottom:96px;transform:translateX(-50%);
-  width:260px;opacity:0;transition:opacity .12s;text-align:center
+  width:260px;opacity:0;transition:opacity .12s;text-align:center;
+  /* ガイド付きモードを選んでいないときは場所ごと空ける（溜めバーが下がらないように）。
+     モード中は出入りで位置が跳ねないよう、消えていても場所は残す（opacity で消す）。 */
+  display:none
 }
+#guide.enabled{display:block}
 #guide.on{opacity:1}
 #guideText{font-size:12px;letter-spacing:.08em;margin-bottom:5px;color:var(--line)}
 #guideBar{

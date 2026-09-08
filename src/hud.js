@@ -280,6 +280,8 @@
     setGuide(on) {
       const level = on ? 'on' : 'off';
       this.el.guideOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === level));
+      // 選んでいないときはタイミング目盛りの場所ごと空ける（画面下の縦積みが1段減る）
+      this.el.guide.classList.toggle('enabled', !!on);
     }
 
     /**

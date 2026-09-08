@@ -50,29 +50,32 @@
   <div id="head">1 set match · <span id="setinfo">first to 6</span></div>
   <div id="call"><div class="big" id="callBig"></div><div class="sub" id="callSub"></div><div class="shot" id="callShot"></div></div>
   <div id="replayTag"><span class="dot"></span>リプレイ<span class="skip">SPACE でスキップ</span></div>
-  <div id="charge"><div id="chargeFill"></div></div>
-  <!-- ガイド付きモードのタイミング目盛り。溜めている間だけ出る（hud.setSwingGuide が制御）。
-       左＝早く振り出す（引っ張り）、右＝引きつける（流し）で、針が「いま離したら」の位置。 -->
-  <div id="guide">
-    <div id="guideText"></div>
-    <div id="guideBar">
-      <div class="guideZone pull">引っ張り</div>
-      <div class="guideZone straight">素直</div>
-      <div class="guideZone flow">流し</div>
-      <div id="guideNeedle"></div>
+  <!-- 画面下は縦積み（上から：ガイド／スマッシュの案内／溜めバー／操作一覧）。
+       個別に bottom を指定していた頃は、操作一覧が折り返して2行になった分だけ
+       溜めバーの上に重なってしまっていた。積むことで何行になっても重ならない。 -->
+  <div id="bottom">
+    <!-- ガイド付きモードのタイミング目盛り。溜めている間だけ出る（hud.setSwingGuide が制御）。
+         左＝早く振り出す（引っ張り）、右＝引きつける（流し）で、針が「いま離したら」の位置。 -->
+    <div id="guide">
+      <div id="guideText"></div>
+      <div id="guideBar">
+        <div class="guideZone pull">引っ張り</div>
+        <div class="guideZone straight">素直</div>
+        <div class="guideZone flow">流し</div>
+        <div id="guideNeedle"></div>
+      </div>
     </div>
-  </div>
-  <div id="smashTip"></div>
-  <div id="keys">
-    <span><b>←→</b> 左右 / 打つ方向</span>
-    <span><b>↑↓</b> 前後 ／ サーブの深さ</span>
-    <span><b>B</b> 押しっぱなしで溜め・離して打つ（フラット）</span>
-    <span><b>離すタイミング</b> 早め＝引っ張り ／ 引きつけ＝流し</span>
-    <span><b>V</b> トップスピンで溜め・離して打つ</span>
-    <span><b>C</b> スライス（溜めずに離すとドロップショット）</span>
-    <span><b>Shift</b> ロブ</span>
-    <span><b>Q/E</b> パートナーに前へ／下がれを指示（ダブルス）</span>
-    <span><b>Space</b> リプレイをスキップ</span>
+    <div id="smashTip"></div>
+    <div id="charge"><div id="chargeFill"></div></div>
+    <div id="keys">
+      <span><b>←→</b> 左右 ／ 打つ方向</span>
+      <span><b>↑↓</b> 前後 ／ サーブの深さ</span>
+      <span><b>B/V/C</b> 押しっぱなしで溜め・離して打つ（フラット／トップスピン／スライス。C を溜めずに離すとドロップ）</span>
+      <span><b>離すタイミング</b> 早め＝引っ張り ／ 引きつけ＝流し</span>
+      <span><b>Shift</b> ロブ</span>
+      <span><b>Q/E</b> パートナーに前へ／下がれ（ダブルス）</span>
+      <span><b>Space</b> リプレイをスキップ</span>
+    </div>
   </div>
 </div>
 
