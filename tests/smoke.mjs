@@ -1083,11 +1083,12 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const late = NEUTRAL_WAIT_T - FLOW_BAND_T;  // timing = -1（引きつけて振った）
   const neutral = NEUTRAL_WAIT_T;             // timing = 0（ずれない）
 
-  const foreEarly = g.playerShot('forehand', early).target.x;
-  const foreLate = g.playerShot('forehand', late).target.x;
-  const foreNeutral = g.playerShot('forehand', neutral).target.x;
-  const backEarly = g.playerShot('backhand', early).target.x;
-  const backLate = g.playerShot('backhand', late).target.x;
+  // ばらつき（ライン際を狙ったときの荒れ）は preview=true で中央値に固定して見る
+  const foreEarly = g.playerShot('forehand', early, true).target.x;
+  const foreLate = g.playerShot('forehand', late, true).target.x;
+  const foreNeutral = g.playerShot('forehand', neutral, true).target.x;
+  const backEarly = g.playerShot('backhand', early, true).target.x;
+  const backLate = g.playerShot('backhand', late, true).target.x;
 
   ok(late <= 1 / 60 + 1e-9,
     `the flow end is reachable within a frame of the ball arriving, needs waited=${late.toFixed(3)}s`);
@@ -1109,8 +1110,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const input2 = { moveX: 0, moveZ: 0, lob: true };
   const gLob = new R.Game({ input: input2, hooks: noHooks });
   gLob.you.x = 0;
-  const lobEarly = gLob.playerShot('forehand', early).target.x;
-  const lobLate = gLob.playerShot('forehand', late).target.x;
+  const lobEarly = gLob.playerShot('forehand', early, true).target.x;
+  const lobLate = gLob.playerShot('forehand', late, true).target.x;
   ok(lobEarly === lobLate, `lob ignores timing, got early=${lobEarly} late=${lobLate}`);
 
   // ←→ の方向指定は「タイミングがずれていないとき」の狙いを決め、タイミングはそこから
@@ -1118,10 +1119,10 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const input3 = { moveX: -1, moveZ: 0, lob: false }; // 画面右 = world +x
   const gAim = new R.Game({ input: input3, hooks: noHooks });
   gAim.you.x = 0;
-  ok(Math.abs(gAim.playerShot('forehand', neutral).target.x - R.config.SHOT.AIM_X) < 1e-9,
+  ok(Math.abs(gAim.playerShot('forehand', neutral, true).target.x - R.config.SHOT.AIM_X) < 1e-9,
     'with neutral timing the ball goes exactly where the arrow key aims');
-  ok(Math.abs(gAim.playerShot('forehand', late).target.x - EDGE_X) < 1e-9,
-    'a full flow still lands at the edge, not past it, even when aiming that way too');
+  ok(Math.abs(gAim.playerShot('forehand', late, true).target.x - EDGE_X) < 1e-9,
+    'a full flow aims at the edge, not past it, even when aiming that way too');
 
   // 素直なタイミングならコート内に収まる
   let out = 0;
@@ -1156,8 +1157,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
           const g = new R.Game({ input: { moveX, moveZ: 0, lob: false }, hooks: noHooks });
           g.you.x = youX;
           const flowSide = stroke === 'forehand' ? 1 : -1; // 流しの向き（world x）
-          const flow = g.playerShot(stroke, NEUTRAL_WAIT_T - FLOW_BAND_T).target.x;
-          const pull = g.playerShot(stroke, NEUTRAL_WAIT_T + PULL_BAND_T).target.x;
+          const flow = g.playerShot(stroke, NEUTRAL_WAIT_T - FLOW_BAND_T, true).target.x;
+          const pull = g.playerShot(stroke, NEUTRAL_WAIT_T + PULL_BAND_T, true).target.x;
           cases.push({
             consistency, stroke, moveX, youX, flow, pull,
             // 「流し側へ届く」＝コートの真ん中を越えて自分のラケット側へ出ること。
@@ -1182,9 +1183,10 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const timid = cases.filter((c) => !c.far);
   ok(timid.length === 0,
     `with default skills it is not just barely across, but a real angle: ${timid.length} too timid`);
-  // そしてどれもコートの中（サイドラインの内側）に収まる
+  // そして狙いそのものはコートの中（サイドラインの内側）。実際の着地はここから
+  // ライン際のばらつき（RISK_SPREAD）ぶん散るので、外れることもある（別テスト）。
   const wide = cases.filter((c) => Math.abs(c.flow) > HALF_W || Math.abs(c.pull) > HALF_W);
-  ok(wide.length === 0, `and none of them sail past the sideline: ${wide.length}/${cases.length}`);
+  ok(wide.length === 0, `and none of them aim past the sideline: ${wide.length}/${cases.length}`);
 }
 
 // --- 打ち分けは「スイングがボールを待った時間」で決まる（打点の位置ではない） ---
@@ -1233,6 +1235,69 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   // かつ、打ち分けの幅が実測の「ボールが打てる範囲にいる時間」(約48ms)より広いこと
   ok(TIMING_AIM.FLOW_BAND_T + TIMING_AIM.PULL_BAND_T >= 0.08,
     `the pull-to-flow range is wide enough to aim with, got ${TIMING_AIM.FLOW_BAND_T + TIMING_AIM.PULL_BAND_T}s`);
+}
+
+// --- やりすぎるとミスも起きる：ライン際まで狙いを振るとサイドアウトすることがある ---
+{
+  const {
+    NEUTRAL_WAIT_T, PULL_BAND_T, FLOW_BAND_T, RISK_FROM_X, EDGE_X, RISK_SPREAD,
+  } = R.config.TIMING_AIM;
+  const { setRating, resetRatings } = R.config;
+
+  /** その待ち時間で N 本打って、サイドアウトした割合と着地点の散らばりを見る */
+  const outRate = (waited, n = 400) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.you.x = 0;
+    let out = 0;
+    let min = Infinity;
+    let max = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const { x } = g.playerShot('forehand', waited).target;
+      if (Math.abs(x) > HALF_W) out++;
+      min = Math.min(min, x); max = Math.max(max, x);
+    }
+    return { rate: out / n, min, max };
+  };
+
+  const full = outRate(NEUTRAL_WAIT_T - FLOW_BAND_T);   // 目一杯引きつけた＝ライン際狙い
+  const half = outRate(NEUTRAL_WAIT_T - FLOW_BAND_T / 2); // 半分だけ流した
+  const straight = outRate(NEUTRAL_WAIT_T);              // 素直に打った
+  const fullPull = outRate(NEUTRAL_WAIT_T + PULL_BAND_T);
+
+  ok(full.rate > 0.05 && full.rate < 0.45,
+    `going for the maximum angle misses sometimes, but not usually: ${(full.rate * 100).toFixed(0)}%`);
+  ok(fullPull.rate > 0.05 && fullPull.rate < 0.45,
+    `the same on the pull side: ${(fullPull.rate * 100).toFixed(0)}%`);
+  ok(straight.rate === 0 && straight.min === straight.max,
+    'a straight (neutral) shot never wanders and never goes wide');
+  ok(half.rate === 0,
+    `easing off the extreme is completely safe: ${(half.rate * 100).toFixed(0)}% out`);
+  ok(RISK_FROM_X > R.config.SHOT.AIM_X,
+    `aiming with the arrow keys alone stays inside the safe zone: aim=${R.config.SHOT.AIM_X} risk from ${RISK_FROM_X}`);
+  ok(Math.abs(full.max - full.min) <= RISK_SPREAD * 2 + 1e-9 && full.max > HALF_W,
+    `the spread at the edge is what puts it out: ${full.min.toFixed(2)}〜${full.max.toFixed(2)} (line ${HALF_W.toFixed(2)})`);
+
+  // 能力値「安定感」が高いほど散らない＝ミスも減る
+  try {
+    setRating('you', 'consistency', 5);
+    const steady = outRate(NEUTRAL_WAIT_T - FLOW_BAND_T);
+    ok(steady.rate < full.rate,
+      `a steadier player misses less when going for the line: ${(steady.rate * 100).toFixed(0)}% vs ${(full.rate * 100).toFixed(0)}%`);
+  } finally {
+    resetRatings();
+  }
+
+  // ガイドは「いまライン際を狙っている」ことを risk で伝える（表示側が警告に使う）
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.you.x = 0;
+    ok(g.playerShot('forehand', NEUTRAL_WAIT_T - FLOW_BAND_T, true).risk > 0,
+      'the preview reports how much the aim wanders at the edge');
+    ok(g.playerShot('forehand', NEUTRAL_WAIT_T, true).risk === 0,
+      'and reports no wander for a straight shot');
+    ok(Math.abs(g.playerShot('forehand', NEUTRAL_WAIT_T - FLOW_BAND_T, true).target.x - EDGE_X) < 1e-9,
+      'the preview itself shows the middle of that spread (the aim), not a random draw');
+  }
 }
 
 // --- 打ち分けが段階的に跳ばない（離すタイミングの細かさが結果に出る） ---

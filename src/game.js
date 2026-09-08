@@ -89,6 +89,20 @@
   }
 
   /**
+   * 狙いがサイドラインに近いほど大きくなる、着地点の左右のばらつき(±m)。
+   * 「目一杯タイミングをずらして角度を作りにいくと、そのぶん狙いも荒れる」ぶんで、
+   * ここが「やりすぎるとミスも起きる」の実体（config.js の RISK_SPREAD 参照）。
+   * ←→ の狙い（最大2.7m）だけで打つぶんには 0＝素直に打てば絶対に外れない。
+   * @param {number} x タイミングを反映した後の狙い
+   * @param {number} timingAttr 能力値「安定感」の倍率（小さいほど散らない）
+   */
+  function aimRisk(x, timingAttr) {
+    const over = (Math.abs(x) - TIMING_AIM.RISK_FROM_X)
+      / (TIMING_AIM.EDGE_X - TIMING_AIM.RISK_FROM_X);
+    return TIMING_AIM.RISK_SPREAD * clamp(over, 0, 1) * timingAttr;
+  }
+
+  /**
    * ボールが今の速度のまま直進した場合、プレイヤーの奥行き(z)まで届く瞬間の x 座標（仮想延長線）。
    * バウンドは vx/vz を同じ係数で減速させるだけで比（＝軌道の向き）は変えないので、
    * バウンドをまたいでもこの直線予測はそのまま成立する。まだボールが遠いうちに判定しても、
@@ -1079,6 +1093,8 @@
         // ショット・ボレー・スマッシュは、引きつけても早振りしても同じところへ飛ぶ。
         timingMatters: (stroke === 'forehand' || stroke === 'backhand')
           && !shot.lob && shot.spin !== 'drop',
+        // 0 より大きければ「ライン際を狙っていて、この幅で散る＝外れることもある」
+        risk: shot.risk || 0,
         x: shot.target.x,
         z: shot.target.z,
       };
@@ -1168,18 +1184,22 @@
       const depth = lerp(SHOT.TAP_Z, SHOT.CHARGE_Z, charge);
 
       // 能力値「安定感」が高いほど、タイミングがずれてもコースが曲がりにくい（attr.timing）。
-      const x = lob
+      const aimed = lob
         ? baseX
         : aimWithTiming(baseX, stroke, swingTiming(waited), attr.timing);
+      // ライン際まで狙いを振ったぶんだけ、狙い自体が荒れる（やりすぎるとアウトになる）。
+      const risk = lob ? 0 : aimRisk(aimed, attr.timing);
 
       return {
         target: {
-          x,
+          x: aimed + spread(-risk, risk),
           y: BALL_R,
           z: lob ? SHOT.LOB_Z : spread(depth, depth + SHOT.DRIVE_Z_SPREAD),
         },
         flight,
         lob,
+        // ガイド表示用（この狙いがどれだけ荒れるか）。実際の打球には上で反映済み。
+        risk,
       };
     }
 

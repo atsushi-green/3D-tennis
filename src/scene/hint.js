@@ -145,16 +145,21 @@
     // 引っ張り／素直／流し／まだ早い（いま離すと空振り）を色で見分ける。
     // ボレー・スマッシュ・ロブ・ドロップはタイミングでコースが変わらない打ち方なので、
     // 引っ張り／流しの色は出さない（HUD 側の文言と揃える）。
+    // ライン際まで狙いを振っている（risk>0）ときは、その警告色を優先する。
     const timing = guide.timingMatters ? guide.timing : 0;
     const color = guide.tooEarly ? GUIDE.COLOR_EARLY
-      : timing > GUIDE.NEUTRAL_BAND ? GUIDE.COLOR_PULL
-        : timing < -GUIDE.NEUTRAL_BAND ? GUIDE.COLOR_FLOW : GUIDE.COLOR_STRAIGHT;
+      : guide.risk > 0 ? GUIDE.COLOR_RISK
+        : timing > GUIDE.NEUTRAL_BAND ? GUIDE.COLOR_PULL
+          : timing < -GUIDE.NEUTRAL_BAND ? GUIDE.COLOR_FLOW : GUIDE.COLOR_STRAIGHT;
     ringMat.color.setHex(color);
     lineMat.color.setHex(color);
     ringMat.opacity = guide.tooEarly ? GUIDE.OPACITY * 0.5 : GUIDE.OPACITY;
 
     ring.position.set(guide.x, GROUND_Y, guide.z);
     dot.position.set(guide.x, GROUND_Y, guide.z);
+    // 輪の大きさ＝着地点が散る幅。ライン際を狙うほど大きくなり、輪がサイドラインを
+    // はみ出したら「そのぶんは外れる」がそのまま見える。
+    ring.scale.setScalar(1 + (guide.risk || 0) / GUIDE.RING_R);
 
     const dx = guide.x - from.x;
     const dz = guide.z - from.z;

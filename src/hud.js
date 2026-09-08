@@ -398,6 +398,7 @@
       const pull = guide.timingMatters && guide.timing > GUIDE.NEUTRAL_BAND;
       const flow = guide.timingMatters && guide.timing < -GUIDE.NEUTRAL_BAND;
       el.classList.toggle('early', guide.tooEarly);
+      el.classList.toggle('risk', !guide.tooEarly && guide.risk > 0);
       el.classList.toggle('pull', !guide.tooEarly && pull);
       el.classList.toggle('flow', !guide.tooEarly && flow);
       // 目盛りは左＝引っ張り(+1)、右＝流し(-1)。timing をそのまま 0〜100% に直す。
@@ -409,9 +410,11 @@
       const label = !guide.timingMatters
         ? `${STROKE_LABEL[guide.stroke] || 'この球'}（タイミングは効かない）`
         : pull ? '引っ張り' : flow ? '流し' : '素直（狙ったところへ）';
+      // ライン際まで狙いを振っている＝外れることもある、を言葉でも出す（輪の大きさと対）。
+      const risky = guide.risk > 0 ? ' ⚠ライン際' : '';
       this.el.guideText.textContent = guide.tooEarly
         ? 'まだ早い — 離すと空振り'
-        : `${arrow} ${label}`;
+        : `${arrow} ${label}${risky}`;
     }
 
     /**
