@@ -163,14 +163,22 @@
       // ポイントが決まってしまい、再生中に startReplay() がもう一度呼ばれて今の再生が
       // 途中で上書きされる（＝「次のプレーが勝手に始まる」「再生が途中で途切れる」）。
       // game.js 自体には触れず、main.js が update() を呼ぶかどうかだけで制御する。
+      let pointJustEnded = false;
       if (!world.isReplaying()) {
         game.update(dt);
         // ポイントが決まった瞬間（'rally'→'over'）を検知してリプレイを始める。game.js には
         // 一切手を入れず、公開済みの game.phase を読むだけ（表示側で完結させる）。
-        if (game.phase === 'over' && prevPhase !== 'over') world.startReplay();
+        pointJustEnded = game.phase === 'over' && prevPhase !== 'over';
         prevPhase = game.phase;
       }
+      // 決着の瞬間のコマ（アウトならボールが実際に地面へ着いた座標）は、この game.update()
+      // の中で作られる。録画しているのは world.sync() なので、ここで startReplay() を先に
+      // 呼んでしまうと、その1コマがまだ録れていない＝リプレイの最後のコマが「着地する
+      // 1フレーム前（＝ボールが地面のわずかに上で止まって見える）」になってしまっていた。
+      // 速い球ほど1フレームぶんの移動が大きく、着地の直前で終わって見える。sync() で
+      // そのコマを録ってから切り出す。
       world.sync(game, dt);
+      if (pointJustEnded) world.startReplay();
       hud.setReplay(world.isReplaying());
       hud.setCharge(game.chargeMeter());
       hud.setSmashTip(game.smashHint);
