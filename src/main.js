@@ -26,6 +26,10 @@
   let awaitingToss = false;
   /** トスを始めた時点で選ばれていたダブルスの有無（トスの選択後にそのまま渡す）。 */
   let doublesPending = false;
+  /** hooks.matchEnd で受け取った、まだ画面に出していないスタッツ（出したら null に戻す）。 */
+  let pendingSummary = null;
+  /** 試合後のスタッツ画面を開いている間だけ true。この間は試合の進行を止める。 */
+  let matchStatsOpen = false;
 
   const game = new RallyOne.Game({
     input,
@@ -36,6 +40,10 @@
       score: () => hud.renderScore(game.match, game.server, game.stats),
       wind: (accel) => hud.setWind(accel),
       serveSpeed: (kmh) => hud.setServeSpeed(kmh),
+      // 1セットが終わって振り返りを出す番になった（game.js が TIMING.MATCH_STATS 後に呼ぶ）。
+      // ここでは受け取っておくだけで、実際に出すのはフレームループ（リプレイ再生中に
+      // 割り込まないよう、再生が終わってから開く）。
+      matchEnd: (summary) => { pendingSummary = summary; },
     },
   });
 
@@ -109,6 +117,9 @@
     onRandom: () => randomizeRatings(),
   });
   hud.buildMenu(menu);
+  // 試合後のスタッツ画面の「次の試合へ」。キーボード（Space/Enter）側は input.js が
+  // 同じ closeMatchStats() を呼ぶ＝マウスとキーで挙動がずれない。
+  hud.buildMatchStats({ onClose: () => closeMatchStats() });
 
   input.attach({
     isStarted: () => game.started,
@@ -131,7 +142,19 @@
     // リプレイのスキップは Space だけ（以前はどのキーでも飛んでしまい、ラリー用の
     // キーに触れただけで意図せずスキップされていた）。
     onSkipReplay: () => world.skipReplay(),
+    isMatchStatsOpen: () => matchStatsOpen,
+    onCloseMatchStats: () => closeMatchStats(),
   });
+
+  /**
+   * 試合後のスタッツ画面を閉じる。止めていた進行が再開し、game.js が仕掛けてある
+   * TIMING.NEXT_MATCH のタイマーの残りぶんだけ待って次のマッチが始まる。
+   */
+  function closeMatchStats() {
+    if (!matchStatsOpen) return;
+    matchStatsOpen = false;
+    hud.hideMatchStats();
+  }
 
   /** hud.setStamina() に渡す4人ぶんの残量をそのつど組み立てる。 */
   function syncStamina() {
@@ -159,12 +182,20 @@
     prev = now;
 
     if (game.started) {
-      // リプレイ中は試合の進行を止める（＝「再生ぶんだけ待つ」）。止めないと裏で次の
-      // ポイントが決まってしまい、再生中に startReplay() がもう一度呼ばれて今の再生が
-      // 途中で上書きされる（＝「次のプレーが勝手に始まる」「再生が途中で途切れる」）。
-      // game.js 自体には触れず、main.js が update() を呼ぶかどうかだけで制御する。
+      // リプレイが終わっていて、まだ出していないスタッツがあれば、ここで開く
+      // （最後のポイントの再生に割り込まないよう、必ず再生が終わってから）。
+      if (pendingSummary && !world.isReplaying()) {
+        hud.showMatchStats(pendingSummary);
+        pendingSummary = null;
+        matchStatsOpen = true;
+      }
+      // リプレイ中とスタッツ画面を開いている間は、試合の進行そのものを止める（＝「見て
+      // いるぶんだけ待つ」）。止めないと裏で次のポイントが進んでしまい、再生が途中で
+      // 上書きされたり、振り返りを読んでいる間に次の試合が始まったりする。game.js には
+      // 手を入れず、main.js が update() を呼ぶかどうかだけで制御する（タイマーは
+      // Game#update の中で数えているので、止めれば待ち時間もそこで止まる）。
       let pointJustEnded = false;
-      if (!world.isReplaying()) {
+      if (!world.isReplaying() && !matchStatsOpen) {
         game.update(dt);
         // ポイントが決まった瞬間（'rally'→'over'）を検知してリプレイを始める。game.js には
         // 一切手を入れず、公開済みの game.phase を読むだけ（表示側で完結させる）。

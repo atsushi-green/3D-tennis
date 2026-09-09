@@ -212,12 +212,32 @@
     return SPIN_LABELS[spin] || SPIN_LABELS.flat;
   }
 
+  /**
+   * スタッツの入れ物（1チームぶん×2）。数え方はすべて「打った側／取った側」の視点で、
+   * 表示（hud.js）はここの数字を並べるだけにする。
+   * - points        取ったポイント数
+   * - winners       自分の決め球で取ったポイント（サーブのエースは aces に数えるので含めない）
+   * - unforced      自分のミス（ネット／アウト／届かず／ダブルフォルト）で落としたポイント
+   * - firstServes   打った1本目のサーブの数／firstServeIn はそのうちサービスボックスに入った数
+   * - maxServeKmh   そのマッチでいちばん速かったサーブの初速
+   */
+  function teamStats() {
+    const blank = () => ({
+      aces: 0, doubleFaults: 0, points: 0, winners: 0, unforced: 0,
+      firstServes: 0, firstServeIn: 0, maxServeKmh: 0,
+    });
+    return { you: blank(), cpu: blank() };
+  }
+
   /** phase: idle → serve → rally → over → (serve …) */
   class Game {
     /**
      * @param {object} deps
      * @param {object} deps.input RallyOne.Input
-     * @param {{sound:Function, call:Function, clearCall:Function, score:Function}} deps.hooks
+     * @param {{sound:Function, call:Function, clearCall:Function, score:Function,
+     *   wind:Function, serveSpeed:Function, matchEnd:Function}} deps.hooks
+     *   matchEnd は「1セットが終わって、その振り返り（スタッツ）を出す番」になったときに
+     *   matchSummary() の結果を渡して1回だけ呼ばれる（表示側が画面を出す）。
      */
     constructor({ input, hooks }) {
       this.input = input;
@@ -351,11 +371,17 @@
       this.lastBallOwnerSeen = null;
       /** 今のポイントのサーブが1本目(1)か、1本目がフォールトした後のセカンドサーブ(2)か。 */
       this.serveNumber = 1;
-      /** チームごとの通算スタッツ（HUD表示用）。マッチ全体（1セット）を通して積算し、リセットしない。 */
-      this.stats = {
-        you: { aces: 0, doubleFaults: 0 },
-        cpu: { aces: 0, doubleFaults: 0 },
-      };
+      /**
+       * チームごとの通算スタッツ。マッチ（1セット）を通して積算し、セットが終わって
+       * 次のマッチが始まるとき（resetStats()）だけ0に戻す。エース／ダブルフォルトは
+       * 試合中もスコアボードに出し、残りは試合後のスタッツ画面（matchSummary()）で使う。
+       */
+      this.stats = teamStats();
+      /**
+       * チームで分けられない、マッチ全体の集計（スタッツ画面のラリーの行に使う）。
+       * totalShots はポイントが決まった時点の rallyShots の合計＝サーブも1本に数える。
+       */
+      this.matchStats = { points: 0, longestRally: 0, totalShots: 0 };
 
       /**
        * このポイント中に吹いている風（横方向の加速度、m/s²）。newPoint() で決め直す。
@@ -797,7 +823,12 @@
       Object.assign(ball, solveShot(from, target, flightT, SERVE.CLEARANCE, spin));
       ball.spin = spin;
       // 打った瞬間の初速をそのままスコアボード脇に出す（次のポイントが始まるまで残す）
-      this.hooks.serveSpeed(mpsToKmh(Math.hypot(ball.vx, ball.vy, ball.vz)));
+      const serveKmh = mpsToKmh(Math.hypot(ball.vx, ball.vy, ball.vz));
+      this.hooks.serveSpeed(serveKmh);
+      // スタッツ用。1本目の本数はここで数え、「入った本数」は bounce() が数える
+      // （入るか入らないかは着地するまで決まらないため）。
+      this.stats[team].maxServeKmh = Math.max(this.stats[team].maxServeKmh, serveKmh);
+      if (this.serveNumber === 1) this.stats[team].firstServes++;
       ball.live = true;
       ball.bounces = 0;
       ball.age = 0;
@@ -1203,6 +1234,32 @@
       };
     }
 
+    /** 次のマッチのためにスタッツを0へ戻す（スタッツ画面を出し終えた後に呼ぶ）。 */
+    resetStats() {
+      this.stats = teamStats();
+      this.matchStats = { points: 0, longestRally: 0, totalShots: 0 };
+    }
+
+    /**
+     * 試合後のスタッツ画面に渡す数字ひとまとめ（純粋な集計。表示の文言・並べ方は hud.js）。
+     * 割合の分子・分母はそのまま渡す（「1stサーブ 62%」のような丸めは表示側の仕事）。
+     * @param {'you'|'cpu'} winner セットを取った側
+     */
+    matchSummary(winner) {
+      const { points, totalShots, longestRally } = this.matchStats;
+      return {
+        winner,
+        doubles: this.doubles,
+        games: { you: this.match.games.you, cpu: this.match.games.cpu },
+        points,
+        longestRally,
+        // 1ポイントあたりの平均本数（サーブを1本目に数える）。0ポイントで割らない。
+        avgRally: points ? totalShots / points : 0,
+        you: { ...this.stats.you },
+        cpu: { ...this.stats.cpu },
+      };
+    }
+
     endPoint(winner, reason) {
       if (this.phase === 'over') return;
       // ダブルフォルト＝サーバー側の失点。エース＝サーブがリターンに一度も触れられずに
@@ -1221,6 +1278,17 @@
         : isAce ? 'ace'
           : reason === 'ツーバウンド' ? 'winner' : 'error';
       this.hooks.sound('point', winner, outcome, this.rallyShots);
+
+      // 試合後のスタッツ画面（matchSummary()）のための集計。決まり方（outcome）はもう
+      // 出してあるので、それをそのまま「決め球で取った(winners)」「相手のミスで取った
+      // (相手の unforced)」に振り分ける。エース／ダブルフォルトは専用の欄に数えるので
+      // ここでは二重に数えない。
+      this.stats[winner].points++;
+      if (outcome === 'winner') this.stats[winner].winners++;
+      else if (outcome === 'error') this.stats[opponent(winner)].unforced++;
+      this.matchStats.points++;
+      this.matchStats.totalShots += this.rallyShots;
+      this.matchStats.longestRally = Math.max(this.matchStats.longestRally, this.rallyShots);
 
       const result = this.match.awardPoint(winner);
       const mine = winner === 'you';
@@ -1245,8 +1313,14 @@
       if (result.type === 'set') {
         this.hooks.call('ゲームセット', mine ? 'あなたの勝ち' : 'CPU の勝ち');
         this.hooks.score();
+        // 「ゲームセット」のコール（と最後のポイントのリプレイ）を見せてから、一拍おいて
+        // 振り返りのスタッツを出す。ここは setTimeout ではなく Game#after のタイマーなので
+        // update() が止まっている間（＝リプレイ再生中）は進まない＝リプレイが終わってから
+        // 数え始める。画面を出すのは表示側（main.js が hooks.matchEnd で受ける）。
+        this.after(TIMING.MATCH_STATS, () => this.hooks.matchEnd(this.matchSummary(winner)));
         this.after(TIMING.NEXT_MATCH, () => {
           this.match.reset();
+          this.resetStats(); // 次のマッチは0から数え直す（スタッツ画面はもう出した後）
           this.serverPartner = { you: 'you', cpu: 'cpu' }; // 次のセットは主力からサーブし直す
           this.hooks.score();
           this.newPoint();
@@ -1780,7 +1854,11 @@
         // サーブがまだ一度も返されていない間の1バウンド目は、通常のラリーの着地判定
         // （コート全体）ではなく、サービスボックスに入ったかどうかで判定する。
         if (this.serveInFlight) {
-          if (this.inServiceBox(ball)) return false;
+          if (this.inServiceBox(ball)) {
+            // 1本目がサービスボックスに入った＝1stサーブが入った本数（スタッツ用）。
+            if (this.serveNumber === 1) this.stats[ball.last].firstServeIn++;
+            return false;
+          }
           this.serveFault('アウト');
           return true;
         }

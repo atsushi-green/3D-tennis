@@ -154,6 +154,18 @@
   </div>
 </div></div>
 
+<!-- 試合（1セット）が終わったときの振り返り。中身（見出し・表の行）は hud.js が
+     game.matchSummary() の数字から組み立てる。開いている間は試合の進行を止める
+     （main.js のフレームループ。リプレイ中と同じ扱い）。 -->
+<div id="matchStats"><div class="card">
+  <div class="msKicker">ゲームセット</div>
+  <h2 id="msTitle"></h2>
+  <div id="msScore"></div>
+  <div id="msTable"></div>
+  <div id="msRally"></div>
+  <div class="playBtn" id="msClose">次の試合へ<kbd>Space</kbd></div>
+</div></div>
+
 <!-- 依存の順に読み込む。各ファイルは window.RallyOne に自分の分を足していく。 -->
 <script src="vendor/three.min.js"></script>
 <script src="src/config.js"></script>

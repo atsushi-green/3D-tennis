@@ -101,7 +101,7 @@ const {
 } = R.config;
 const fakeInput = { moveX: 0, moveZ: 0, lob: false };
 const noHooks = {
-  sound() {}, call() {}, clearCall() {}, score() {}, wind() {}, serveSpeed() {},
+  sound() {}, call() {}, clearCall() {}, score() {}, wind() {}, serveSpeed() {}, matchEnd() {},
 };
 
 /**
@@ -4148,6 +4148,102 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     ok(outs(0.4) < outs(1), 'a steadier AI misses the lines less often');
   }
   ok(PHYSICS.BALL_R > 0, 'sanity: config is still intact after all the rating changes');
+}
+
+// --- 試合後のスタッツ：数え方（ポイント／ウィナー／ミス／1stサーブ／最速サーブ／ラリー） ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.phase = 'rally'; // endPoint() を直接叩いて「決まり方」ごとの数え方だけを見る
+
+  const point = (winner, reason, shots) => {
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.rallyShots = shots;
+    g.endPoint(winner, reason);
+  };
+  point('you', 'ツーバウンド', 5);          // 自分のウィナー
+  point('cpu', 'アウト', 3);                // 自分のミス＝相手のポイント
+  point('you', 'ネット', 9);                // 相手のミス
+  g.phase = 'rally';
+  g.serveInFlight = true;                   // サーブが一度も触れられずに決まった＝エース
+  g.rallyShots = 1;
+  g.endPoint('you', 'ツーバウンド');
+  point('cpu', 'ダブルフォルト', 1);        // ダブルフォルトはサーバー（you）の失点
+
+  const st = g.stats;
+  ok(st.you.points === 3 && st.cpu.points === 2, `points: ${st.you.points}-${st.cpu.points}`);
+  ok(st.you.winners === 1, `winners count only the decisive shots (not aces): ${st.you.winners}`);
+  ok(st.you.aces === 1 && st.you.unforced === 1, `ace=${st.you.aces} unforced=${st.you.unforced}`);
+  ok(st.cpu.unforced === 1, `the opponent's net error is their own miss: ${st.cpu.unforced}`);
+  ok(st.you.doubleFaults === 1 && st.cpu.unforced === 1,
+    'a double fault is counted in its own column, not as an unforced error');
+  ok(g.matchStats.points === 5 && g.matchStats.longestRally === 9,
+    `match totals: points=${g.matchStats.points} longest=${g.matchStats.longestRally}`);
+
+  const sum = g.matchSummary('you');
+  ok(sum.winner === 'you' && sum.points === 5, 'summary carries the winner and the point count');
+  ok(Math.abs(sum.avgRally - (5 + 3 + 9 + 1 + 1) / 5) < 1e-9, `avgRally: ${sum.avgRally}`);
+  ok(sum.you.points === 3 && sum.you !== g.stats.you, 'summary copies the stats (not a live reference)');
+
+  g.resetStats();
+  ok(g.stats.you.points === 0 && g.matchStats.points === 0, 'resetStats() clears everything');
+}
+
+// --- 試合後のスタッツ：セットが終わると matchEnd が1回だけ呼ばれ、次のマッチで0に戻る ---
+{
+  const ends = [];
+  const g = new R.Game({
+    input: fakeInput,
+    hooks: { ...noHooks, matchEnd: (summary) => ends.push(summary) },
+  });
+  g.start();
+  g.match.games.you = 5; // あと1ゲームでセット
+  // 1ポイントずつ「決まる → ポイント間を待って次のサーブの構えに戻る」を通す
+  // （まとめて endPoint() だけを続けて呼ぶと、前のポイントの待ちタイマーが後から
+  // beginServe() を呼んで、セット終了時のタイマーごと消してしまう＝実際の進行とは違う）。
+  const winPoint = (last) => {
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.rallyShots = 4;
+    g.endPoint('you', 'ツーバウンド');
+    if (last) return;
+    for (let i = 0; i < 60 * 3 && g.phase === 'over'; i++) g.update(1 / 60);
+  };
+  for (let i = 0; i < 3; i++) winPoint(false);
+  winPoint(true); // この1本でゲーム＝セットが決まる
+  ok(g.match.games.you === 6, `precondition: the set is won, games=${g.match.games.you}`);
+  ok(ends.length === 0, 'the summary does not appear before TIMING.MATCH_STATS has passed');
+  // TIMING.MATCH_STATS ぶん進めると出る（リプレイ中は main.js が update() を止めるので、
+  // 実際の画面では再生が終わってから数え始める）
+  for (let i = 0; i < 60 * 2 && ends.length === 0; i++) g.update(1 / 60);
+  ok(ends.length === 1, `matchEnd fires once when the set ends: ${ends.length}`);
+  ok(ends[0].winner === 'you' && ends[0].games.you === 6, 'the summary has the final score');
+  ok(ends[0].you.winners === 4, `and the accumulated stats: ${ends[0].you.winners}`);
+  // 次のマッチが始まるとき（TIMING.NEXT_MATCH）にスタッツは0へ戻る
+  for (let i = 0; i < 60 * 4 && g.stats.you.winners > 0; i++) g.update(1 / 60);
+  ok(g.stats.you.winners === 0 && g.match.games.you === 0, 'the next match starts from zero');
+  ok(ends.length === 1, 'and the summary is not shown twice');
+}
+
+// --- 試合後のスタッツ：1stサーブの本数と確率、最速サーブ（実際にサーブを打って数える） ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  // 1本目を打って、フォールトせずに入るまで進める
+  tap(g);
+  ok(g.stats.you.firstServes === 1, `hitting a first serve counts it: ${g.stats.you.firstServes}`);
+  ok(g.stats.you.maxServeKmh > 0, `the serve speed is recorded: ${g.stats.you.maxServeKmh}`);
+  for (let i = 0; i < 240 && g.ball.bounces === 0 && g.phase !== 'serve'; i++) g.update(1 / 60);
+  ok(g.stats.you.firstServeIn === 1,
+    `a first serve that lands in the box counts as in: ${g.stats.you.firstServeIn}`);
+
+  // 2本目（セカンドサーブ）は 1st の分母に入らない
+  const g2 = new R.Game({ input: fakeInput, hooks: noHooks });
+  g2.start();
+  g2.serveNumber = 2;
+  tap(g2);
+  ok(g2.stats.you.firstServes === 0, 'a second serve is not counted as a first serve');
 }
 
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);

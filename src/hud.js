@@ -14,9 +14,62 @@
     forehand: 'ロブ／ドロップ',
     backhand: 'ロブ／ドロップ',
   };
+  /**
+   * 試合後のスタッツ画面に並べる行。value() は game.matchSummary() の 1チームぶんを受け取り、
+   * 出す文字列と、左右どちらが上かを比べるための数値（cmp）を返す。cmp が null の行
+   * （ダブルフォルトのように「少ない方が良い」など、勝ち負けで色を付けたくない行）は
+   * どちらも強調しない。
+   */
+  const STAT_ROWS = [
+    { label: '獲得ポイント', value: (t) => ({ text: `${t.points}`, cmp: t.points }) },
+    {
+      label: '1stサーブ',
+      // 分母が0（そのチームが一度もサーブしていない）ときは割合を出さずに「—」。
+      value: (t) => (t.firstServes
+        ? { text: `${Math.round((t.firstServeIn / t.firstServes) * 100)}%`, cmp: t.firstServeIn / t.firstServes }
+        : { text: '—', cmp: null }),
+    },
+    { label: 'エース', value: (t) => ({ text: `${t.aces}`, cmp: t.aces }) },
+    { label: 'ダブルフォルト', value: (t) => ({ text: `${t.doubleFaults}`, cmp: null }) },
+    { label: 'ウィナー', value: (t) => ({ text: `${t.winners}`, cmp: t.winners }) },
+    { label: 'ミス', value: (t) => ({ text: `${t.unforced}`, cmp: null }) },
+    {
+      label: '最速サーブ',
+      value: (t) => (t.maxServeKmh
+        ? { text: `${Math.round(t.maxServeKmh)}km/h`, cmp: t.maxServeKmh }
+        : { text: '—', cmp: null }),
+    },
+  ];
+
   const $ = (id) => document.getElementById(id);
   /** その行（id）の中の選択ボタンを左から順に。 */
   const segs = (id) => Array.from($(id).querySelectorAll('.seg'));
+
+  /**
+   * スタッツ表の1行（YOU の値／項目名／CPU の値）。cmp が両方とも数値のときだけ、
+   * 上回っている側に .lead を付けて色で分かるようにする。
+   * @param {string} cls 追加のクラス（見出し行なら 'head'）
+   */
+  function row(cls, label, you, cpu) {
+    const el = document.createElement('div');
+    el.className = `msRow${cls ? ` ${cls}` : ''}`;
+    const cell = (side, v, lead) => {
+      const d = document.createElement('div');
+      d.className = `msVal ${side}${lead ? ' lead' : ''}`;
+      d.textContent = v.text;
+      return d;
+    };
+    const comparable = typeof you.cmp === 'number' && typeof cpu.cmp === 'number' && you.cmp !== cpu.cmp;
+    const name = document.createElement('div');
+    name.className = 'msLabel';
+    name.textContent = label;
+    el.append(
+      cell('you', you, comparable && you.cmp > cpu.cmp),
+      name,
+      cell('cpu', cpu, comparable && cpu.cmp > you.cmp),
+    );
+    return el;
+  }
 
   class Hud {
     constructor() {
@@ -49,6 +102,12 @@
         guideText: $('guideText'),
         guideNeedle: $('guideNeedle'),
         replayTag: $('replayTag'),
+        matchStats: $('matchStats'),
+        msTitle: $('msTitle'),
+        msScore: $('msScore'),
+        msTable: $('msTable'),
+        msRally: $('msRally'),
+        msClose: $('msClose'),
         roster: $('roster'),
         rosterTabs: $('rosterTabs'),
         rosterRows: $('rosterRows'),
@@ -417,6 +476,49 @@
       this.el.guideText.textContent = guide.tooEarly
         ? 'まだ早い — 離すと空振り'
         : `${arrow} ${label}${risky}`;
+    }
+
+    /**
+     * 試合後のスタッツ画面の「次の試合へ」ボタンを配線する（main.js から一度だけ呼ぶ）。
+     * キーボード（Space）側は input.js が同じハンドラを呼ぶので、どちらでも同じ結果になる。
+     * @param {{onClose:Function}} handlers
+     */
+    buildMatchStats(handlers) {
+      this.el.msClose.addEventListener('click', () => handlers.onClose());
+    }
+
+    /**
+     * 1セットが終わったときの振り返り。数字は game.matchSummary()（純ロジック）が作り、
+     * ここは並べて出すだけ。開いている間は main.js が試合の進行を止める。
+     * @param {object} summary RallyOne.Game#matchSummary() の結果
+     */
+    showMatchStats(summary) {
+      const mine = summary.winner === 'you';
+      const label = summary.doubles
+        ? { you: 'YOUチーム', cpu: 'CPUチーム' }
+        : { you: 'YOU', cpu: 'CPU' };
+      this.el.msTitle.textContent = mine ? 'あなたの勝ち' : 'CPU の勝ち';
+      this.el.msTitle.classList.toggle('win', mine);
+      this.el.msScore.textContent = `${label.you} ${summary.games.you} — ${summary.games.cpu} ${label.cpu}`;
+
+      const rows = [row('head', '', { text: label.you }, { text: label.cpu })];
+      STAT_ROWS.forEach((spec) => {
+        const you = spec.value(summary.you);
+        const cpu = spec.value(summary.cpu);
+        rows.push(row('', spec.label, you, cpu));
+      });
+      this.el.msTable.replaceChildren(...rows);
+
+      // ラリーの長さは両チームで1本ずつ打ち合った結果なので、左右に分けず表の外に出す。
+      this.el.msRally.textContent = summary.points
+        ? `総ポイント ${summary.points} ／ 最長ラリー ${summary.longestRally}本 ／ 平均 ${summary.avgRally.toFixed(1)}本`
+        : '';
+      this.hideCall(); // 「ゲームセット」のコールと重ならないように引っ込める
+      this.el.matchStats.classList.add('on');
+    }
+
+    hideMatchStats() {
+      this.el.matchStats.classList.remove('on');
     }
 
     /**

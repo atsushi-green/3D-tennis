@@ -46,6 +46,11 @@
    * 試合中は他に用のない Space だけに限定する。
    */
   const SKIP_REPLAY = ['Space'];
+  /**
+   * 試合後のスタッツ画面を閉じて次の試合へ進むキー。開いている間は他のキーを一切通さない
+   * （構えのキーに触れただけで振り返りが消えてしまわないよう、リプレイのスキップと同じ考え方）。
+   */
+  const CLOSE_MATCH_STATS = ['Space', 'Enter'];
   /** ブラウザのスクロールを止めたいキー */
   const SWALLOW = MOVE_LEFT.concat(MOVE_RIGHT, MOVE_UP, MOVE_DOWN, SWING_CODES, SKIP_REPLAY);
 
@@ -63,7 +68,8 @@
      *   onSelectDifficulty:Function, onSelectSurface:Function, onSelectStyle:Function,
      *   onToggleGuide:Function,
      *   onSelectToss:Function, isAwaitingToss:Function,
-     *   onSkipReplay:Function, isStarted:Function}} handlers
+     *   onSkipReplay:Function, isStarted:Function,
+     *   isMatchStatsOpen:Function, onCloseMatchStats:Function}} handlers
      */
     attach(handlers) {
       addEventListener('keydown', (e) => {
@@ -81,6 +87,11 @@
           else if (STYLE_KEYS[e.code]) handlers.onSelectStyle(STYLE_KEYS[e.code]);
           else if (GUIDE_KEYS.indexOf(e.code) !== -1) handlers.onToggleGuide();
           else handlers.onStart();
+          return;
+        }
+        // 試合後のスタッツ画面が出ている間は、それを閉じる操作だけを受け付ける。
+        if (handlers.isMatchStatsOpen()) {
+          if (CLOSE_MATCH_STATS.indexOf(e.code) !== -1) handlers.onCloseMatchStats();
           return;
         }
         // ポイント間のリプレイをスキップする合図。リプレイ中でなければ何もしない
@@ -118,6 +129,8 @@
         // すべて受け持つので、ここでは何もしない。以前は「画面のどこをクリックしても開始」
         // だったが、それだとボタンやつまみを押した瞬間に試合が始まってしまう。
         if (!handlers.isStarted()) return;
+        // スタッツ画面が出ている間は「次の試合へ」ボタン（hud.js が配線）だけが押せる。
+        if (handlers.isMatchStatsOpen()) return;
         if (!this.chargeKey) {
           this.chargeKey = 'Pointer';
           handlers.onChargeStart(this.heldSpin());
