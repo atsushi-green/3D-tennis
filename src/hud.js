@@ -4,7 +4,7 @@
 
   const { pointLabel } = RallyOne.scoring;
   const {
-    GUIDE, WIND, STAMINA, SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, getRating,
+    GUIDE, SERVE, WIND, STAMINA, SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, getRating,
   } = RallyOne.config;
   /** ガイドで「タイミングが効かない」と伝えるときの打ち方の呼び名。 */
   const STROKE_LABEL = {
@@ -97,6 +97,7 @@
         tossChoice: $('tossChoice'),
         charge: $('charge'),
         chargeFill: $('chargeFill'),
+        chargeMark: $('chargeMark'),
         smashTip: $('smashTip'),
         guide: $('guide'),
         guideText: $('guideText'),
@@ -530,13 +531,25 @@
       this.el.replayTag.classList.toggle('on', on);
     }
 
-    /** @param {number} fraction 溜め量 0〜1。0以下なら非表示。 */
-    setCharge(fraction) {
+    /**
+     * 溜めゲージ。サーブのときだけ「最大威力になる位置」の線を出す
+     * （SERVE.CHARGE_SWEET_MARK＝9割の位置。game.serveTimingPower() と同じ基準）。
+     * 線を越えた分は赤く塗って、フォールトの確率が上がっていることを示す。
+     * @param {number} fraction 溜め量 0〜1。0以下なら非表示。
+     * @param {boolean} [serve] サーブの溜め中か（game.isServeCharging()）
+     */
+    setCharge(fraction, serve = false) {
       const on = fraction > 0;
       this.el.charge.classList.toggle('on', on);
+      this.el.charge.classList.toggle('serve', serve);
       if (!on) return;
+      this.el.chargeMark.style.left = `${SERVE.CHARGE_SWEET_MARK * 100}%`;
       this.el.chargeFill.style.width = `${Math.min(fraction, 1) * 100}%`;
-      this.el.chargeFill.classList.toggle('full', fraction >= 1);
+      // ラリーは「満タン＝最強」なので満タンで光らせる。サーブは線に届いた時点が最強
+      // （そこから先は威力は増えずフォールトの危険だけが増える）ので、光る条件も線に合わせる。
+      const sweet = serve ? SERVE.CHARGE_SWEET_MARK : 1;
+      this.el.chargeFill.classList.toggle('full', fraction >= sweet);
+      this.el.chargeFill.classList.toggle('over', serve && fraction > SERVE.CHARGE_SWEET_MARK);
     }
   }
 

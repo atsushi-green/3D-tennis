@@ -259,6 +259,7 @@
         x: 0, z: -HALF_L - 0.6, vx: 0, vz: 0, // vx/vz は実速度（加速度で目標速度に近づける）
         swing: 0, anim: 0, speed: 0, stroke: 'forehand', prep: null,
         charging: false, chargeTime: 0, swingCharge: 0, // 溜めキー押しっぱなしのテイクバック
+        serveMiss: false, // このサーブは「溜めすぎ」の抽選に当たった＝狙いを外す（chargeRelease()で抽選）
         chargeFrac: 0, // 溜めている間だけ 0〜1 で増える、テイクバックの深さ用（chargeTime のポーズ表示版）
         chargeStroke: null, // chargeStart() の瞬間に固定するフォア/バック。溜めている間は変えない
         chargeSpin: 'flat', // chargeStart() の瞬間に固定するスピン（B/V/C）。実際に当たるまで押し続けなくてよい
@@ -501,6 +502,9 @@
       this.you.swingCharge = myServe
         ? this.serveTimingPower(this.you.chargeTime)
         : clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1);
+      // ゲージの線を超えて溜めたぶんだけ、この1本を外す抽選をここで引く（超えていなければ
+      // 確率0＝必ず外れない）。実際にどう外れるかは serve() が決める。
+      if (myServe) this.you.serveMiss = Math.random() < this.serveFaultChance(this.you.chargeTime);
 
       if (myServe && this.tossActive) {
         this.serve('you');
@@ -510,28 +514,48 @@
     }
 
     /**
-     * サーブの威力(0〜1)。長く溜めるほど強いのではなく、SERVE.CHARGE_SWEET_T にちょうど
-     * 近いタイミングで離したときに最大になり、早すぎても遅すぎても CHARGE_WINDOW の幅で
-     * 弱くなる（三角形のカーブ）。
+     * サーブの威力(0〜1)。ゲージの線（＝SERVE.CHARGE_SWEET_T まで溜めた地点。ゲージの
+     * 9割の位置に出る）までは溜めるほど強くなり、線に届いたところで最大になる。
+     * 線を超えて溜めても威力はもう増えず、代わりに serveFaultChance() が上がっていく。
      * @param {number} heldTime 溜めキーを押してから離すまでの実経過時間(秒)
      */
     serveTimingPower(heldTime) {
-      const { CHARGE_SWEET_T, CHARGE_WINDOW } = SERVE;
-      // 能力値「サーブ」が高いほどこの窓が広い＝多少ずれても威力が落ちない（attr.serveWindow）。
-      const window = CHARGE_WINDOW * this.you.attr.serveWindow;
-      return clamp(1 - Math.abs(heldTime - CHARGE_SWEET_T) / window, 0, 1);
+      return clamp(heldTime / SERVE.CHARGE_SWEET_T, 0, 1);
     }
 
     /**
-     * HUD のゲージ表示用。「今この瞬間に離したら」どれくらいの威力になるかを 0〜1 で返す
-     * （サーブはタイミングのカーブ、ラリーは溜め時間の割合）。溜めていなければ0。
+     * ゲージの線を超えて溜めたときに、そのサーブがフォールトになる確率(0〜1)。
+     * 線の直後は SERVE.CHARGE_SWEET_HOLD の間だけ猶予があり（60fps で線ちょうどに
+     * 合わせるのは1〜2フレームの勝負なので、わずかな行き過ぎは見逃す）、そこから
+     * SERVE.CHARGE_FAULT_T かけて100%まで上がる。
+     * 能力値「サーブ」が高いほど猶予と ramp の両方が広い＝超えても粘れる（attr.serveWindow）。
+     * @param {number} heldTime 溜めキーを押してから離すまでの実経過時間(秒)
+     */
+    serveFaultChance(heldTime) {
+      const tolerance = this.you.attr.serveWindow;
+      const over = heldTime - (SERVE.CHARGE_SWEET_T + SERVE.CHARGE_SWEET_HOLD * tolerance);
+      if (over <= 0) return 0;
+      return clamp(over / (SERVE.CHARGE_FAULT_T * tolerance), 0, 1);
+    }
+
+    /**
+     * HUD のゲージ表示用。溜まり具合を 0〜1 で返す。溜めていなければ0。
+     * サーブは「ゲージが満タンになるまでの保持時間」に対する割合（線は
+     * SERVE.CHARGE_SWEET_MARK の位置＝9割に出る。満タンまでの時間はそこから逆算する）。
+     * ラリーは従来どおり溜め時間の割合。
      */
     chargeMeter() {
       if (!this.you.charging) return 0;
-      const myServe = this.phase === 'serve' && this.servingPlayer() === 'you';
-      return myServe
-        ? this.serveTimingPower(this.you.chargeTime)
-        : clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1);
+      if (this.isServeCharging()) {
+        const fullT = SERVE.CHARGE_SWEET_T / SERVE.CHARGE_SWEET_MARK;
+        return clamp(this.you.chargeTime / fullT, 0, 1);
+      }
+      return clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1);
+    }
+
+    /** 今この瞬間、自分のサーブを溜めている最中か（HUD がゲージの線を出すかの判定に使う）。 */
+    isServeCharging() {
+      return this.you.charging && this.phase === 'serve' && this.servingPlayer() === 'you';
     }
 
     /**
@@ -673,6 +697,7 @@
       this.you.chargeTime = 0; // 前のサーブの溜めを持ち越さない
       this.you.chargeStroke = null;
       this.you.chargeSpin = 'flat';
+      this.you.serveMiss = false; // 前のサーブの「溜めすぎ」の抽選結果も持ち越さない
 
       // 前のサーブの反応遅延・打球後硬直を持ち越さない（moveDoublesTeams()/moveSinglesCpu() は
       // phase==='serve' 中は動かないので実害はないが、次のラリー開始時に混乱しないよう明示的に戻す）
@@ -712,7 +737,7 @@
       if (server === 'you') {
         this.hooks.call(
           faultReason ? 'セカンドサーブ' : 'サーブ',
-          faultReason ? `${faultReason} — もう一度` : '←→ 左右のコース ／ ↑↓ 深さ ／ B/V/C 押しっぱなしで打つ',
+          faultReason ? `${faultReason} — もう一度` : '←→ コース ／ ↑↓ 深さ ／ B/V/C 押しっぱなし → ゲージの線で離す',
         );
       } else if (server === 'youMate') {
         // 人間のチームだが、今回は相方の番。人間は何もしなくてよい
@@ -772,7 +797,7 @@
       ball.vz = 0;
       ball.vy = Math.sqrt(2 * Math.abs(PHYSICS.GRAVITY) * (SERVE.TOSS_PEAK - SERVE.BALL_Y));
       this.tossActive = true;
-      this.hooks.call('トス', 'いいタイミングで離す！');
+      this.hooks.call('トス', 'ゲージの線まで溜めて離す（超えるとフォールト）');
     }
 
     /**
@@ -806,21 +831,47 @@
       const target = {
         x: targetSign * magnitude,
         y: BALL_R,
-        z: dir * (COURT.SERVICE - (who === 'you' ? this.serveDepth() : rand(SERVE.DEPTH_MIN, SERVE.DEPTH_MAX))),
+        z: dir * (COURT.SERVICE - (who === 'you' ? this.serveDepth() : rand(SERVE.DEPTH_MIN, SERVE.DEPTH_AI_MAX))),
       };
-      // プレイヤーは「打つ」瞬間の溜め量で威力が変わる。CPU/AI（cpu・cpuMate・youMate）は
-      // 溜め演出がない代わりに、難易度で決まる一定の威力（CPU.SERVE_T）で打つ。
-      // どちらにも能力値「サーブ」の倍率が掛かる（attr.serve。小さいほど速い＝強い）。
-      const flightT = (who === 'you'
-        ? lerp(SERVE.T, SERVE.CHARGE_T, this.you.swingCharge)
-        : CPU.SERVE_T) * this.actor(who).attr.serve;
-      // 人間はトスを上げた瞬間に固定したスピン（V/C。chargeStart() 参照）でスライスサーブ・
+      // ゲージの線を超えて溜めた（chargeRelease() の抽選に当たった）1本は、狙いそのものを
+      // サービスボックスの外へずらして外す。「フォールト」の判定は普段どおり着地で決まる
+      // （bounce()→inServiceBox()）ので、ロング／サイドアウトがそのまま画面に出る。
+      const overcharged = who === 'you' && this.you.serveMiss;
+      let clearance = SERVE.CLEARANCE;
+      if (overcharged) {
+        if (Math.random() < SERVE.FAULT_LONG_CHANCE) {
+          target.z = dir * (COURT.SERVICE + rand(SERVE.FAULT_LONG_MIN, SERVE.FAULT_LONG_MAX));
+        } else {
+          target.x = targetSign * (HALF_W + rand(SERVE.FAULT_WIDE_MIN, SERVE.FAULT_WIDE_MAX));
+        }
+      } else if (Math.random() < SERVE.NET_CHANCE * (who === 'you' ? this.you.swingCharge : 1)) {
+        // 強いサーブほどネットに掛かる（確率は威力に比例。CPU/AI は常に全力扱い）。
+        // 深い狙いのままでは幾何的に白帯へ届かないので、「ネットのすぐ向こうを狙って
+        // しまったミスヒット」として実現する（理由は config の NET_MISS_Z_MIN 参照）。
+        target.z = dir * rand(SERVE.NET_MISS_Z_MIN, SERVE.NET_MISS_Z_MAX);
+        clearance = SERVE.NET_MISS_CLEARANCE; // ネット回避で持ち上げさせない
+      }
+      // 人はトスを上げた瞬間に固定したスピン（V/C。chargeStart() 参照）でスライスサーブ・
       // スピンサーブが打てる。CPU/AI も同じ SPIN 設定（実効重力・バウンドの弾み方）で
       // 一定確率でスピンサーブを混ぜる（aiSpin()。以前は常にフラット固定だった）。
       const spin = who === 'you' ? this.you.chargeSpin : aiSpin();
+      // プレイヤーは「打つ」瞬間の溜め量で威力が変わる。CPU/AI（cpu・cpuMate・youMate）は
+      // 溜め演出がない代わりに、難易度で決まる一定の威力（CPU.SERVE_T）で打つ。
+      // どちらにも能力値「サーブ」の倍率が掛かる（attr.serve。小さいほど速い＝強い）。
+      // 飛翔時間は狙う距離で比例配分する（SERVE.DIST_REF）。以前は距離に関係なく時間が
+      // 固定だったので、球速＝距離÷時間が狙いの深さで2倍以上ばらつき、「線ぴったりで
+      // 離したのに 82km/h」という当たりが1割ほど混ざっていた（ユーザー報告）。
+      // 正規化してあるので、威力（ゲージ）がそのまま球速に対応する。
+      // 球種の倍率（SPIN_T_MULT）は最後に掛ける：擦って回転をかけるスライス／トップスピンは
+      // フラットより球速が落ちる。
+      const dist = Math.hypot(target.x - from.x, target.z - from.z);
+      const flightT = (who === 'you'
+        ? lerp(SERVE.T, SERVE.CHARGE_T, this.you.swingCharge)
+        : CPU.SERVE_T) * (dist / SERVE.DIST_REF) * this.actor(who).attr.serve
+        * SERVE.SPIN_T_MULT[spin];
 
       ball.y = from.y;
-      Object.assign(ball, solveShot(from, target, flightT, SERVE.CLEARANCE, spin));
+      Object.assign(ball, solveShot(from, target, flightT, clearance, spin));
       ball.spin = spin;
       // 打った瞬間の初速をそのままスコアボード脇に出す（次のポイントが始まるまで残す）
       const serveKmh = mpsToKmh(Math.hypot(ball.vx, ball.vy, ball.vz));
@@ -880,7 +931,12 @@
       const aim = this.input.moveZ; // 1 = 前（＝深く）, -1 = 後ろ（＝浅く）
       if (aim > 0) return rand(SERVE.DEPTH_MIN, SERVE.DEPTH_DEEP_MAX);
       if (aim < 0) return rand(SERVE.DEPTH_SHORT_MIN, SERVE.DEPTH_MAX);
-      return rand(SERVE.DEPTH_MIN, SERVE.DEPTH_MAX);
+      // 無入力のときは、強く打つほど浅い狙いを引かないようにする（DEPTH_MAX→DEPTH_FULL_MAX)。
+      // 浅いところへ速い球を通す軌道は幾何的に存在せず、引いてしまうと溜めが完璧でも
+      // 山なりの遅い球になる（理由は config の DEPTH_FULL_MAX のコメント参照）。
+      // それより浅く落としたいときは ↓ で明示的に選ぶ＝遅くなるのを承知のコースになる。
+      const shallowest = lerp(SERVE.DEPTH_MAX, SERVE.DEPTH_FULL_MAX, this.you.swingCharge);
+      return rand(SERVE.DEPTH_MIN, shallowest);
     }
 
     /**

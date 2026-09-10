@@ -196,7 +196,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const SWEET_FRAMES = Math.round(SERVE.CHARGE_SWEET_T * 60);
   const SIDELINE_SAFETY_MARGIN = 0.15; // これ未満だと「ぎりぎり」とみなす
   const input = { moveX: -1, moveZ: 0, lob: false }; // aim===targetSign(+1) でワイド狙い
-  let faults = 0;
+  let outs = 0;
+  let nets = 0;
   let minMargin = Infinity;
   const N = 300;
   for (let i = 0; i < N; i++) {
@@ -206,10 +207,15 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     tossAndHit(g, SWEET_FRAMES);
     ok(g.you.swingCharge > 0.85, `precondition: released at the sweet spot for full power, got ${g.you.swingCharge}`);
     const L = R.physics.predictLanding(g.ball);
-    if (L.net || Math.abs(L.x) > HALF_W || L.z <= 0 || L.z > COURT.SERVICE) faults++;
+    // わざとネットに掛ける1本（SERVE.NET_CHANCE の抽選）はこのテストの対象外。狙いは
+    // ネット際へ切り替わっているので、サイドラインの余白を測る意味もない。
+    if (L.net) { nets++; continue; }
+    if (Math.abs(L.x) > HALF_W || L.z <= 0 || L.z > COURT.SERVICE) outs++;
     minMargin = Math.min(minMargin, HALF_W - Math.abs(L.x));
   }
-  ok(faults === 0, `wide full-power serves don't fault: ${faults}/${N}`);
+  ok(outs === 0, `wide full-power serves never go past the line: ${outs}/${N}`);
+  ok(nets <= N * SERVE.NET_CHANCE * 2.5,
+    `and only the intended few catch the net: ${nets}/${N} (SERVE.NET_CHANCE=${SERVE.NET_CHANCE})`);
   ok(minMargin >= SIDELINE_SAFETY_MARGIN,
     `wide full-power serves keep at least ${SIDELINE_SAFETY_MARGIN}m from the sideline, min observed=${minMargin.toFixed(3)}`);
 }
@@ -1455,23 +1461,43 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   }
 }
 
-// --- サーブは「長く溜めるほど強い」のではなく、ちょうど良いタイミングで離すと最強、
-//     早すぎても遅すぎても弱くなる（三角形のカーブ） ---
+// --- サーブの溜め：ゲージの線（9割の位置＝CHARGE_SWEET_T）まで溜めたときが最大威力。
+//     線を超えても威力は増えず、超えた度合いに応じてフォールトの確率だけが上がる ---
 {
-  const { T, CHARGE_T } = R.config.SERVE;
-  const { CHARGE_SWEET_T, CHARGE_WINDOW } = R.config.SERVE;
+  const {
+    T, CHARGE_T, CHARGE_SWEET_T, CHARGE_SWEET_MARK, CHARGE_SWEET_HOLD, CHARGE_FAULT_T,
+  } = R.config.SERVE;
 
-  // 純粋関数としてのカーブ形状
+  // 威力のカーブ（純粋関数として）
   {
     const g = new R.Game({ input: fakeInput, hooks: noHooks });
-    ok(g.serveTimingPower(CHARGE_SWEET_T) === 1, 'releasing exactly at the sweet spot is max power');
-    ok(g.serveTimingPower(0) < g.serveTimingPower(CHARGE_SWEET_T),
-      'releasing immediately (too early) is weaker than the sweet spot');
-    ok(g.serveTimingPower(CHARGE_SWEET_T + CHARGE_WINDOW * 2) === 0,
-      'holding well past the sweet spot (too late) bottoms out at 0, not increasing further');
-    const early = g.serveTimingPower(CHARGE_SWEET_T - CHARGE_WINDOW / 2);
-    const late = g.serveTimingPower(CHARGE_SWEET_T + CHARGE_WINDOW / 2);
-    ok(Math.abs(early - late) < 1e-9, `equally early/late from the sweet spot weaken it the same amount: early=${early} late=${late}`);
+    ok(g.serveTimingPower(CHARGE_SWEET_T) === 1, 'reaching the line is max power');
+    ok(g.serveTimingPower(0) === 0, 'releasing immediately has no power at all');
+    ok(g.serveTimingPower(CHARGE_SWEET_T / 2) > 0
+      && g.serveTimingPower(CHARGE_SWEET_T / 2) < 1, 'power grows with the hold time up to the line');
+    ok(g.serveTimingPower(CHARGE_SWEET_T * 0.4) < g.serveTimingPower(CHARGE_SWEET_T * 0.8),
+      'holding longer (but still short of the line) is stronger');
+    ok(g.serveTimingPower(CHARGE_SWEET_T + CHARGE_FAULT_T * 5) === 1,
+      'holding past the line does not add power (the risk goes up instead, not the power)');
+  }
+
+  // フォールト確率のカーブ
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    ok(g.serveFaultChance(0) === 0, 'no fault risk when barely charged');
+    ok(g.serveFaultChance(CHARGE_SWEET_T) === 0, 'releasing right on the line never faults from overcharge');
+    ok(g.serveFaultChance(CHARGE_SWEET_T + CHARGE_SWEET_HOLD) === 0,
+      'a hair past the line is still inside the grace window');
+    const little = g.serveFaultChance(CHARGE_SWEET_T + CHARGE_SWEET_HOLD + CHARGE_FAULT_T * 0.25);
+    const lots = g.serveFaultChance(CHARGE_SWEET_T + CHARGE_SWEET_HOLD + CHARGE_FAULT_T * 0.75);
+    ok(little > 0 && little < lots && lots < 1,
+      `the further past the line, the likelier a fault: little=${little} lots=${lots}`);
+    ok(g.serveFaultChance(CHARGE_SWEET_T + CHARGE_SWEET_HOLD + CHARGE_FAULT_T * 2) === 1,
+      'holding well past the line always faults');
+    // ゲージが満タンになる頃には無視できない確率になっている（＝満タンまで溜めるのは博打）
+    const fullT = CHARGE_SWEET_T / CHARGE_SWEET_MARK;
+    ok(g.serveFaultChance(fullT) > 0.1,
+      `filling the whole gauge is a real gamble, got ${g.serveFaultChance(fullT)}`);
   }
 
   // 実際のトス→保持→リリースを通した結果（球速で確認）
@@ -1483,35 +1509,211 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   };
   const speedOf = (ball) => Math.hypot(ball.vx, ball.vy, ball.vz);
 
-  // 「長すぎ」はトスの自動リセット（約0.79秒）より確実に手前で、かつ CHARGE_WINDOW の
-  // 下り坂の途中（威力が0まで落ちきる少し手前）になるタイミングを選ぶ。
-  // サーブのコース・深さは毎回ランダム（rand()）なので、そのままだと3本の狙いがばらばらに
-  // なり、飛距離の差が溜めの差を上回って球速の比較が成立しない（実測：約10%の確率で
-  // 「長すぎのほうが速い」結果になっていた）。3本とも同じ狙いになるよう乱数を固定する。
+  // サーブのコース・深さは毎回ランダム（rand()）なので、そのままだと狙いがばらばらになり、
+  // 飛距離の差が溜めの差を上回って球速の比較が成立しない（実測：約10%の確率で逆転していた）。
+  // 3本とも同じ狙いになるよう乱数を固定する。
   const origRandom = Math.random;
   Math.random = () => 0.5;
   let tapSpeed;
+  let halfSpeed;
   let sweetSpeed;
-  let tooLongSpeed;
   try {
-    tapSpeed = speedOf(landingFor(0)); // 即リリース＝早すぎ
-    sweetSpeed = speedOf(landingFor(Math.round(CHARGE_SWEET_T * 60))); // ちょうど良いタイミング
-    tooLongSpeed = speedOf(landingFor(Math.round((CHARGE_SWEET_T + CHARGE_WINDOW * 0.9) * 60))); // 長すぎ
+    tapSpeed = speedOf(landingFor(0)); // 即リリース＝溜めなし
+    halfSpeed = speedOf(landingFor(Math.round(CHARGE_SWEET_T * 30))); // 線の半分まで
+    sweetSpeed = speedOf(landingFor(Math.round(CHARGE_SWEET_T * 60))); // 線まで＝最大威力
   } finally {
     Math.random = origRandom;
   }
 
-  ok(sweetSpeed > tapSpeed,
-    `sweet-spot serve is faster than releasing immediately: sweet=${sweetSpeed.toFixed(2)} tap=${tapSpeed.toFixed(2)}`);
-  ok(sweetSpeed > tooLongSpeed,
-    `sweet-spot serve is faster than holding too long: sweet=${sweetSpeed.toFixed(2)} tooLong=${tooLongSpeed.toFixed(2)}`);
-  ok(T > CHARGE_T, `precondition: SERVE.CHARGE_T should be shorter (faster) than SERVE.T`);
+  ok(sweetSpeed > halfSpeed && halfSpeed > tapSpeed,
+    `the longer the charge (up to the line), the faster the serve: sweet=${sweetSpeed.toFixed(2)} half=${halfSpeed.toFixed(2)} tap=${tapSpeed.toFixed(2)}`);
+  ok(T > CHARGE_T, 'precondition: SERVE.CHARGE_T should be shorter (faster) than SERVE.T');
+  // 「線付近で今まで以上に強いサーブが打てる」＝以前の最大威力(CHARGE_T=0.38)より速い
+  ok(CHARGE_T < 0.38, `a line-perfect serve is stronger than it used to be (CHARGE_T=${CHARGE_T} < 0.38)`);
 }
 
-// --- chargeMeter()（HUDゲージ用の先読み）はサーブ中はタイミングのカーブを、
+// --- タイミングが同じなら球速も同じ：狙いの深さで球速がばらつかない ---
+// （「線ぴったりで離したのに、ときどき 82km/h の弱いサーブになる」というユーザー報告。
+//  原因は飛翔時間が距離に関係なく固定だったこと＋浅い狙いを引くと solveShot() が
+//  ネット回避で滞空時間を伸ばして山なりの遅い球にしていたこと。SERVE.DIST_REF による
+//  距離の正規化と、威力に応じた深さの制限（DEPTH_FULL_MAX）で両方をふさいである）
+{
+  const SWEET_FRAMES = Math.round(SERVE.CHARGE_SWEET_T * 60);
+  const speeds = [];
+  for (let i = 0; i < 400; i++) {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.started = true;
+    g.newPoint();
+    tossAndHit(g, SWEET_FRAMES);
+    const L = R.physics.predictLanding(g.ball);
+    if (L.net) continue; // わざとネットに掛ける1本（SERVE.NET_CHANCE）は別枠
+    speeds.push(Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz));
+  }
+  const min = Math.min(...speeds);
+  const max = Math.max(...speeds);
+  ok(max / min < 1.15,
+    `line-perfect serves all come out at the same speed: ${(min * 3.6).toFixed(0)}〜${(max * 3.6).toFixed(0)}km/h (ratio ${(max / min).toFixed(2)})`);
+
+  // 狙いの距離が変わっても球速が変わらない＝距離で飛翔時間を正規化できていること。
+  // ↑（深い）と、無入力（それより手前まで含む）で速さがそろう。
+  const avgFor = (moveZ) => {
+    const input = { moveX: 0, moveZ, lob: false };
+    let sum = 0;
+    let n = 0;
+    for (let i = 0; i < 200; i++) {
+      const g = new R.Game({ input, hooks: noHooks });
+      g.started = true;
+      g.newPoint();
+      tossAndHit(g, SWEET_FRAMES);
+      if (R.physics.predictLanding(g.ball).net) continue;
+      sum += Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz);
+      n++;
+    }
+    return sum / n;
+  };
+  const deep = avgFor(1);
+  const any = avgFor(0);
+  ok(Math.abs(deep - any) / deep < 0.05,
+    `aiming deep and aiming anywhere give the same speed: deep=${(deep * 3.6).toFixed(0)} any=${(any * 3.6).toFixed(0)}km/h`);
+}
+
+// --- 球種で球速が変わる：フラット＞スライス＞トップスピン（同じタイミングで離した場合） ---
+// (以前は球種が実効重力と弾み方を変えるだけで球速は同じだったため、「低く滑るうえに
+//  フラットと同じ速さ」のスライスサーブが一方的に得な選択になっていた)
+{
+  const SWEET_FRAMES = Math.round(SERVE.CHARGE_SWEET_T * 60);
+  const speedFor = (spin) => {
+    const speeds = [];
+    for (let i = 0; i < 200; i++) {
+      const g = new R.Game({ input: fakeInput, hooks: noHooks });
+      g.started = true;
+      g.newPoint();
+      tossAndHit(g, SWEET_FRAMES, spin);
+      if (R.physics.predictLanding(g.ball).net) continue; // わざとネットに掛ける1本は除く
+      speeds.push(Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz));
+    }
+    return { avg: speeds.reduce((a, b) => a + b, 0) / speeds.length, max: Math.max(...speeds) };
+  };
+  const flat = speedFor('flat');
+  const slice = speedFor('slice');
+  const top = speedFor('top');
+  ok(flat.avg > slice.avg && slice.avg > top.avg,
+    `flat is the fastest serve, then slice, then topspin: ${(flat.avg * 3.6).toFixed(0)} > ${(slice.avg * 3.6).toFixed(0)} > ${(top.avg * 3.6).toFixed(0)}km/h`);
+  ok(slice.max < flat.max * 0.95,
+    `even the fastest slice serve stays clearly below a flat one: ${(slice.max * 3.6).toFixed(0)} vs ${(flat.max * 3.6).toFixed(0)}km/h`);
+  ok(Math.abs(flat.avg / slice.avg - SERVE.SPIN_T_MULT.slice) < 0.03,
+    'and the gap is the SPIN_T_MULT ratio (speed = distance / flight time)');
+}
+
+// --- 強いサーブはときどきネットに掛かる（弱いサーブはほぼ掛からない） ---
+{
+  const SWEET_FRAMES = Math.round(SERVE.CHARGE_SWEET_T * 60);
+  const netRate = (holdFrames) => {
+    let net = 0;
+    const N = 500;
+    for (let i = 0; i < N; i++) {
+      const g = new R.Game({ input: fakeInput, hooks: noHooks });
+      g.started = true;
+      g.newPoint();
+      tossAndHit(g, holdFrames);
+      if (R.physics.predictLanding(g.ball).net) net++;
+    }
+    return net / N;
+  };
+  const full = netRate(SWEET_FRAMES);
+  ok(full > SERVE.NET_CHANCE / 3 && full < SERVE.NET_CHANCE * 2.5,
+    `a full-power serve catches the net about SERVE.NET_CHANCE(${SERVE.NET_CHANCE}) of the time, got ${full.toFixed(3)}`);
+  ok(netRate(0) === 0, 'a serve with no charge at all never catches the net (the risk scales with the power)');
+
+  // ネットに掛かった1本は「フォールト（ネット）」としてコールされ、セカンドサーブになる
+  {
+    const calls = [];
+    const g = new R.Game({
+      input: fakeInput,
+      hooks: { ...noHooks, call: (big, sub) => calls.push(`${big}/${sub}`) },
+    });
+    g.started = true;
+    g.newPoint();
+    const origRandom = Math.random;
+    // 0 なら NET_CHANCE の抽選に必ず当たる（溜めすぎの抽選より後に引かれる）
+    Math.random = () => 0;
+    try {
+      tossAndHit(g, SWEET_FRAMES);
+      for (let i = 0; i < 300 && g.phase === 'rally'; i++) g.update(1 / 60);
+    } finally {
+      Math.random = origRandom;
+    }
+    ok(g.serveNumber === 2, `a netted first serve is replayed as a second serve, phase=${g.phase}`);
+    ok(calls.some((c) => c.startsWith('フォールト/ネット')), `and it is called as a net fault: ${calls.join(' | ')}`);
+  }
+}
+
+// --- 線を超えて溜めたサーブは、狙いがサービスボックスの外へ外れる形でフォールトする ---
+{
+  const { CHARGE_SWEET_T, CHARGE_SWEET_HOLD, CHARGE_FAULT_T } = R.config.SERVE;
+  const serveWith = (holdFrames, roll) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.started = true;
+    g.newPoint();
+    const origRandom = Math.random;
+    Math.random = () => roll;
+    try {
+      tossAndHit(g, holdFrames);
+    } finally {
+      Math.random = origRandom;
+    }
+    return g;
+  };
+  const inBox = (g) => {
+    const L = R.physics.predictLanding(g.ball);
+    return !L.net && Math.abs(L.x) <= HALF_W && L.z > 0 && L.z <= COURT.SERVICE;
+  };
+  const wayPast = Math.ceil((CHARGE_SWEET_T + CHARGE_SWEET_HOLD + CHARGE_FAULT_T * 2) * 60);
+
+  // 抽選に外れた（roll がフォールト確率より大きい）ときは普通に入る。
+  // 少しだけ超えた保持時間（確率25%程度）を roll=0.9 で通す。
+  const barelyPast = Math.round((CHARGE_SWEET_T + CHARGE_SWEET_HOLD + CHARGE_FAULT_T * 0.25) * 60);
+  const lucky = serveWith(barelyPast, 0.9);
+  ok(lucky.you.serveMiss === false, 'precondition: this serve did not draw the fault');
+  ok(inBox(lucky), 'a serve that dodged the fault roll still lands in the box');
+
+  // ロング側（FAULT_LONG_CHANCE に当たる roll）とサイド側（外れる roll）の両方を通す。
+  // roll は Math.random() を固定した値。0 は「必ず抽選に当たる＋ロングを引く」、
+  // 0.9 は「必ず当たる（確率100%なので）＋サイドアウトを引く」。
+  const long = serveWith(wayPast, 0);
+  ok(long.you.serveMiss === true, 'holding well past the line always draws the fault');
+  const longLanding = R.physics.predictLanding(long.ball);
+  ok(!inBox(long) && longLanding.z > COURT.SERVICE,
+    `overcharging can miss long, got z=${longLanding.z.toFixed(2)} (service line ${COURT.SERVICE})`);
+
+  const wide = serveWith(wayPast, 0.9);
+  const wideLanding = R.physics.predictLanding(wide.ball);
+  ok(!inBox(wide) && Math.abs(wideLanding.x) > HALF_W,
+    `overcharging can miss wide, got x=${wideLanding.x.toFixed(2)} (sideline ${HALF_W})`);
+
+  // フォールトのコールまで通す（1本目ならセカンドサーブへ）
+  {
+    const calls = [];
+    const g = new R.Game({ input: fakeInput, hooks: { ...noHooks, call: (big, sub) => calls.push(`${big}/${sub}`) } });
+    g.started = true;
+    g.newPoint();
+    const origRandom = Math.random;
+    Math.random = () => 0;
+    try {
+      tossAndHit(g, wayPast);
+      for (let i = 0; i < 300 && g.phase === 'rally'; i++) g.update(1 / 60);
+    } finally {
+      Math.random = origRandom;
+    }
+    ok(g.serveNumber === 2, `an overcharged first serve is called a fault and replayed: phase=${g.phase}`);
+    ok(calls.some((c) => c.startsWith('フォールト')), `the fault is called out: ${calls.join(' | ')}`);
+  }
+}
+
+// --- chargeMeter()（HUDゲージ用）はサーブ中は「満タンまでの割合」（線は9割の位置）、
 //     ラリー中は溜め時間の割合を返す ---
 {
-  const { CHARGE_SWEET_T } = R.config.SERVE;
+  const { CHARGE_SWEET_T, CHARGE_SWEET_MARK } = R.config.SERVE;
   const { MAX_TIME } = R.config.CHARGE;
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   ok(g.chargeMeter() === 0, 'no meter while not charging');
@@ -1520,9 +1722,14 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   g.chargeStart(); // サーブのトス＆チャージ開始
   const sweetFrames = Math.round(CHARGE_SWEET_T * 60);
   for (let i = 0; i < sweetFrames; i++) g.update(1 / 60);
-  ok(Math.abs(g.chargeMeter() - 1) < 0.05, `serve meter peaks near the sweet spot, got ${g.chargeMeter()}`);
-  for (let i = 0; i < sweetFrames; i++) g.update(1 / 60); // さらに同じだけ長く保持し続ける
-  ok(g.chargeMeter() < 0.2, `serve meter falls back down when held well past the sweet spot, got ${g.chargeMeter()}`);
+  // 線（＝最大威力）に届いたとき、ゲージはまだ満タンではなく CHARGE_SWEET_MARK（9割）。
+  ok(Math.abs(g.chargeMeter() - CHARGE_SWEET_MARK) < 0.03,
+    `serve meter sits at the line (${CHARGE_SWEET_MARK}) when the power peaks, got ${g.chargeMeter()}`);
+  ok(g.serveTimingPower(g.you.chargeTime) === 1, 'and that is indeed max power');
+  // さらに保持し続けるとゲージは満タンまで伸びる（トスの滞空 約1.03秒より内側で確認する。
+  // それを過ぎるとトスが自動リセットされて溜め自体がキャンセルされる）。
+  for (let i = 0; i < 10; i++) g.update(1 / 60);
+  ok(g.chargeMeter() === 1, `holding past the line fills the gauge the rest of the way, got ${g.chargeMeter()}`);
   g.chargeRelease();
 
   const g2 = new R.Game({ input: fakeInput, hooks: noHooks });
@@ -3677,11 +3884,20 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   };
   const deep = sample(1);
   const shallow = sample(-1);
+  g.you.swingCharge = 0; // 無入力の範囲は溜め量で変わる（下記）
   const any = sample(0);
   ok(deep.max <= SERVE.DEPTH_DEEP_MAX, `↑ keeps the serve deep, got max ${deep.max}`);
   ok(shallow.min >= SERVE.DEPTH_SHORT_MIN, `↓ keeps the serve short, got min ${shallow.min}`);
   ok(deep.max < shallow.min, 'the deep and short bands do not overlap');
-  ok(any.min < deep.max && any.max > shallow.min, 'no input uses the whole depth range');
+  ok(any.min < deep.max && any.max > shallow.min, 'a soft serve with no input uses the whole depth range');
+
+  // 無入力のときの「浅さの上限」は威力で変わる。全力で打つほど深い側へ寄る：浅い狙いへ
+  // 速い球を通す軌道は幾何的に存在せず、引いてしまうと溜めが完璧でも山なりの遅い球になる。
+  g.you.swingCharge = 1;
+  const full = sample(0);
+  ok(full.max <= SERVE.DEPTH_FULL_MAX,
+    `a full-power serve with no input only picks depths it can actually hit hard, got max ${full.max}`);
+  ok(full.max < any.max, 'and that is a narrower band than a soft serve uses');
   // どの深さもサービスボックスの中（ネットとサービスラインの間）に収まる
   ok(SERVE.DEPTH_MAX < COURT.SERVICE, `even the shortest serve clears the net side, got ${SERVE.DEPTH_MAX}`);
 }

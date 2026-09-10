@@ -211,7 +211,7 @@
       world.sync(game, dt);
       if (pointJustEnded) world.startReplay();
       hud.setReplay(world.isReplaying());
-      hud.setCharge(game.chargeMeter());
+      hud.setCharge(game.chargeMeter(), game.isServeCharging());
       hud.setSmashTip(game.smashHint);
       hud.setSwingGuide(game.swingGuide, game.you.x);
       syncStamina();

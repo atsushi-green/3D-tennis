@@ -116,12 +116,22 @@ canvas{display:block}
 }
 
 #charge{
-  width:200px;height:7px;border-radius:4px;overflow:hidden;
+  position:relative;
+  width:200px;height:9px;border-radius:4px;overflow:hidden;
   background:rgba(9,20,34,.65);border:1px solid rgba(232,238,245,.18);
   opacity:0;transition:opacity .1s
 }
 #charge.on{opacity:1}
 #chargeFill{height:100%;width:0%;background:var(--ball)}
+/* サーブの「ここまで溜めると最大威力」の線（位置は hud.setCharge() が
+   SERVE.CHARGE_SWEET_MARK から入れる）。線を超えると超えた分だけフォールトしやすくなる。
+   ラリーの溜めには関係ないので、サーブ中（#charge.serve）だけ出す。 */
+#chargeMark{display:none}
+#charge.serve #chargeMark{
+  display:block;position:absolute;top:0;bottom:0;width:3px;margin-left:-1.5px;
+  /* 縁の暗い枠のおかげで、溜まりきって白くなった（.full）ゲージの上でも線が消えない。 */
+  background:#fff;box-shadow:0 0 0 1px rgba(9,20,34,.95)
+}
 
 /* スマッシュが打てる球が来ている間だけ出る一言（コート上のマーカーと対） */
 /* リプレイ中の表示。中継の「REPLAY」テロップと同じ考え方で画面上部の中央に出し、
@@ -152,6 +162,8 @@ canvas{display:block}
 #smashTip.ready{color:#ffe14a}
 #smashTip.late{color:#ef6b5a}
 #chargeFill.full{background:#fff;box-shadow:0 0 10px 2px var(--ball)}
+/* 線を超えて溜めている間（＝フォールトの確率が上がっている間）は赤くする。 */
+#chargeFill.over{background:#ef6b5a;box-shadow:0 0 10px 2px rgba(239,107,90,.9)}
 
 /* ガイド付きモードのタイミング目盛り（溜めている間だけ出る）。
    左＝早く振り出す（引っ張り）、右＝引きつける（流し）。針が「いま離したら」の位置で、
