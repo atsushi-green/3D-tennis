@@ -137,32 +137,48 @@
   }
 
   /**
+   * 球種（フラット／トップスピン／スライス／ドロップ）ごとの振り付けを返す。
+   * 未知の球種（サーブ用の値など）はフラット扱い。
+   */
+  function spinForm(spin) {
+    return SWING.SPIN_FORM[spin] || SWING.SPIN_FORM.flat;
+  }
+
+  /**
    * スイングの残り時間から腕の角度を決める。5種類のポーズを軸を分けて切り替える：
    * - フォアハンド／バックハンド: rotation.y（横振り）。mirrorGroundAngle() で左右だけを
    *   鏡映しするので、バックハンドでもテイクバック→打点→フォロースルーが正しい前後の
-   *   向きのまま、体の逆サイドで振られる。
+   *   向きのまま、体の逆サイドで振られる。さらに球種（state.spin）で振り付けが変わる：
+   *   腕の仰角 rotation.z を下から上へ通せばトップスピン、上から下へ通せばスライス、
+   *   ほぼ水平に通せばフラット（差分は SWING.SPIN_FORM）。横振りの弧と体幹のひねりの
+   *   深さも球種ごとに増減する。
    * - サーブ: rotation.z（縦振り）。トス中は構え、打った瞬間から真上→前へ振り下ろす。
    * - スマッシュ: 仰角(rotation.z)と前後の傾き(rotation.x)を同時に動かし、頭の後ろに
    *   振りかぶった位置から真上（打点）を通って体の前へ振り下ろす（フォア/バックの区別は
    *   ない）。跳んで打つので、体の浮き・脚のはさみ跳びは applySmashJump() が受け持つ。
    * - ボレー: フォア/バックと同じ rotation.y だが、テイクバックがほとんどない短いパンチ。
    * @param {THREE.Group} player
-   * @param {number} anim 残り時間（秒）。0 なら構え／トスの姿勢
-   * @param {'forehand'|'backhand'|'serve'|'smash'|'volley-forehand'|'volley-backhand'} [stroke]
+   * @param {object} state その選手の見た目に関わる状態。ゲーム側の生の state と
+   *   リプレイのコマ（world.js#snapshotPlayer）の両方が同じ形をしている：
+   *   - anim {number} スイングの残り時間（秒）。0 なら構え／トスの姿勢
+   *   - stroke {'forehand'|'backhand'|'serve'|'smash'|'volley-forehand'|'volley-backhand'}
+   *   - prep {'forehand'|'backhand'|'smash'|null} 打つ前のテイクバック。まだ振って
+   *     いない（anim<=0）間、ボールがどちらの打点に来そうかに応じてラケットを引いておく。
+   *     'smash' は高い球を溜めているとき＝頭の後ろに担いだ振りかぶりの構え。
+   *   - spin {'flat'|'top'|'slice'|'drop'} テイクバック中／スイング中の球種。
+   *     グラウンドストロークのフォームだけを切り替える（SWING.SPIN_FORM）。
+   *   - chargeFrac {number} 溜めている間だけ 0〜1 で伸びる値。溜めるほど GROUND_START から
+   *     さらに CHARGE_PULL だけ深くテイクバックし、離した瞬間との落差で「今しっかり
+   *     溜めている」ことが分かるようにする。
+   *   - swingCharge {number} 振り始めた瞬間に固定される溜め量(0〜1)。スイング中（anim>0）は、
+   *     テイクバックが実際にどこまで深く入っていたか（＝chargeFrac の最終値）から弧を
+   *     始めるのに使う。ここを chargeFrac にすると振っている間に charging が false に
+   *     戻って 0 に落ち、テイクバック位置に飛んで見えてしまうため、release() の瞬間に
+   *     固定される swingCharge を使い続ける。
    * @param {boolean} [tossing] トス中（打つ前）かどうか。サーブの構えを出す
-   * @param {'forehand'|'backhand'|'smash'|null} [prep] 打つ前のテイクバック。まだ振って
-   *   いない（anim<=0）間、ボールがどちらの打点に来そうかに応じてラケットを引いておく。
-   *   'smash' は高い球を溜めているとき＝頭の後ろに担いだ振りかぶりの構え。
-   * @param {number} [chargeFrac] Space を溜めている間だけ 0〜1 で伸びる値。溜めるほど
-   *   GROUND_START からさらに CHARGE_PULL だけ深くテイクバックし、離した瞬間との
-   *   落差で「今しっかり溜めている」ことが分かるようにする。
-   * @param {number} [swingCharge] 振り始めた瞬間に固定される溜め量(0〜1)。スイング中
-   *   （anim>0）は、テイクバックが実際にどこまで深く入っていたか（＝chargeFrac の最終値）
-   *   から弧を始めるのに使う。ここを chargeFrac にすると振っている間に charging が
-   *   false に戻って 0 に落ち、テイクバック位置に飛んで見えてしまうため、release() の
-   *   瞬間に固定される swingCharge を使い続ける。
    */
-  scene3d.setSwingPose = function setSwingPose(player, anim, stroke, tossing, prep, chargeFrac, swingCharge) {
+  scene3d.setSwingPose = function setSwingPose(player, state, tossing) {
+    const { anim, stroke, prep, spin, chargeFrac, swingCharge } = state;
     const arm = player.userData.arm;
     const torso = player.userData.gait.torso;
 
@@ -178,9 +194,12 @@
         arm.rotation.z = SWING.SMASH_READY_Z;
         arm.rotation.x = SWING.SMASH_READY_X * (1 + (chargeFrac || 0) * 0.35);
       } else if (prep) {
-        const pullBack = SWING.GROUND_START + (chargeFrac || 0) * SWING.CHARGE_PULL;
+        // 球種ぶんの差分（START）を足したところからテイクバックし、ラケットの高さ
+        // （Z_READY）も球種で変える＝振り出す前に何を打とうとしているかが分かる。
+        const form = spinForm(spin);
+        const pullBack = SWING.GROUND_START + form.START + (chargeFrac || 0) * SWING.CHARGE_PULL;
         arm.rotation.y = mirrorGroundAngle(pullBack, prep === 'backhand');
-        arm.rotation.z = 0;
+        arm.rotation.z = form.Z_READY;
         arm.rotation.x = 0;
       } else {
         arm.rotation.y = SWING.REST_Y;
@@ -231,15 +250,21 @@
     }
 
     const backhand = stroke === 'backhand';
+    const form = spinForm(spin);
     // テイクバックが溜め量ぶん深く入っていた分だけ、始点をそこに合わせて弧を広げる
     // （終点＝フォロースルーは GROUND_START+GROUND_SWEEP のまま揃える）。
-    const start = SWING.GROUND_START + (swingCharge || 0) * SWING.CHARGE_PULL;
-    const sweep = SWING.GROUND_SWEEP - (swingCharge || 0) * SWING.CHARGE_PULL;
+    // 球種ぶんの差分（START/SWEEP）は溜めとは独立に足す＝どの球種でも溜めの効き方は同じ。
+    const start = SWING.GROUND_START + form.START + (swingCharge || 0) * SWING.CHARGE_PULL;
+    const sweep = SWING.GROUND_SWEEP + form.SWEEP - (swingCharge || 0) * SWING.CHARGE_PULL;
     arm.rotation.y = mirrorGroundAngle(start + progress * sweep, backhand);
-    arm.rotation.z = 0;
+    // 腕の仰角。トップスピンは下から上へ、スライスは上から下へ、フラットはほぼ水平に
+    // 通る（左右は mirrorGroundAngle() が反転させるが、上下はバックハンドでも同じ）。
+    arm.rotation.z = lerp(form.Z_START, form.Z_END, progress);
     arm.rotation.x = 0;
-    // sin カーブでひねって戻す（構え→打点→フォロースルーで元の向きに近づく）
-    torso.rotation.y = (backhand ? -1 : 1) * SWING.TORSO_TWIST * Math.sin(progress * Math.PI);
+    // sin カーブでひねって戻す（構え→打点→フォロースルーで元の向きに近づく）。
+    // ひねりの深さも球種で変える（大きく擦り上げるトップスピンがいちばん深い）。
+    torso.rotation.y = (backhand ? -1 : 1) * SWING.TORSO_TWIST * form.TWIST
+      * Math.sin(progress * Math.PI);
   };
 
   /**

@@ -258,6 +258,9 @@
       this.you = {
         x: 0, z: -HALF_L - 0.6, vx: 0, vz: 0, // vx/vz は実速度（加速度で目標速度に近づける）
         swing: 0, anim: 0, speed: 0, stroke: 'forehand', prep: null,
+        // 今テイクバック中／振っている最中の球種。打つフォーム（scene/player.js の
+        // SWING.SPIN_FORM）を切り替えるためだけの表示用の値で、判定には一切使わない。
+        spin: 'flat',
         charging: false, chargeTime: 0, swingCharge: 0, // 溜めキー押しっぱなしのテイクバック
         serveMiss: false, // このサーブは「溜めすぎ」の抽選に当たった＝狙いを外す（chargeRelease()で抽選）
         chargeFrac: 0, // 溜めている間だけ 0〜1 で増える、テイクバックの深さ用（chargeTime のポーズ表示版）
@@ -272,16 +275,16 @@
       // chaseDist＝この球を追って走った距離、settleT＝目標地点に着いてから動かずに
       // 待っている秒数（どちらも moveTowards() が更新する。hit() の「余裕」判定に使う）。
       this.cpu = {
-        x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, stamina: 1,
+        x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, spin: 'flat', stamina: 1,
         attr: ATTRS.cpu,
       };
       // ダブルス（this.doubles === true）のときだけ動く AI パートナー。シングルスでは未使用のまま。
       this.youMate = {
-        x: 0, z: DOUBLES.NET_Z_YOU, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, stamina: 1,
+        x: 0, z: DOUBLES.NET_Z_YOU, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, spin: 'flat', stamina: 1,
         attr: ATTRS.youMate,
       };
       this.cpuMate = {
-        x: 0, z: DOUBLES.NET_Z_CPU, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, stamina: 1,
+        x: 0, z: DOUBLES.NET_Z_CPU, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, spin: 'flat', stamina: 1,
         attr: ATTRS.cpuMate,
       };
 
@@ -1081,6 +1084,7 @@
       // スマッシュだけは跳んで打つぶんモーションが長い（scene/player.js 参照）。
       player.anim = stroke === 'smash' ? PLAYER.SMASH_ANIM : PLAYER.SWING_ANIM;
       player.stroke = stroke;
+      player.spin = spin; // 振っている間のフォーム（scene/player.js）に使う
       this.lastShotBy[TEAM_OF[who]] = shotLabel(stroke, spin, shot.lob);
       // 音程はチーム単位（誰が打っても同じ）。音色は打ち方(stroke)とスピンで変わる。
       this.hooks.sound('hit', TEAM_OF[who], stroke, charge, spin);
@@ -1468,6 +1472,15 @@
       this.you.chargeFrac = this.you.charging
         ? clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1)
         : 0;
+      // 打つフォーム（scene/player.js の SWING.SPIN_FORM）に渡す球種。テイクバック中は
+      // 押しているキー（chargeSpin）の球種、振っている最中は hit() が入れた実際の球種を
+      // そのまま保ち、そのどちらでもない（構えているだけ）なら平常のフラットに戻す。
+      // AI は溜めのキー入力がないので、打った球種が振り終わるまで残るだけになる。
+      ACTORS.forEach((who) => {
+        const actor = this.actor(who);
+        if (actor.anim <= 0 && !actor.charging) actor.spin = 'flat';
+      });
+      if (this.you.charging) this.you.spin = this.you.chargeSpin;
       if (this.phase !== 'rally') {
         this.you.prep = null;
         this.cpu.prep = null;

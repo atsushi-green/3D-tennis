@@ -59,7 +59,7 @@
     /** プレイヤー1人ぶんの位置・スイング・歩行ポーズと影をまとめて反映する */
     function syncPlayer(mesh, shadow, state, maxSpeed, dt, tossing) {
       mesh.position.set(state.x, 0, state.z);
-      scene3d.setSwingPose(mesh, state.anim, state.stroke, !!tossing, state.prep, state.chargeFrac, state.swingCharge);
+      scene3d.setSwingPose(mesh, state, !!tossing);
       scene3d.setGaitPose(mesh, state.speed, maxSpeed, dt);
       // スマッシュのジャンプは歩行の後（同じ関節を上書きするため）。浮いた高さは影に渡す。
       const lift = scene3d.applySmashJump(mesh, state.anim, state.stroke);
@@ -102,7 +102,7 @@
     /** state.you/cpu/youMate/cpuMate のうち、見た目の再現に必要な分だけを浅くコピーする */
     function snapshotPlayer(p) {
       return {
-        x: p.x, z: p.z, anim: p.anim, stroke: p.stroke, prep: p.prep,
+        x: p.x, z: p.z, anim: p.anim, stroke: p.stroke, prep: p.prep, spin: p.spin,
         chargeFrac: p.chargeFrac, swingCharge: p.swingCharge, speed: p.speed,
       };
     }
