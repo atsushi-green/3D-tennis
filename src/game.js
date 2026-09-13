@@ -301,11 +301,16 @@
       && g.ball.z < g.you.z - SPECIAL.TWEENER.BEHIND
       && g.ball.y >= SPECIAL.TWEENER.MIN_Y,
     divingVolley: (g, c) => !c.serving && isVolleyContact(g, c.contact('divingVolley')),
-    // こちらはネット前に限らない（ベースライン寄りで浮いたノーバウンドを叩くのも
-    // ドライブボレー）ので、isVolleyContact ではなく「ノーバウンド＋浮いている」で見る。
+    // 「ノーバウンドで、腰から頭までの高さに浮いた球」を横振りで叩く場面だけ。
+    // ・ネット前に限らない（ベースライン寄りで浮いたノーバウンドを叩くのもドライブ
+    //   ボレー）ので、isVolleyContact ではなく「ノーバウンド＋高さ」で見る。
+    // ・上（MAX_Y）を切らないと、スマッシュになる高さの球まで拾ってしまう。ダンク
+    //   スマッシュのほうが優先度は上だが、ダンクを装備していない／使い切った／前へ
+    //   詰めていない場面では、頭上の球がそのままドライブボレーに落ちてきていた。
     driveVolley: (g, c) => !c.serving && !!c.contact('driveVolley')
       && c.contact('driveVolley').bounces === 0
-      && c.contact('driveVolley').y >= SPECIAL.DRIVE.MIN_Y,
+      && c.contact('driveVolley').y >= SPECIAL.DRIVE.MIN_Y
+      && c.contact('driveVolley').y < SPECIAL.DRIVE.MAX_Y,
     // 「フォア側へ大きく振り回されて、追いつきざまにトップスピンで振り抜く」場面だけ：
     // V（トップスピン）で溜めたフォアハンドで、まだ止まりきっておらず、ラケット側の
     // サイドへ大きく走って（runX）、実際にそちらへ寄って立っている（you.x）。

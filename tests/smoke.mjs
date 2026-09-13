@@ -5165,6 +5165,43 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       `the same situation on the backhand side does not, got ${back.pickSpecial()}`);
   }
 
+  // --- ドライブボレーはスマッシュになる高さでは出ない（腰〜頭の浮き球だけ） ---
+  // (バグ報告: スマッシュできるくらい高い球でもドライブボレーが発動してしまう)
+  {
+    const { MIN_Y, MAX_Y } = SPECIAL.DRIVE;
+    ok(MAX_Y === R.config.PLAYER.SMASH_MIN_Y,
+      'the ceiling is the normal smash line, so the two cannot drift apart');
+
+    // 頭上に上がった球（スマッシュの高さ）では出ない
+    const high = rally(['driveVolley']);
+    high.you.z = -9;
+    ballAt(high, MAX_Y + 0.3, 0.3, 0);
+    ok(high.pickSpecial() === null,
+      `a ball high enough to smash is not a drive volley, got ${high.pickSpecial()}`);
+
+    // ダンクスマッシュの高さ（さらに上）でも、ダンクの条件を満たしていなければ
+    // ドライブボレーに落ちてこない（優先度の下の技が拾ってしまわないこと）
+    const overhead = rally(['dunkSmash', 'driveVolley']);
+    overhead.you.z = -9; // 前へ詰めていない＝ダンクの条件は満たさない
+    ballAt(overhead, SPECIAL.DUNK.MIN_Y + 0.2, 0.3, 0);
+    ok(overhead.pickSpecial() === null,
+      `an overhead without the dunk conditions falls through to nothing, got ${overhead.pickSpecial()}`);
+
+    // 上限のすぐ下なら従来どおり出る（＝止めているのは高さの上だけ）
+    const justUnder = rally(['driveVolley']);
+    justUnder.you.z = -9;
+    ballAt(justUnder, MAX_Y - 0.05, 0.3, 0);
+    ok(justUnder.pickSpecial() === 'driveVolley',
+      `just below the smash line it still fires, got ${justUnder.pickSpecial()}`);
+
+    // 下限の側も従来どおり（低すぎる球では出ない）
+    const low = rally(['driveVolley']);
+    low.you.z = -9;
+    ballAt(low, MIN_Y - 0.1, 0.3, 0);
+    ok(low.pickSpecial() === null,
+      `and a ball that has not floated up enough still does not, got ${low.pickSpecial()}`);
+  }
+
   // --- ダンクスマッシュは「前へ詰めながらの高いノーバウンド」だけ（溜めは不要） ---
   // (バグ報告: ワンバウンドの球でもダンクスマッシュになってしまう)
   {
