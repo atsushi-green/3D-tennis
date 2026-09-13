@@ -1175,6 +1175,10 @@
       // 掛かりも起きない＝確実に入る代わりに、球速そのものは速くない。
       const kick = who === 'you' && this.you.special === 'kickServe';
       const side = this.match.serveSide;
+      // CPU/AI のセカンドサーブ。1本目より遅く、コースも深さもラインから余裕を取り、回転で
+      // 確実に入れにいく（SERVE.SECOND_*）。人間は溜め量とコース入力で自分で加減するので、
+      // ここでは切り替えない。
+      const second = who !== 'you' && this.serveNumber === 2;
       const { dir, targetSign } = serveAim(team, side);
       // プレイヤーはトス中の実際の高さで打つ。CPU はトス演出を挟まないので固定の打点高さを使う。
       const contactY = who === 'you' ? Math.max(ball.y, SERVE.BALL_Y) : SERVE.TOSS_Y;
@@ -1183,13 +1187,15 @@
       // CPU/AI はランダムに選ぶ（どちらも T／ボディ／ワイドの3コース）
       const magnitude = who === 'you'
         ? this.serveAimMagnitude(targetSign)
-        : this.cpuServeAimMagnitude();
+        : this.cpuServeAimMagnitude(second);
       const target = {
         x: targetSign * magnitude,
         y: BALL_R,
         z: dir * (COURT.SERVICE - (who === 'you'
           ? (kick ? SPECIAL.KICK.DEPTH : this.serveDepth())
-          : rand(SERVE.DEPTH_MIN, SERVE.DEPTH_AI_MAX))),
+          : (second
+            ? rand(SERVE.SECOND_DEPTH_MIN, SERVE.SECOND_DEPTH_MAX)
+            : rand(SERVE.DEPTH_MIN, SERVE.DEPTH_AI_MAX)))),
       };
       // ゲージの線を超えて溜めた（chargeRelease() の抽選に当たった）1本は、狙いそのものを
       // サービスボックスの外へずらして外す。「フォールト」の判定は普段どおり着地で決まる
@@ -1202,7 +1208,9 @@
         } else {
           target.x = targetSign * (HALF_W + rand(SERVE.FAULT_WIDE_MIN, SERVE.FAULT_WIDE_MAX));
         }
-      } else if (!kick && Math.random() < SERVE.NET_CHANCE * (who === 'you' ? this.you.swingCharge : 1)) {
+      } else if (!kick && Math.random() < SERVE.NET_CHANCE * (who === 'you'
+        ? this.you.swingCharge
+        : (second ? SERVE.SECOND_NET_MULT : 1))) {
         // 強いサーブほどネットに掛かる（確率は威力に比例。CPU/AI は常に全力扱い）。
         // 深い狙いのままでは幾何的に白帯へ届かないので、「ネットのすぐ向こうを狙って
         // しまったミスヒット」として実現する（理由は config の NET_MISS_Z_MIN 参照）。
@@ -1212,7 +1220,7 @@
       // 人はトスを上げた瞬間に固定したスピン（V/C。chargeStart() 参照）でスライスサーブ・
       // スピンサーブが打てる。CPU/AI も同じ SPIN 設定（実効重力・バウンドの弾み方）で
       // 一定確率でスピンサーブを混ぜる（aiSpin()。以前は常にフラット固定だった）。
-      const spin = kick ? 'top' : (who === 'you' ? this.you.chargeSpin : aiSpin());
+      const spin = kick ? 'top' : (who === 'you' ? this.you.chargeSpin : aiSpin(second));
       // プレイヤーは「打つ」瞬間の溜め量で威力が変わる。CPU/AI（cpu・cpuMate・youMate）は
       // 溜め演出がない代わりに、難易度で決まる一定の威力（CPU.SERVE_T）で打つ。
       // どちらにも能力値「サーブ」の倍率が掛かる（attr.serve。小さいほど速い＝強い）。
@@ -1226,7 +1234,8 @@
       const flightT = (who === 'you'
         ? lerp(SERVE.T, SERVE.CHARGE_T, this.you.swingCharge)
         : CPU.SERVE_T) * (dist / SERVE.DIST_REF) * this.actor(who).attr.serve
-        * SERVE.SPIN_T_MULT[spin] * (kick ? SPECIAL.KICK.T_MULT : 1);
+        * SERVE.SPIN_T_MULT[spin] * (kick ? SPECIAL.KICK.T_MULT : 1)
+        * (second ? SERVE.SECOND_T_MULT : 1);
 
       ball.y = from.y;
       Object.assign(ball, solveShot(from, target, flightT, clearance, spin));
@@ -1306,11 +1315,15 @@
      * CPU/AI のサーブのコース選択。プレイヤーと同じ T／ボディ／ワイドから毎回ランダムに選ぶ。
      * ワイドを引いたときだけ、さらに CPU.CPU_ANGLE_CHANCE の確率で角度サーブに格上げする
      * （T／ボディの発生確率は従来どおり1/3ずつのまま変えない）。
+     * @param {boolean} [second] セカンドサーブ。角度サーブには格上げせず、ワイドも
+     *   SERVE.SECOND_AIM_WIDE_MAX までに抑えてサイドラインから余裕を取る。
      */
-    cpuServeAimMagnitude() {
+    cpuServeAimMagnitude(second) {
       const roll = Math.random();
       if (roll < 1 / 3) return rand(SERVE.AIM_T_MIN, SERVE.AIM_T_MAX);
       if (roll < 2 / 3) return rand(SERVE.AIM_BODY_MIN, SERVE.AIM_BODY_MAX);
+      // セカンドサーブはサイドラインから余裕を取る＝角度サーブには格上げせず、ワイドも手前まで。
+      if (second) return rand(SERVE.AIM_WIDE_MIN, SERVE.SECOND_AIM_WIDE_MAX);
       return Math.random() < SERVE.CPU_ANGLE_CHANCE
         ? rand(SERVE.AIM_ANGLE_MIN, SERVE.AIM_ANGLE_MAX)
         : rand(SERVE.AIM_WIDE_MIN, SERVE.AIM_WIDE_MAX);

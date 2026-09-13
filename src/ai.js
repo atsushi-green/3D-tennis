@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    CPU, DOUBLES, HALF_L, HALF_W, NEUTRAL_ATTR, PHYSICS, PLAYER,
+    CPU, DOUBLES, HALF_L, HALF_W, NEUTRAL_ATTR, PHYSICS, PLAYER, SERVE,
   } = RallyOne.config;
   const {
     clamp, lerp, rand, signOr,
@@ -479,11 +479,15 @@
    * ＝game.js が対象外にする）。以前は常にフラット固定で単調だったというユーザー報告を受け、
    * CPU.SPIN_FLAT_CHANCE の確率でフラットのまま、それ以外は CPU.SPIN_TOP_SHARE の割合で
    * トップスピン／スライスを混ぜる。
+   * @param {boolean} [second] セカンドサーブ。実際のテニスと同じく、ほとんど回転をかけて
+   *   （しかも多くはトップスピン＝キック）確実に入れにいく比率へ差し替える。
    * @returns {'flat'|'top'|'slice'}
    */
-  function aiSpin() {
-    if (Math.random() < CPU.SPIN_FLAT_CHANCE) return 'flat';
-    return Math.random() < CPU.SPIN_TOP_SHARE ? 'top' : 'slice';
+  function aiSpin(second) {
+    const flatChance = second ? SERVE.SECOND_FLAT_CHANCE : CPU.SPIN_FLAT_CHANCE;
+    const topShare = second ? SERVE.SECOND_TOP_SHARE : CPU.SPIN_TOP_SHARE;
+    if (Math.random() < flatChance) return 'flat';
+    return Math.random() < topShare ? 'top' : 'slice';
   }
 
   RallyOne.ai = {

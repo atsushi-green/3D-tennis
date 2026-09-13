@@ -563,6 +563,53 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     'the second serve itself lands in the service box like a first serve would');
 }
 
+// --- AI（CPU/AI）のセカンドサーブは1本目より遅く、ラインから余裕を取り、回転で入れにいく ---
+// (退行テスト: 以前は serve() が this.serveNumber を球速にも狙いにも一切使っておらず、
+//  AIは1本目も2本目も同じフル威力のフラット系サーブを打っていた)
+{
+  const sampleCpuServes = (serveNumber) => {
+    const speeds = [];
+    const spins = [];
+    const landings = [];
+    for (let i = 0; i < 300; i++) {
+      const g = new R.Game({
+        input: fakeInput,
+        hooks: { ...noHooks, serveSpeed: (kmh) => { if (kmh != null) speeds.push(kmh); } },
+      });
+      g.started = true;
+      g.server = 'cpu';
+      g.newPoint();
+      g.serveNumber = serveNumber; // newPoint() は必ず1本目から始めるので、ここで2本目にする
+      g.serve('cpu');
+      spins.push(g.ball.spin);
+      landings.push(R.physics.predictLanding(g.ball));
+    }
+    const avg = speeds.reduce((a, b) => a + b, 0) / speeds.length;
+    return {
+      avg,
+      maxX: Math.max(...landings.map((L) => Math.abs(L.x))),
+      flatShare: spins.filter((sp) => sp === 'flat').length / spins.length,
+      // CPU のサーブは -z 側（人間のコート）の対角ボックスへ入る
+      inBox: landings.filter((L) => !L.net && Math.abs(L.x) <= HALF_W
+        && L.z < 0 && L.z >= -COURT.SERVICE).length / landings.length,
+    };
+  };
+  const first = sampleCpuServes(1);
+  const second = sampleCpuServes(2);
+
+  ok(second.avg < first.avg * 0.85,
+    `the AI's second serve is clearly slower: 1st=${first.avg.toFixed(0)} 2nd=${second.avg.toFixed(0)}km/h`);
+  // 角度サーブ（サイドラインを越える所まで踏み込むコース）は2本目には出ない
+  ok(second.maxX <= SERVE.SECOND_AIM_WIDE_MAX + 0.2,
+    `the second serve keeps clear of the sideline: max |x|=${second.maxX.toFixed(2)}m`);
+  ok(first.maxX > SERVE.SECOND_AIM_WIDE_MAX,
+    `the first serve still uses the wide/angle courses: max |x|=${first.maxX.toFixed(2)}m`);
+  ok(second.flatShare < 0.3 && second.flatShare < first.flatShare,
+    `the second serve mostly carries spin: flat ${(second.flatShare * 100).toFixed(0)}% vs 1st ${(first.flatShare * 100).toFixed(0)}%`);
+  ok(second.inBox > first.inBox,
+    `the second serve goes in more often: 1st=${(first.inBox * 100).toFixed(0)}% 2nd=${(second.inBox * 100).toFixed(0)}%`);
+}
+
 // --- スタッツ：ダブルフォルトはサーバー側のカウントに積む ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
