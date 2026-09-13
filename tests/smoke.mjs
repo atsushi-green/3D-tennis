@@ -587,7 +587,6 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     const avg = speeds.reduce((a, b) => a + b, 0) / speeds.length;
     return {
       avg,
-      maxX: Math.max(...landings.map((L) => Math.abs(L.x))),
       flatShare: spins.filter((sp) => sp === 'flat').length / spins.length,
       // CPU のサーブは -z 側（人間のコート）の対角ボックスへ入る
       inBox: landings.filter((L) => !L.net && Math.abs(L.x) <= HALF_W
@@ -599,15 +598,51 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 
   ok(second.avg < first.avg * 0.85,
     `the AI's second serve is clearly slower: 1st=${first.avg.toFixed(0)} 2nd=${second.avg.toFixed(0)}km/h`);
-  // 角度サーブ（サイドラインを越える所まで踏み込むコース）は2本目には出ない
-  ok(second.maxX <= SERVE.SECOND_AIM_WIDE_MAX + 0.2,
-    `the second serve keeps clear of the sideline: max |x|=${second.maxX.toFixed(2)}m`);
-  ok(first.maxX > SERVE.SECOND_AIM_WIDE_MAX,
-    `the first serve still uses the wide/angle courses: max |x|=${first.maxX.toFixed(2)}m`);
+  // 角度サーブ（サイドラインを越える所まで踏み込むコース）は2本目には出ない。
+  // 着地点ではなく狙いそのものを見る（外す抽選＝CPU_FIRST_MISS に当たった1本は、
+  // わざとボックスの外へ狙いをずらすため着地点では区別できない）。
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    const aims = (sn) => Array.from({ length: 300 }, () => g.cpuServeAimMagnitude(sn === 2));
+    const secondAims = aims(2);
+    ok(Math.max(...secondAims) <= SERVE.SECOND_AIM_WIDE_MAX,
+      `the second serve keeps clear of the sideline: max aim=${Math.max(...secondAims).toFixed(2)}m`);
+    ok(Math.max(...aims(1)) > SERVE.SECOND_AIM_WIDE_MAX,
+      'the first serve still uses the wide/angle courses');
+  }
   ok(second.flatShare < 0.3 && second.flatShare < first.flatShare,
     `the second serve mostly carries spin: flat ${(second.flatShare * 100).toFixed(0)}% vs 1st ${(first.flatShare * 100).toFixed(0)}%`);
   ok(second.inBox > first.inBox,
     `the second serve goes in more often: 1st=${(first.inBox * 100).toFixed(0)}% 2nd=${(second.inBox * 100).toFixed(0)}%`);
+}
+
+// --- AIのサーブの成功率は実際のテニスの水準（1本目6割強／2本目9割強）にある ---
+// (以前は幾何的に外れるぶんしかなく1本目も2本目も約9割入っていた＝「毎回フル威力の
+//  1本目がほぼ確実に入る」状態。SERVE.CPU_FIRST_MISS / CPU_SECOND_MISS で外す)
+{
+  const inRate = (serveNumber) => {
+    let inBox = 0;
+    const N = 600;
+    for (let i = 0; i < N; i++) {
+      const g = new R.Game({ input: fakeInput, hooks: noHooks });
+      g.started = true;
+      g.server = 'cpu';
+      g.newPoint();
+      g.serveNumber = serveNumber;
+      g.serve('cpu');
+      const L = R.physics.predictLanding(g.ball);
+      if (!L.net && Math.abs(L.x) <= HALF_W && L.z < 0 && L.z >= -COURT.SERVICE) inBox++;
+    }
+    return inBox / N;
+  };
+  // 実測（各6000本）では 1本目 61〜64%・2本目 92〜93%。ATPの平均は 1st 62%／2nd 92%。
+  // ここは600本なので、標準偏差（約2%）の3倍ぶん幅を持たせてある。
+  const first = inRate(1);
+  const second = inRate(2);
+  ok(first > 0.54 && first < 0.70, `first serves go in about 62% of the time: ${(first * 100).toFixed(0)}%`);
+  ok(second > 0.86 && second < 0.97, `second serves go in about 92% of the time: ${(second * 100).toFixed(0)}%`);
+  ok((1 - first) * (1 - second) < 0.06,
+    `double faults stay near the real ~3%: ${((1 - first) * (1 - second) * 100).toFixed(1)}%`);
 }
 
 // --- スタッツ：ダブルフォルトはサーバー側のカウントに積む ---

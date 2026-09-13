@@ -1201,8 +1201,13 @@
       // サービスボックスの外へずらして外す。「フォールト」の判定は普段どおり着地で決まる
       // （bounce()→inServiceBox()）ので、ロング／サイドアウトがそのまま画面に出る。
       const overcharged = who === 'you' && this.you.serveMiss;
+      // CPU/AI は「実際のテニスと同じ割合で外す」抽選をここで引く（1本目は6割強しか入らない
+      // 代わりに攻められる、という関係を作るため。理由は config の CPU_FIRST_MISS 参照）。
+      // 外し方は人間の溜めすぎとまったく同じ＝狙いをサービスボックスの外へずらす。
+      const aiMiss = who !== 'you'
+        && Math.random() < (second ? SERVE.CPU_SECOND_MISS : SERVE.CPU_FIRST_MISS);
       let clearance = kick ? SPECIAL.KICK.CLEARANCE : SERVE.CLEARANCE;
-      if (overcharged) {
+      if (overcharged || aiMiss) {
         if (Math.random() < SERVE.FAULT_LONG_CHANCE) {
           target.z = dir * (COURT.SERVICE + rand(SERVE.FAULT_LONG_MIN, SERVE.FAULT_LONG_MAX));
         } else {
