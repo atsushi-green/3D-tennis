@@ -4697,6 +4697,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const idle = { moveX: 0, moveZ: 0, lob: false };
   /** 「足を止めて溜めた1打」を作る（鷹の目のように溜め量が条件の技がある） */
   const chargeUp = (g) => { g.chargeStart(); g.you.chargeTime = CHARGE.MAX_TIME; };
+  /** 「ネット方向（+z）へ前へ詰めながら打つ」状態にする（ダンクスマッシュの条件） */
+  const rushingIn = (g) => { g.you.fwd = SPECIAL.DUNK.MIN_FWD + 1; };
   /**
    * 「フォア側（画面の右＝world -x）へ大きく振り回されて、まだ走っている」状態にする。
    * バギーホイップの条件（走った距離 runX・立ち位置 you.x・速度）をすべて満たす。
@@ -4759,7 +4761,9 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   // --- 候補を出すのは「これから打つ」場面だけ（ラリー中は溜めている間） ---
   {
     const g = rally(ALL);
-    ballAt(g, 2.2);
+    g.you.z = -3;
+    rushingIn(g);
+    ballAt(g, 2.6, 0.3, 0);
     ok(g.specialAim() === null, 'not charging yet: no special is announced');
     chargeUp(g);
     const armed = g.specialAim();
@@ -4771,7 +4775,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     // 高い球 → ダンクスマッシュ
     const high = rally(ALL);
     high.you.z = -3;
-    ballAt(high, 2.2, 0.3, 0);
+    rushingIn(high);
+    ballAt(high, 2.6, 0.3, 0);
     ok(high.pickSpecial() === 'dunkSmash', `a high ball picks the dunk smash, got ${high.pickSpecial()}`);
 
     // ネット前のノーバウンド（高くない）→ 飛びつきボレー
@@ -4819,7 +4824,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   {
     const g = rally(['hawkEye', 'buggyWhip']);
     g.you.z = -3;
-    ballAt(g, 2.2, 0.3, 0); // ダンクスマッシュの場面だが装備していない
+    ballAt(g, 2.6, 0.3, 0); // ダンクスマッシュの場面だが装備していない
     g.you.speed = 0;
     chargeUp(g);
     ok(g.pickSpecial() === 'hawkEye',
@@ -4910,7 +4915,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   {
     const g = rally(['dunkSmash', 'hawkEye']);
     g.you.z = -3; g.you.speed = 0;
-    ballAt(g, 2.2, 0.3, 0); // 高い球＝ダンクスマッシュの場面（鷹の目も条件は満たす）
+    rushingIn(g);
+    ballAt(g, 2.6, 0.3, 0); // 前に詰めながらの高い球＝ダンクの場面（鷹の目も条件は満たす）
     chargeUp(g);
     ok(g.pickSpecial() === 'dunkSmash', `precondition: the dunk is picked first, got ${g.pickSpecial()}`);
     g.spendSpecial('dunkSmash');
@@ -5039,7 +5045,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       return R.physics.predictLanding(g.ball);
     };
     const cases = [
-      ['dunkSmash', (g) => { g.you.z = -3; ballAt(g, 2.2, 0.3, 0); }],
+      ['dunkSmash', (g) => { g.you.z = -3; ballAt(g, 2.6, 0.3, 0); }],
       ['divingVolley', (g) => { g.you.z = -3; ballAt(g, 1.0, 0.3, 0); }],
       ['driveVolley', (g) => { g.you.z = -9; ballAt(g, 1.2, 0.3, 0); }],
       ['buggyWhip', (g) => { g.you.z = -9; ballAt(g, 1.0); }],
@@ -5065,23 +5071,35 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     const dunkSpeed = (special) => {
       const g = rally(['dunkSmash']);
       g.you.z = -3;
-      ballAt(g, 2.2, 0.3, 0);
+      ballAt(g, 2.6, 0.3, 0);
       g.you.swingCharge = 1;
       g.you.special = special;
       g.hit('you');
       return Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz);
     };
-    ok(dunkSpeed('dunkSmash') > dunkSpeed(null) * 1.15,
-      `the dunk smash is clearly faster than a normal smash: ${dunkSpeed('dunkSmash').toFixed(1)} vs ${dunkSpeed(null).toFixed(1)} m/s`);
+    ok(dunkSpeed('dunkSmash') > dunkSpeed(null) * 1.35,
+      `the dunk smash is far faster than a normal smash: ${dunkSpeed('dunkSmash').toFixed(1)} vs ${dunkSpeed(null).toFixed(1)} m/s`);
+    // 実戦で出る場面（前に詰めた位置）では 240km/h 以上の決め球になっている
+    {
+      const kmh = R.math.mpsToKmh(dunkSpeed('dunkSmash'));
+      ok(kmh > 240, `and it is a genuine put-away from the net: ${kmh.toFixed(0)}km/h`);
+    }
     // ベースライン後方から叩いても初速は頭打ちになる（距離ぶん飛翔時間を伸ばす）
     {
-      const deep = rally(['dunkSmash']);
-      deep.you.z = -12;
-      ballAt(deep, 2.4, 0.3, 0);
-      deep.you.special = 'dunkSmash';
-      deep.hit('you');
-      const kmh = R.math.mpsToKmh(Math.hypot(deep.ball.vx, deep.ball.vy, deep.ball.vz));
-      ok(kmh < 240, `a dunk smash from deep is still capped: ${kmh.toFixed(0)}km/h`);
+      const dunkKmh = (z) => {
+        const g = rally(['dunkSmash']);
+        g.you.z = z;
+        ballAt(g, 2.4, 0.3, 0);
+        g.you.special = 'dunkSmash';
+        g.hit('you');
+        return R.math.mpsToKmh(Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz));
+      };
+      const near = dunkKmh(-5);
+      const deep = dunkKmh(-12);
+      const cap = R.math.mpsToKmh(SPECIAL.DUNK.MAX_SPEED);
+      ok(deep < cap * 1.05, `a dunk smash from deep is capped near MAX_SPEED: ${deep.toFixed(0)}km/h (cap ${cap.toFixed(0)})`);
+      ok(deep <= near * 1.05,
+        `and the extra distance does not make it faster: deep ${deep.toFixed(0)} vs near ${near.toFixed(0)}km/h`);
     }
   }
 
@@ -5145,6 +5163,137 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     ok(back.currentStroke() === 'backhand', `precondition: backhand, got ${back.currentStroke()}`);
     ok(back.pickSpecial() === null,
       `the same situation on the backhand side does not, got ${back.pickSpecial()}`);
+  }
+
+  // --- ダンクスマッシュは「前へ詰めながらの高いノーバウンド」だけ（溜めは不要） ---
+  // (バグ報告: ワンバウンドの球でもダンクスマッシュになってしまう)
+  {
+    // ワンバウンドして高く跳ねた球では出ない（＝ただの高い打点の返球）
+    const bounced = rally(['dunkSmash']);
+    bounced.you.z = -3;
+    rushingIn(bounced);
+    ballAt(bounced, 2.6, 0.3, 1);
+    ok(bounced.pickSpecial() === null,
+      `a ball that has already bounced is not a dunk, got ${bounced.pickSpecial()}`);
+
+    // 頭上まで上がっていない球では出ない（通常のスマッシュになる高さでもまだ足りない）
+    const low = rally(['dunkSmash']);
+    low.you.z = -3;
+    rushingIn(low);
+    ballAt(low, R.config.PLAYER.SMASH_MIN_Y + 0.05, 0.3, 0); // 普通のスマッシュの線は超える高さ
+    ok(low.pickSpecial() === null,
+      `a ball that is merely smash-height is not high enough to dunk, got ${low.pickSpecial()}`);
+    ok(SPECIAL.DUNK.MIN_Y > R.config.PLAYER.SMASH_MIN_Y,
+      'the dunk needs a higher ball than a normal smash');
+
+    // 高さがちょうど線に届けば出る（＝止めているのは高さだけ）
+    const justHigh = rally(['dunkSmash']);
+    justHigh.you.z = -3;
+    rushingIn(justHigh);
+    ballAt(justHigh, SPECIAL.DUNK.MIN_Y, 0.3, 0);
+    ok(justHigh.pickSpecial() === 'dunkSmash',
+      `right at MIN_Y it does fire, got ${justHigh.pickSpecial()}`);
+
+    // 通常のリーチ（PLAYER.REACH_Y）より高い球も、ダンクの上積み(REACH_Y_BONUS)で打てる
+    const overhead = rally(['dunkSmash']);
+    overhead.you.z = -3;
+    rushingIn(overhead);
+    ballAt(overhead, R.config.PLAYER.REACH_Y + 0.3, 0.3, 0);
+    ok(overhead.pickSpecial() === 'dunkSmash',
+      `a ball above the normal reach is still dunkable, got ${overhead.pickSpecial()}`);
+    ok(overhead.predictContact(1, SPECIAL.DUNK.REACH_Y_BONUS).y > R.config.PLAYER.REACH_Y,
+      'and it is struck above the normal reach ceiling, which only the dunk can do');
+
+    // 前へ詰めていなければ出ない（止まって待って叩くのは普通のスマッシュ）
+    const parked = rally(['dunkSmash']);
+    parked.you.z = -3;
+    ballAt(parked, 2.6, 0.3, 0);
+    ok(parked.you.fwd === 0, 'precondition: standing still');
+    ok(parked.pickSpecial() === null,
+      `standing still is a normal smash, not a dunk, got ${parked.pickSpecial()}`);
+
+    // 後ろへ下がりながらでも出ない（符号が逆）
+    const backing = rally(['dunkSmash']);
+    backing.you.z = -3;
+    backing.you.fwd = -(SPECIAL.DUNK.MIN_FWD + 1);
+    ballAt(backing, 2.6, 0.3, 0);
+    ok(backing.pickSpecial() === null,
+      `backing away is not a dunk either, got ${backing.pickSpecial()}`);
+
+    // 前へ詰めながらの高いノーバウンドなら出る。しかも**溜めは要らない**
+    // （走っている間は溜まらないので、溜めを条件にすると成立しなくなる）
+    const rush = rally(['dunkSmash']);
+    rush.you.z = -3;
+    rushingIn(rush);
+    ballAt(rush, 2.6, 0.3, 0);
+    rush.chargeStart();
+    ok(rush.you.chargeTime === 0, 'precondition: no charge at all');
+    const armed = rush.specialAim();
+    ok(armed && armed.move === 'dunkSmash',
+      `rushing in on a high no-bounce ball dunks without any charge, got ${armed && armed.move}`);
+
+    // 通常のスマッシュに要る溜め（PLAYER.SMASH_MIN_CHARGE）が無くても、
+    // ダンクが乗った1打はスマッシュとして打たれる
+    rush.chargeRelease();
+    ok(rush.you.special === 'dunkSmash', 'and the move is armed on that swing');
+    ok(rush.you.swingCharge < R.config.PLAYER.SMASH_MIN_CHARGE,
+      `precondition: the swing is below the normal smash charge, got ${rush.you.swingCharge}`);
+    rush.hit('you');
+    ok(rush.you.stroke === 'smash', `it still swings as a smash, got ${rush.you.stroke}`);
+    ok(rush.usesLeft('dunkSmash') === 0, 'and the use is spent');
+
+    // 溜めを離したあとにバウンドを待ってしまった1打では技が下りる
+    // （乗ったままだと、ワンバウンドの球がダンクとして打たれてしまう）
+    const waited = rally(['dunkSmash']);
+    waited.you.z = -3;
+    rushingIn(waited);
+    ballAt(waited, 2.6, 0.3, 0);
+    ok(waited.pickSpecial() === 'dunkSmash', 'precondition: the dunk is armed on a no-bounce ball');
+    waited.you.special = 'dunkSmash';
+    const before = waited.usesLeft('dunkSmash');
+    waited.ball.bounces = 1; // 振っている間にバウンドしてしまった
+    waited.hit('you');
+    ok(waited.you.special === null, `the armed dunk is dropped after a bounce, got ${waited.you.special}`);
+    ok(waited.you.stroke !== 'smash', `and it is not swung as a smash, got ${waited.you.stroke}`);
+    ok(waited.usesLeft('dunkSmash') === before,
+      `and no use is spent, got ${waited.usesLeft('dunkSmash')} of ${before}`);
+  }
+
+  // --- バギーホイップはボレーでは出ない（走りながらのグラウンドストローク専用） ---
+  // (バグ報告: ネット前でノーバウンドを触る1打までバギーホイップになってしまう)
+  {
+    // ボレーの技を装備していなくても、ネット前のノーバウンドでは候補にならない
+    const volley = rally(['buggyWhip']);
+    volley.you.z = -3; // サービスラインより前
+    draggedWide(volley);
+    ballAt(volley, 1.0, 0.3, 0); // ノーバウンド＝ボレーになる打点
+    ok(volley.pickSpecial() === null,
+      `a no-bounce ball at the net is a volley, not a buggy whip: got ${volley.pickSpecial()}`);
+
+    // 同じ場面でもバウンド後（グラウンドストローク）なら出る＝止めているのはボレーだけ
+    const ground = rally(['buggyWhip']);
+    ground.you.z = -3;
+    draggedWide(ground);
+    ballAt(ground, 1.0, 0.3, 1);
+    ok(ground.pickSpecial() === 'buggyWhip',
+      `after the bounce at the same spot it still picks it, got ${ground.pickSpecial()}`);
+
+    // 溜めを離したあとに前へ詰めて、結局ボレーになった1打でも技は下りる
+    // （乗ったままだと打ち方の判定がボレーにならず、ボレーが曲がって飛んでしまう）
+    const rushed = rally(['buggyWhip']);
+    rushed.you.z = -9;
+    draggedWide(rushed);
+    ballAt(rushed, 1.0);
+    ok(rushed.pickSpecial() === 'buggyWhip', 'precondition: the whip is armed from the baseline');
+    rushed.you.special = 'buggyWhip';
+    const before = rushed.usesLeft('buggyWhip');
+    rushed.you.z = -3; // 溜めを離したあとにネット前へ詰めた
+    ballAt(rushed, 1.0, 0.3, 0); // そこへノーバウンドの球が来た
+    rushed.hit('you');
+    ok(rushed.you.special === null, `the armed whip is dropped on a volley, got ${rushed.you.special}`);
+    ok(rushed.ball.curve === 0, `and the volley does not curve, got ${rushed.ball.curve}`);
+    ok(rushed.usesLeft('buggyWhip') === before,
+      `and no use is spent, got ${rushed.usesLeft('buggyWhip')} of ${before}`);
   }
 
   // --- バギーホイップは「フォア側へ大きく振り回された」ときだけ ---

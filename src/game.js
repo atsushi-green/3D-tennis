@@ -239,17 +239,53 @@
   }
 
   /**
+   * その打点が「ボレー」になるか（hit() の isVolley とまったく同じ条件）。
+   * ボレーを担当する技（飛びつき／ドライブボレー）が出られる場面と、グラウンド
+   * ストロークの技（バギーホイップ）が出てはいけない場面を、この1つで判定する。
+   * @param {Game} g
+   * @param {{bounces:number}|null} at predictContact() の打点、または実際のボール
+   */
+  function isVolleyContact(g, at) {
+    return !!at && at.bounces === 0 && g.you.z > -COURT.SERVICE;
+  }
+
+  /**
+   * 技が乗った1打が、実際に当たった時点でもまだその技の場面かどうか。
+   * 技が乗るのは「溜めを離した瞬間」（chargeRelease）で、実際に当たるのはその少し後
+   * なので、その間に前へ詰めた・バウンドを待ったなどで場面が変わることがある。
+   * false を返した技は hit() が下ろし、普通の1打として打つ（回数も減らない）。
+   * **打ち方が変わってしまう技だけ**ここに書く：hit() は技が乗った1打の打ち方を技に
+   * 決めさせるので（isSmash / isVolley）、場面が変わったまま乗せ続けると
+   * 「ボレーがバギーホイップとして曲がって飛ぶ」「ワンバウンドの球がダンクになる」。
+   * @type {{[key:string]: (g: Game, ball: object) => boolean}}
+   */
+  const SPECIAL_STILL_VALID = {
+    buggyWhip: (g, ball) => !isVolleyContact(g, ball),
+    dunkSmash: (g, ball) => ball.bounces === 0,
+  };
+
+  /**
    * 各必殺技が「今この場面で出せるか」。装備している技を SPECIAL_MOVES の並び順
    * （＝優先度）に上から当てていき、最初に true になったひとつだけが**自動で**発動する
    * （Game#pickSpecial）。条件が重ならないよう、技ごとに担当する場面を分けてある：
-   * サーブ／高い球／届かない球／抜かれた球／ネット前のノーバウンド／浮いたノーバウンド／
+   * サーブ／前に詰めながらの高いノーバウンド／届かない球／抜かれた球／
+   * ネット前のノーバウンド／浮いたノーバウンド／
    * 走らされているフォアハンド／足を止めて溜めたグラウンドストローク。
    * @type {{[key:string]: (g: Game, c: object) => boolean}}
    */
   const SPECIAL_MATCH = {
     kickServe: (g, c) => c.serving,
+    // 「前へ踏み込みながら、高いノーバウンドの球を叩く」場面だけ。
+    // ・バウンド後の球（bounces > 0）では出さない。跳ね上がった球を打つのはスマッシュ
+    //   ではなく高い打点の返球で、そこまで技にすると普通のラリー中に暴発する。
+    // ・前進（you.fwd）を見るのがこの技の本体。止まって待って叩くのは普通のスマッシュ。
+    // ・**溜めは見ない**（通常のスマッシュが要る PLAYER.SMASH_MIN_CHARGE は掛からない）。
+    //   走っている間は溜まらない（CHARGE.MOVE_CAP_FLOOR=0）ので、前に詰めながら溜めを
+    //   要求すると、そもそも成立しない条件になってしまう。
     dunkSmash: (g, c) => !c.serving && !!c.contact('dunkSmash')
-      && c.contact('dunkSmash').y >= SPECIAL.DUNK.MIN_Y,
+      && c.contact('dunkSmash').bounces === 0
+      && c.contact('dunkSmash').y >= SPECIAL.DUNK.MIN_Y
+      && g.you.fwd >= SPECIAL.DUNK.MIN_FWD,
     // 「ボールが十分に離れていて、普通に振っても届かず、走っても間に合わない」球だけ。
     // ・ボールとの距離（MIN_DIST）を見ないと、すぐ横を速く通り過ぎる球——手を伸ばせば
     //   届きそうな「ギリギリ届かない」球——にも出てしまう（そういう球でも2バウンド目は
@@ -264,8 +300,9 @@
     tweener: (g, c) => !c.serving && !!c.contact('tweener')
       && g.ball.z < g.you.z - SPECIAL.TWEENER.BEHIND
       && g.ball.y >= SPECIAL.TWEENER.MIN_Y,
-    divingVolley: (g, c) => !c.serving && !!c.contact('divingVolley')
-      && c.contact('divingVolley').bounces === 0 && g.you.z > -COURT.SERVICE,
+    divingVolley: (g, c) => !c.serving && isVolleyContact(g, c.contact('divingVolley')),
+    // こちらはネット前に限らない（ベースライン寄りで浮いたノーバウンドを叩くのも
+    // ドライブボレー）ので、isVolleyContact ではなく「ノーバウンド＋浮いている」で見る。
     driveVolley: (g, c) => !c.serving && !!c.contact('driveVolley')
       && c.contact('driveVolley').bounces === 0
       && c.contact('driveVolley').y >= SPECIAL.DRIVE.MIN_Y,
@@ -274,6 +311,9 @@
     // サイドへ大きく走って（runX）、実際にそちらへ寄って立っている（you.x）。
     buggyWhip: (g, c) => {
       if (c.serving || !c.contact('buggyWhip')) return false;
+      // ボレーの場面では出さない（走りながら擦り上げるグラウンドストロークの技なので、
+      // ネット前でノーバウンドを触る1打とは別物。ボレーは飛びつき／ドライブボレーの担当）。
+      if (isVolleyContact(g, c.contact('buggyWhip'))) return false;
       if (c.spin !== 'top' || g.currentStroke() !== 'forehand') return false;
       const { BUGGY } = SPECIAL;
       const side = RACKET_SIDE.you; // ラケット側を正にするための符号
@@ -357,6 +397,10 @@
         // chaseDist の人間版で、resetChase() が新しい球のたびに0へ戻す。必殺技
         // バギーホイップの「フォア側へ大きく振り回されたか」の判定に使う。
         runX: 0,
+        // いまネット方向(+z)へ動いている速さ(m/s、符号つき。後ろへ下がっていれば負)。
+        // speed と同じく「実際に動いた分」から出す＝コートの端でクランプされた分は入らない。
+        // 必殺技ダンクスマッシュの「前へ踏み込みながら叩いたか」の判定に使う。
+        fwd: 0,
         stamina: 1, // 0〜1。長いラリーで走るほど減り、ポイント間で少し回復する（newPoint()参照）
         // スタート画面の「選手設定」で決まる能力倍率（config.ATTRS）。オブジェクトの中身が
         // 書き換えられる形で更新されるので、ここで参照を1度持っておけば以後ずっと最新を指す。
@@ -811,6 +855,7 @@
       this.you.vx = 0;
       this.you.vz = 0;
       this.you.speed = 0;
+      this.you.fwd = 0;
       // 打点に着くまでの時間ぶん（＋わずかな余裕）だけ振り続けられるようにする。
       return clamp(spot.t + SPECIAL.DASH.WINDOW_MARGIN, PLAYER.SWING_WINDOW, SPECIAL.DASH.WINDOW);
     }
@@ -1354,7 +1399,14 @@
       this.rallyShots++; // 観客の歓声・実況の盛り上がりに使う（ラリーが長いほど盛り上がる）
 
       // この1打に乗っている必殺技（chargeRelease() が入れる）。人間だけが持つ。
-      const special = who === 'you' ? this.you.special : null;
+      // 溜めを離したあとに場面が変わっていたら（前へ詰めてボレーになった／バウンドを
+      // 待った）ここで下ろし、普通の1打として打つ（SPECIAL_STILL_VALID 参照）。
+      let special = who === 'you' ? this.you.special : null;
+      const stillValid = special && SPECIAL_STILL_VALID[special];
+      if (stillValid && !stillValid(this, ball)) {
+        special = null;
+        this.you.special = null;
+      }
 
       if (who === 'you') this.you.swingConnected = true; // この1振りは当たった（空振りではない）
 
@@ -2238,6 +2290,7 @@
         // （実際に動いていないのに走って見えるのを防ぐ）。
         const moved = Math.hypot(this.you.x - youBefore.x, this.you.z - youBefore.z);
         this.you.speed = moved / dt;
+        this.you.fwd = (this.you.z - youBefore.z) / dt; // ＋＝ネット方向へ前進している
         // 左右の移動は符号つきで積む（行って戻れば打ち消される＝「振り回された」量になる）
         this.you.runX += this.you.x - youBefore.x;
         this.drainStamina(this.you, moved);
@@ -2245,6 +2298,7 @@
         this.you.vx = 0;
         this.you.vz = 0;
         this.you.speed = 0;
+        this.you.fwd = 0;
       }
 
       if (this.doubles) this.moveDoublesTeams(dt);
