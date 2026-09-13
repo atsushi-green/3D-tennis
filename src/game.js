@@ -1094,19 +1094,30 @@
       } else if (server === 'youMate') {
         // 人間のチームだが、今回は相方の番。人間は何もしなくてよい
         this.hooks.call(faultReason ? 'パートナーのセカンドサーブ' : 'パートナーのサーブ', faultReason || '');
-        this.after(TIMING.CPU_SERVE_DELAY, () => {
-          if (this.phase === 'serve') this.serve('youMate');
-        });
+        this.scheduleAiServe('youMate');
       } else {
         this.hooks.call(faultReason ? 'セカンドサーブ' : 'リターン', faultReason ? `${faultReason}／CPU` : 'CPU のサーブ');
-        this.after(TIMING.CPU_SERVE_DELAY, () => {
-          if (this.phase === 'serve') this.serve(server);
-        });
+        this.scheduleAiServe(server);
       }
       this.placeServeBall();
-      // CPU/AI（cpu・cpuMate・youMate）も見た目だけトスを上げる。placeServeBall() の後で
-      // 呼ぶ必要がある（先に呼ぶと上のボール位置をトス前の手元に戻されてしまう）。
-      if (server !== 'you') this.aiTossBall();
+    }
+
+    /**
+     * CPU/AI（cpu・cpuMate・youMate）のサーブ動作を予約する。構えてから
+     * TIMING.CPU_SERVE_READY だけ一拍おいてトスを上げ、そこからさらに
+     * TIMING.CPU_SERVE_DELAY 後に打つ。以前は一拍が無く、ポイントが始まった瞬間にトスが
+     * 上がって 0.9秒後には球が飛んできていた＝レシーバー（人間）が構える間がなかった。
+     * トスは placeServeBall() の後に上げる必要がある（先に上げるとボール位置をトス前の
+     * 手元に戻されてしまう）が、ここは必ずタイマー経由なので順序は自動的に満たされる。
+     */
+    scheduleAiServe(who) {
+      this.after(TIMING.CPU_SERVE_READY, () => {
+        if (this.phase !== 'serve') return;
+        this.aiTossBall();
+        this.after(TIMING.CPU_SERVE_DELAY, () => {
+          if (this.phase === 'serve') this.serve(who);
+        });
+      });
     }
 
     /**
@@ -1157,7 +1168,8 @@
      * 再現する（人間の入力待ちを表す tossActive とは別に aiTossActive を立てる。理由は
      * aiTossActive のコメント参照）。実際の打点・威力は serve() が SERVE.TOSS_Y 固定で
      * 計算するので、ここでの軌道そのものは結果に影響しない。TIMING.CPU_SERVE_DELAY の間に
-     * 上がって落ちてくるので、リプレイでもちゃんとトスが見える。
+     * 上がって落ちてくるので、リプレイでもちゃんとトスが見える。呼ぶのは scheduleAiServe()
+     * だけ（構えてから一拍おいて上げる）。
      */
     aiTossBall() {
       const ball = this.ball;

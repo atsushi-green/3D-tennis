@@ -645,6 +645,34 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `double faults stay near the real ~3%: ${((1 - first) * (1 - second) * 100).toFixed(1)}%`);
 }
 
+// --- AIは構えてから一拍おいてトスを上げ、そこからさらに間を置いて打つ ---
+// (退行テスト: 以前はポイントが始まった瞬間にトスが上がり 0.9秒後には球が飛んできていた＝
+//  レシーバー（人間）が構える間がなく「サーブが早すぎる」と感じられていた)
+{
+  const { TIMING, PHYSICS } = R.config;
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.started = true;
+  g.server = 'cpu';
+  g.newPoint();
+  ok(g.aiTossActive === false, 'the AI does not toss the instant the point starts');
+
+  g.tickTimers(TIMING.CPU_SERVE_READY - 0.05);
+  ok(g.aiTossActive === false, 'it is still standing at the line just before CPU_SERVE_READY');
+  g.tickTimers(0.1);
+  ok(g.aiTossActive === true, 'the toss goes up after CPU_SERVE_READY');
+  ok(g.phase === 'serve', 'the ball has not been hit yet');
+
+  g.tickTimers(TIMING.CPU_SERVE_DELAY - 0.1);
+  ok(g.phase === 'serve', 'still on the toss just before CPU_SERVE_DELAY');
+  g.tickTimers(0.2);
+  ok(g.phase === 'rally', 'the serve is struck CPU_SERVE_DELAY after the toss');
+
+  // 打つのはトスが手元へ落ちきる前でなければならない（でないとトスが2回上がって見える）
+  const tossAir = 2 * Math.sqrt(2 * (SERVE.TOSS_PEAK - SERVE.BALL_Y) / Math.abs(PHYSICS.GRAVITY));
+  ok(TIMING.CPU_SERVE_DELAY < tossAir,
+    `the AI hits before its toss lands back in hand: delay=${TIMING.CPU_SERVE_DELAY}s air=${tossAir.toFixed(2)}s`);
+}
+
 // --- スタッツ：ダブルフォルトはサーバー側のカウントに積む ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
@@ -2619,7 +2647,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   };
   ok(stance.youMate.z < -HALF_L, `precondition: youMate starts behind the baseline, z=${stance.youMate.z}`);
 
-  // CPU_SERVE_DELAY (0.9s) が過ぎる前の複数フレームぶん進める。まだ serve() は呼ばれていない。
+  // CPU_SERVE_READY + CPU_SERVE_DELAY が過ぎる前の複数フレームぶん進める。まだ serve() は呼ばれていない。
   for (let i = 0; i < 30; i++) { g.movePlayers(1 / 60); }
   ok(g.phase === 'serve', 'precondition: still waiting to serve');
   ok(Math.abs(g.youMate.x - stance.youMate.x) < 1e-6 && Math.abs(g.youMate.z - stance.youMate.z) < 1e-6,
