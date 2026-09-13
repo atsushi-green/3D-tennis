@@ -8,22 +8,30 @@
 (function (RallyOne) {
   'use strict';
 
-  const { GAIT, PLAYER, SWING, THEME } = RallyOne.config;
+  const { GAIT, PLAYER, SPECIAL, SWING, THEME } = RallyOne.config;
   const { clamp, lerp } = RallyOne.math;
   const scene3d = RallyOne.scene = RallyOne.scene || {};
 
   const TWO_PI = Math.PI * 2;
   const ARM_SPAN = PLAYER.SERVE_ANIM; // アニメーションの基準時間
+  /**
+   * ラケットを持つ腕がモデルのローカルのどちら側にあるか。**-1 ＝ 右利き**（-x 側）。
+   * 振り付け（config.SWING の角度）は昔からすべて「腕が +x 側にある」前提で書かれているので、
+   * ポーズを作り終えた後に mirrorHanded() で左右を鏡映しして右利きに直す。
+   * game.js の RACKET_SIDE（当たり判定のフォア/バック）と必ず同じ向きにすること
+   * （ずれると「フォアと判定された球を逆の手で振る」ことになる）。
+   */
+  const HAND = -1;
 
   function createRacketArm(shirt, mat) {
     const arm = new THREE.Group();
 
     const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.05, 0.5, 8), mat(shirt));
     upper.rotation.z = -Math.PI / 2;
-    upper.position.x = 0.28;
+    upper.position.x = HAND * 0.28;
 
     const frame = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.022, 8, 20), mat(THEME.BALL));
-    frame.position.set(0.72, 0, 0);
+    frame.position.set(HAND * 0.72, 0, 0);
 
     const strings = new THREE.Mesh(
       new THREE.CircleGeometry(0.16, 20),
@@ -31,11 +39,11 @@
         color: 0xffffff, transparent: true, opacity: 0.14, side: THREE.DoubleSide,
       }),
     );
-    strings.position.set(0.72, 0, 0);
+    strings.position.set(HAND * 0.72, 0, 0);
 
     const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.2, 8), mat(THEME.GRIP));
     grip.rotation.z = Math.PI / 2;
-    grip.position.set(0.53, 0, 0);
+    grip.position.set(HAND * 0.53, 0, 0);
 
     arm.add(upper, frame, strings, grip);
     return arm;
@@ -114,6 +122,9 @@
     torso.add(offArm);
 
     group.userData.arm = arm;
+    // この選手が普段向いている方向（world.js が cpu 側に Math.PI を入れる）。ツイーナーで
+    // 体ごと反転させたあと、確実に元の向きへ戻すために基準として持っておく。
+    group.userData.facing = 0;
     group.userData.gait = {
       torso, offArm, phase: 0, blend: 0,
       legs: [
@@ -177,10 +188,15 @@
    *     固定される swingCharge を使い続ける。
    * @param {boolean} [tossing] トス中（打つ前）かどうか。サーブの構えを出す
    */
-  scene3d.setSwingPose = function setSwingPose(player, state, tossing) {
+  function poseArm(player, state, tossing) {
     const { anim, stroke, prep, spin, chargeFrac, swingCharge } = state;
     const arm = player.userData.arm;
     const torso = player.userData.gait.torso;
+    // ツイーナー（股抜き）の間だけ、体ごと相手に背を向ける。ラケット腕はモデルの
+    // ローカル +x 側に作られているので、向きを反転させればそのまま「背中側の球を
+    // 股の下から打つ」形になる（普段の向きは userData.facing に控えてある）。
+    player.rotation.y = (player.userData.facing || 0)
+      + (stroke === 'tweener' && anim > 0 ? Math.PI : 0);
 
     if (anim <= 0) {
       if (tossing) {
@@ -235,6 +251,18 @@
       return;
     }
 
+    if (stroke === 'tweener') {
+      // ツイーナー（股抜き）。体は相手に背を向けたまま、ラケットだけを股の下へ落として
+      // 下から上へ振り抜く：横振り(rotation.y)はほぼ使わず、仰角(rotation.z)を
+      // 真下から前方へ通す。前後の傾き(rotation.x)で腕を体の内側（股の下）へ入れる。
+      const S = SWING.TWEENER;
+      arm.rotation.y = S.Y;
+      arm.rotation.z = lerp(S.Z_START, S.Z_END, progress);
+      arm.rotation.x = S.X;
+      torso.rotation.y = 0;
+      return;
+    }
+
     if (stroke === 'volley-forehand' || stroke === 'volley-backhand') {
       // グラウンドストロークと同じ横振り(rotation.y)の系統だが、テイクバックをほとんど
       // 取らない短いパンチ（VOLLEY_START/SWEEP は GROUND_START/SWEEP よりずっと小さい）。
@@ -265,6 +293,29 @@
     // ひねりの深さも球種で変える（大きく擦り上げるトップスピンがいちばん深い）。
     torso.rotation.y = (backhand ? -1 : 1) * SWING.TORSO_TWIST * form.TWIST
       * Math.sin(progress * Math.PI);
+  }
+
+  /**
+   * 利き手に合わせて左右を鏡映しする（HAND 参照）。x で鏡映しすると、y 軸まわりと
+   * z 軸まわりの回転だけ符号が反転し、x 軸まわりの傾きは変わらない。ポーズを作る側
+   * （poseArm）は「腕が +x 側」前提のままでよく、左右の違いはここ1箇所に閉じる。
+   */
+  function mirrorHanded(player) {
+    if (HAND > 0) return;
+    const arm = player.userData.arm;
+    arm.rotation.y *= -1;
+    arm.rotation.z *= -1;
+    player.userData.gait.torso.rotation.y *= -1;
+  }
+
+  /**
+   * スイング（と構え）のポーズを1人ぶん反映する。振り付けそのものは poseArm()、
+   * 利き手ぶんの左右反転は mirrorHanded() が受け持つ。
+   * 引数は poseArm() のドキュメントを参照。
+   */
+  scene3d.setSwingPose = function setSwingPose(player, state, tossing) {
+    poseArm(player, state, tossing);
+    mirrorHanded(player);
   };
 
   /**
@@ -273,7 +324,7 @@
    * sin カーブに乗せているので、頂点付近でふわりと粘り、着地は滑らかに0へ収束する。
    * 見た目だけの値で、当たり判定（PLAYER.REACH_Y）には一切影響しない。
    */
-  function smashLift(anim, stroke) {
+  function smashLift(anim, stroke, special) {
     if (stroke !== 'smash' || anim <= 0) return 0;
     const progress = clamp((PLAYER.SMASH_ANIM - anim) / PLAYER.SMASH_ANIM, 0, 1);
     const rise = Math.asin(clamp(SWING.SMASH_JUMP_START, 0, 1)); // 打点の瞬間の位相
@@ -281,7 +332,9 @@
     const phase = progress < peak
       ? lerp(rise, Math.PI / 2, progress / peak)               // 打点 → 頂点
       : lerp(Math.PI / 2, Math.PI, (progress - peak) / (1 - peak)); // 頂点 → 着地
-    return SWING.SMASH_JUMP_H * Math.sin(phase);
+    // ダンクスマッシュ（必殺技）だけは、同じ振り付けのままもっと高く跳ぶ。
+    const height = SWING.SMASH_JUMP_H * (special === 'dunkSmash' ? SPECIAL.DUNK.JUMP_MULT : 1);
+    return height * Math.sin(phase);
   }
 
   /**
@@ -290,17 +343,25 @@
    * - 体そのものを浮かせる（メッシュの y。ゲーム側の座標は動かさない＝表示だけ）
    * - はさみ跳び：ラケット側の脚を後ろへ蹴り上げ、逆脚を前へ振り出す
    * - 体幹：打点では反り、振り下ろしに合わせて前へ折る
+   * @param {object} state その選手の見た目に関わる状態（setSwingPose と同じもの）
    * @returns {number} 浮いた高さ(m)。影を小さくするのに使う（world.js 参照）
    */
-  scene3d.applySmashJump = function applySmashJump(player, anim, stroke) {
-    const lift = smashLift(anim, stroke);
+  scene3d.applySmashJump = function applySmashJump(player, state) {
+    const { anim, stroke, special } = state;
+    const lift = smashLift(anim, stroke, special);
     player.position.y = lift;
     if (lift <= 0) return 0;
 
     const gait = player.userData.gait;
-    const air = clamp(lift / SWING.SMASH_JUMP_H, 0, 1); // 浮いているほど強くポーズを効かせる
+    // 浮いているほど強くポーズを効かせる（ダンクで高さが伸びても効き方は同じになるよう、
+    // 分母にもジャンプの倍率を掛けて正規化する）。
+    const peak = SWING.SMASH_JUMP_H * (special === 'dunkSmash' ? SPECIAL.DUNK.JUMP_MULT : 1);
+    const air = clamp(lift / peak, 0, 1);
     const progress = clamp((PLAYER.SMASH_ANIM - anim) / PLAYER.SMASH_ANIM, 0, 1);
-    const [front, back] = gait.legs; // legs[1] がラケット側（モデルのローカル +x）
+    // はさみ跳びは「ラケット側の脚を後ろへ蹴り上げる」。legs[0] がローカル -x 側、
+    // legs[1] が +x 側なので、利き手（HAND）でどちらがラケット側かを選ぶ。
+    const back = gait.legs[HAND < 0 ? 0 : 1];
+    const front = gait.legs[HAND < 0 ? 1 : 0];
 
     back.hip.rotation.x = lerp(back.hip.rotation.x, SWING.SMASH_LEG_SPLIT, air);
     back.knee.rotation.x = lerp(back.knee.rotation.x, -SWING.SMASH_KNEE_TUCK, air);
@@ -308,6 +369,37 @@
     front.knee.rotation.x = lerp(front.knee.rotation.x, -SWING.SMASH_KNEE_TUCK * 0.25, air);
     gait.offArm.rotation.x = lerp(gait.offArm.rotation.x, -SWING.SMASH_LEG_SPLIT * 0.5, air);
     gait.torso.rotation.x = lerp(SWING.SMASH_TORSO_ARCH, SWING.SMASH_TORSO_X, progress * progress);
+    return lift;
+  };
+
+  /**
+   * 飛びつきボレー（必殺技）の倒れ込み。applySmashJump() と同じ考え方で、歩行ポーズの
+   * 後に上から重ねる（浮いている量ぶんだけ上書きする）。体ごと打つ側へ倒し、脚を後ろへ
+   * 流して「飛び込んだ」形にする。倒れる向きはフォア/バックで決める：フォアならラケット側
+   * （ローカルの HAND 側）、バックならその逆へ倒れ込むのが自然。
+   * @returns {number} 浮いた高さ(m)。スマッシュのジャンプと同じく影を小さくするのに使う
+   */
+  scene3d.applyDiveLean = function applyDiveLean(player, state) {
+    const { anim, stroke, special } = state;
+    if (special !== 'divingVolley' || anim <= 0) {
+      player.rotation.z = 0; // 前の1打の倒れ込みを残さない
+      return 0;
+    }
+    const D = SPECIAL.DIVE;
+    // 飛び出し（0）→ 一番伸びきったところ（0.5）→ 着地（1）の山
+    const arc = Math.sin(clamp((PLAYER.SWING_ANIM - anim) / PLAYER.SWING_ANIM, 0, 1) * Math.PI);
+    // 倒れ込む先（ローカルx）。rotation.z を正にすると体は -x 側へ傾くので符号を反転させる。
+    const toward = (String(stroke).indexOf('backhand') !== -1 ? -1 : 1) * HAND;
+    player.rotation.z = -toward * D.LEAN * arc;
+    const lift = D.LIFT * arc;
+    player.position.y = lift;
+
+    const gait = player.userData.gait;
+    gait.legs.forEach(({ hip, knee }) => {
+      hip.rotation.x = lerp(hip.rotation.x, -SWING.DIVE_LEG_TRAIL, arc);
+      knee.rotation.x = lerp(knee.rotation.x, -SWING.DIVE_KNEE_TUCK, arc);
+    });
+    gait.torso.rotation.x = lerp(gait.torso.rotation.x, SWING.DIVE_TORSO_X, arc);
     return lift;
   };
 

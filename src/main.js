@@ -5,6 +5,7 @@
   const {
     PHYSICS, applyCpuLevel, applyCpuStyle, applySurface, TOSS,
     setRating, resetRatings, randomizeRatings,
+    SPECIAL_MOVES, SPECIAL_PRESET,
   } = RallyOne.config;
   const { sfx, unlock } = RallyOne.audio;
 
@@ -22,6 +23,18 @@
   let doubles = false;
   /** スタート画面で選んだガイド付きモード。true ＝ 打つ方向のガイドを出す（既定は なし）。 */
   let guide = false;
+  /**
+   * スタート画面で選んだ必殺技（config.SPECIAL_MOVES の key の配列）。
+   * 既定は空＝必殺技なし＝これまでと完全に同じゲーム。複数選べる。
+   */
+  let specials = [];
+  /** Z キー／プリセットボタンで選べる組み合わせ。 */
+  const SPECIAL_PRESETS = {
+    none: [],
+    preset: SPECIAL_PRESET.slice(),
+    all: SPECIAL_MOVES.map((m) => m.key),
+  };
+  const sameSpecials = (a, b) => a.length === b.length && a.every((k) => b.indexOf(k) !== -1);
   /** トス（コイントス）に人間が勝ち、サーブ/レシーブの選択を待っている間だけ true。 */
   let awaitingToss = false;
   /** トスを始めた時点で選ばれていたダブルスの有無（トスの選択後にそのまま渡す）。 */
@@ -54,6 +67,7 @@
     applySurface(surface);
     hud.hideStartScreen();
     game.setGuide(guide);
+    game.setSpecials(specials);
     game.start(wantDoubles, initialServer);
   }
 
@@ -102,6 +116,26 @@
       game.setGuide(on);
     },
     onToggleGuide: () => menu.onSelectGuide(!guide),
+    // 必殺技は複数選択。押した技だけを入/切する（他の設定行のような排他選択ではない）。
+    // ガイドと同じく、選んだ時点でそのまま game へ渡す＝試合中に変えても壊れない。
+    onToggleSpecial: (key) => {
+      const at = specials.indexOf(key);
+      if (at === -1) specials = specials.concat([key]);
+      else specials = specials.filter((k) => k !== key);
+      hud.setSpecials(specials);
+      game.setSpecials(specials);
+    },
+    onSpecialPreset: (name) => {
+      specials = (SPECIAL_PRESETS[name] || []).slice();
+      hud.setSpecials(specials);
+      game.setSpecials(specials);
+    },
+    // Z キー：なし → おすすめ → すべて → なし。個別の入/切はマウスで行う。
+    onCycleSpecials: () => {
+      const next = specials.length === 0 ? 'preset'
+        : sameSpecials(specials, SPECIAL_PRESETS.preset) ? 'all' : 'none';
+      menu.onSpecialPreset(next);
+    },
     onPlay: () => beginToss(doubles),
     onSelectToss: (choice) => {
       awaitingToss = false;
@@ -117,6 +151,8 @@
     onRandom: () => randomizeRatings(),
   });
   hud.buildMenu(menu);
+  hud.buildSpecials({ onToggle: menu.onToggleSpecial, onPreset: menu.onSpecialPreset });
+  hud.setSpecials(specials);
   // 試合後のスタッツ画面の「次の試合へ」。キーボード（Space/Enter）側は input.js が
   // 同じ closeMatchStats() を呼ぶ＝マウスとキーで挙動がずれない。
   hud.buildMatchStats({ onClose: () => closeMatchStats() });
@@ -139,6 +175,7 @@
     onSelectSurface: menu.onSelectSurface,
     onSelectStyle: menu.onSelectStyle,
     onToggleGuide: () => menu.onToggleGuide(),
+    onCycleSpecials: () => menu.onCycleSpecials(),
     // リプレイのスキップは Space だけ（以前はどのキーでも飛んでしまい、ラリー用の
     // キーに触れただけで意図せずスキップされていた）。
     onSkipReplay: () => world.skipReplay(),
@@ -211,7 +248,12 @@
       world.sync(game, dt);
       if (pointJustEnded) world.startReplay();
       hud.setReplay(world.isReplaying());
-      hud.setCharge(game.chargeMeter(), game.isServeCharging());
+      // いま Space を押していて技が出る状態なら、溜めバーも金色にする（＝離した瞬間に
+      // 何が起きるかが、視線を動かさずにバーだけで分かる）。
+      const armed = game.specialArmed;
+      hud.setCharge(game.chargeMeter(), game.isServeCharging(), !!(armed && armed.move));
+      hud.setSpecialTip(armed);
+      hud.setSpecialUses(game.specials, game.specialUses);
       hud.setSmashTip(game.smashHint);
       hud.setSwingGuide(game.swingGuide, game.you.x);
       syncStamina();

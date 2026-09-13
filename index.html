@@ -40,6 +40,8 @@
     <div id="stats">A <span id="ace1">0</span>–<span id="ace2">0</span> · DF <span id="df1">0</span>–<span id="df2">0</span></div>
     <div id="wind"></div>
     <div id="serveSpeed"></div>
+    <!-- 必殺技の残り回数（●＝使える／○＝使用済み）。1つも装備していなければ hud が行ごと隠す。 -->
+    <div id="specialUses"></div>
     <div id="stamina">
       <div class="staminaRow"><div class="staminaLabel">YOU</div><div class="staminaBar"><div class="staminaFill" id="staminaFillYou"></div></div></div>
       <div class="staminaRow"><div class="staminaLabel">CPU</div><div class="staminaBar"><div class="staminaFill" id="staminaFillCpu"></div></div></div>
@@ -66,6 +68,8 @@
       </div>
     </div>
     <div id="smashTip"></div>
+    <!-- 溜めている間だけ出る「この1打で出る技」の予告。hud.setSpecialTip() が制御。 -->
+    <div id="specialTip"></div>
     <div id="charge"><div id="chargeFill"></div><div id="chargeMark"></div></div>
     <div id="keys">
       <span><b>←→</b> 左右 ／ 打つ方向</span>
@@ -127,6 +131,15 @@
         <span class="seg" data-level="aggressiveBaseliner">ベースライナー<kbd>0</kbd></span>
       </div>
     </div>
+
+    <!-- 必殺技。ボタンは hud.js が config.SPECIAL_MOVES から組み立てる（複数選択）。
+         キーボードからは Z でプリセット（なし→おすすめ→すべて）を切り替える。
+         試合中の操作はなく、条件を満たした1打で自動的に出る。 -->
+    <div class="menuRow" id="specialRow">
+      <div class="menuLabel">必殺技<kbd>Z</kbd></div>
+      <div class="segs specialSegs" id="specialSegs"></div>
+    </div>
+    <div class="menuNote" id="specialNote"></div>
 
     <div id="roster">
       <div class="rosterHead">

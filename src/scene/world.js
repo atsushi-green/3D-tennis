@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    CAMERA, FX, PLAYER, THEME, REPLAY, HALF_L,
+    CAMERA, FX, PLAYER, SPECIAL, THEME, REPLAY, HALF_L,
   } = RallyOne.config;
   const { lerp, clamp } = RallyOne.math;
   const scene3d = RallyOne.scene;
@@ -21,11 +21,13 @@
     const you = scene3d.createPlayer(THEME.YOU);
     const cpu = scene3d.createPlayer(THEME.CPU);
     cpu.rotation.y = Math.PI; // CPU は手前を向く
+    cpu.userData.facing = Math.PI; // 普段の向き（setSwingPose がツイーナー後に戻す基準）
     // ダブルスのパートナー。シングルスでは this.doubles===false の間 sync() で visible=false のまま。
     // 本人と同じ色だと見分けがつかないので、シャツ/短パンを入れ替えた配色(THEME.*_MATE)にする。
     const youMate = scene3d.createPlayer(THEME.YOU_MATE);
     const cpuMate = scene3d.createPlayer(THEME.CPU_MATE);
     cpuMate.rotation.y = Math.PI;
+    cpuMate.userData.facing = Math.PI;
     const ballMesh = scene3d.createBall();
     const shadows = {
       ball: scene3d.createShadow(0.34),
@@ -34,12 +36,21 @@
       youMate: scene3d.createShadow(0.26),
       cpuMate: scene3d.createShadow(0.26),
     };
+    // 縮地（必殺技）の残像。跳ぶ前に立っていた位置へ置いて薄れさせるだけなので、
+    // 選手と同じメッシュのマテリアルを半透明の金色1枚に差し替えて使い回す。
+    const dashGhost = scene3d.createPlayer(THEME.YOU);
+    const ghostMaterial = new THREE.MeshBasicMaterial({
+      color: THEME.DASH_GHOST, transparent: true, opacity: 0, depthWrite: false,
+    });
+    dashGhost.traverse((o) => { if (o.isMesh) o.material = ghostMaterial; });
+    dashGhost.visible = false;
+
     const impactFlash = scene3d.createImpactFlash();
     const trail = scene3d.createTrail();
     const smashHint = scene3d.createSmashHint();
     const swingGuide = scene3d.createSwingGuide();
     scene.add(
-      you, cpu, youMate, cpuMate, ballMesh,
+      you, cpu, youMate, cpuMate, ballMesh, dashGhost,
       shadows.ball, shadows.you, shadows.cpu, shadows.youMate, shadows.cpuMate,
       impactFlash, trail, smashHint, swingGuide,
     );
@@ -61,8 +72,10 @@
       mesh.position.set(state.x, 0, state.z);
       scene3d.setSwingPose(mesh, state, !!tossing);
       scene3d.setGaitPose(mesh, state.speed, maxSpeed, dt);
-      // スマッシュのジャンプは歩行の後（同じ関節を上書きするため）。浮いた高さは影に渡す。
-      const lift = scene3d.applySmashJump(mesh, state.anim, state.stroke);
+      // スマッシュのジャンプ・飛びつきボレーの倒れ込みは歩行の後（同じ関節を上書きする
+      // ため）。同時に起きることはないので、浮いた高さは足し合わせて影に渡す。
+      const lift = scene3d.applySmashJump(mesh, state)
+        + scene3d.applyDiveLean(mesh, state);
       scene3d.placeGroundShadow(shadow, state, lift);
     }
 
@@ -79,6 +92,16 @@
       if (state.doubles) {
         syncPlayer(youMate, shadows.youMate, state.youMate, PLAYER.CPU_CHASE, dt, false);
         syncPlayer(cpuMate, shadows.cpuMate, state.cpuMate, PLAYER.CPU_CHASE, dt, false);
+      }
+
+      // 縮地の残像（跳ぶ前の位置に一瞬だけ残る分身）。リプレイでも同じように出したいので、
+      // 生の state とリプレイのコマの両方が通る applyFrame() の中で面倒を見る。
+      const dash = state.you.dash;
+      dashGhost.visible = !!dash;
+      if (dash) {
+        dashGhost.position.set(dash.x, 0, dash.z);
+        ghostMaterial.opacity = SPECIAL.DASH.FX_OPACITY
+          * clamp(dash.t / SPECIAL.DASH.FX_T, 0, 1);
       }
 
       const ball = state.ball;
@@ -104,6 +127,9 @@
       return {
         x: p.x, z: p.z, anim: p.anim, stroke: p.stroke, prep: p.prep, spin: p.spin,
         chargeFrac: p.chargeFrac, swingCharge: p.swingCharge, speed: p.speed,
+        // 必殺技（フォーム・ジャンプの高さ・倒れ込みに効く）と、縮地の残像。
+        special: p.special || null,
+        dash: p.dash ? { x: p.dash.x, z: p.dash.z, t: p.dash.t } : null,
       };
     }
 

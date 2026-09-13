@@ -20,24 +20,36 @@
     return GRAVITY * (mult === undefined ? 1 : mult);
   }
 
-  /** ネットは中央がたわみ、ポストに向かって高くなる */
+  /**
+   * ネットの高さ。中央がたわみ、ポスト（±COURT.NET_HALF）に向かって高くなる。
+   * **ポストより外側にはネットが無い**ので 0 を返す＝そこはどんな低い球でも素通りできる
+   * （実際のテニスの「ポールを回すショット」。必殺技バギーホイップのストレートが使う）。
+   * 以前はここを NET_HALF で頭打ちにしていたため、コートのはるか外でもネットが続いている
+   * 扱いになっていた。当たり判定（hitsNet）も軌道を解く側（solveShot）も同じこの関数を
+   * 通るので、両者が食い違うことはない。
+   */
   function netHeightAt(x) {
-    const t = Math.min(Math.abs(x) / COURT.NET_HALF, 1);
+    if (Math.abs(x) > COURT.NET_HALF) return 0;
+    const t = Math.abs(x) / COURT.NET_HALF;
     return COURT.NET_C + (COURT.NET_P - COURT.NET_C) * t * t;
   }
 
   /**
    * 1ステップ進める。p* に進める前の位置を残す（ネット通過判定に使う）。
-   * `b.wind`（横方向の弱い加速度、未設定なら0）が設定されていれば vx にも足す。
-   * 打った側は狙いに織り込まない（＝解いた通りの初速で飛ばした後、風にさらされて
-   * 実際の着地点だけがずれる）ので、ここでの加算だけで完結し `solveShot()` 側は変更不要。
+   * 横方向の加速度は2種類あり、どちらも未設定なら0：
+   * - `b.wind` 風。打った側は狙いに織り込まない（＝解いた通りの初速で飛ばした後、風に
+   *   さらされて実際の着地点だけがずれる）ので、ここでの加算だけで完結する。
+   * - `b.curve` 打球そのものの曲がり（必殺技バギーホイップの横回転）。こちらは
+   *   「曲がった上で狙い通りに落ちる」必要があるので、solveShot() が初速を解く段階で
+   *   同じ値を織り込む（＝曲がるぶんを見越して内側へ打ち出す）。バウンドで失われる
+   *   （reflectBounce() が 0 に戻す）。
    */
   function integrate(b, dt) {
     b.px = b.x;
     b.py = b.y;
     b.pz = b.z;
     b.vy += spinGravity(b.spin) * dt;
-    b.vx += (b.wind || 0) * dt;
+    b.vx += ((b.wind || 0) + (b.curve || 0)) * dt;
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     b.z += b.vz * dt;
@@ -97,6 +109,9 @@
     b.vy = -b.vy * PHYSICS.RESTITUTION * restMult * SURFACE.RESTITUTION_MULT;
     b.vx *= PHYSICS.FRICTION * friMult * SURFACE.FRICTION_MULT;
     b.vz *= PHYSICS.FRICTION * friMult * SURFACE.FRICTION_MULT;
+    // 打球の横回転（curve）は地面との摩擦で消える。予測（predict*）も game.js の
+    // bounce() もこの関数を通るので、両者が同じタイミングで曲がりを失う。
+    b.curve = 0;
   }
 
   /**
@@ -110,7 +125,9 @@
       px: b.x, py: b.y, pz: b.z,
       vx: b.vx, vy: b.vy, vz: b.vz,
       spin: b.spin, // スピンで実効重力が変わるので、予測にも同じ重力を使わないと着地点がずれる
-      wind: b.wind, // 風で流されるぶんも予測に織り込まないと、CPUの追跡・着地マーカーが実際とずれる
+      // 風で流されるぶんも予測に織り込まないと、CPUの追跡・着地マーカーが実際とずれる
+      wind: b.wind,
+      curve: b.curve, // 打球の曲がり（バギーホイップ）。同じ理由で予測にも織り込む
     };
     const dt = 1 / 120;
     for (let t = 0; t < limit; t += dt) {
@@ -141,6 +158,7 @@
       vx: b.vx, vy: b.vy, vz: b.vz,
       spin: b.spin,
       wind: b.wind,
+      curve: b.curve, // 打球の曲がり（バギーホイップ）。予測にも織り込まないと着地点がずれる
     };
     const dt = 1 / 120;
     for (let t = 0; t < limit; t += dt) {
@@ -171,6 +189,7 @@
       vx: b.vx, vy: b.vy, vz: b.vz,
       spin: b.spin,
       wind: b.wind,
+      curve: b.curve, // 打球の曲がり（バギーホイップ）。予測にも織り込まないと着地点がずれる
     };
     const dt = 1 / 120;
     let bounced = false;
@@ -212,6 +231,7 @@
       vx: b.vx, vy: b.vy, vz: b.vz,
       spin: b.spin,
       wind: b.wind,
+      curve: b.curve, // 打球の曲がり（バギーホイップ）。予測にも織り込まないと着地点がずれる
     };
     const dt = 1 / 120;
     let bounces = b.bounces || 0;
@@ -270,6 +290,7 @@
       vx: b.vx, vy: b.vy, vz: b.vz,
       spin: b.spin,
       wind: b.wind,
+      curve: b.curve, // 打球の曲がり（バギーホイップ）。予測にも織り込まないと着地点がずれる
     };
     const dt = 1 / 120;
     let bounced = 0;
@@ -300,12 +321,16 @@
    * @param {'flat'|'top'|'slice'} [spin] 省略時（フラット）は従来と完全に同じ挙動になる。
    *   ここで使った実効重力(g)は、後で実際に飛ばすとき integrate() が `ball.spin` から
    *   同じ値を引けるよう、呼び出し側が返り値と一緒に `ball.spin = spin` も設定すること。
+   * @param {number} [curve] 飛翔中ずっと vx に加わる横方向の加速度(m/s²)。0 以外なら
+   *   「曲がったうえで target に落ちる」初速を返す＝曲がるぶん(½ct²)だけ内側へ打ち出す。
+   *   呼び出し側は返り値と一緒に `ball.curve = curve` も設定すること（integrate() 参照）。
    */
-  function solveShot(from, target, baseT, clearance, spin) {
+  function solveShot(from, target, baseT, clearance, spin, curve) {
     const margin = clearance === undefined ? 0.30 : clearance;
+    const c = curve || 0;
     const g = spinGravity(spin);
     const velocityFor = (t) => ({
-      vx: (target.x - from.x) / t,
+      vx: (target.x - from.x - 0.5 * c * t * t) / t,
       vy: (target.y - from.y - 0.5 * g * t * t) / t,
       vz: (target.z - from.z) / t,
     });
@@ -316,7 +341,9 @@
       const tNet = -from.z / v.vz;                  // ネット面に達する時刻
       if (!(tNet > 0 && tNet < t)) return v;        // ネットを通らない軌道
       const yNet = from.y + v.vy * tNet + 0.5 * g * tNet * tNet;
-      if (yNet > netHeightAt(from.x + v.vx * tNet) + margin) return v;
+      // ネットの高さは x で変わる（中央が低い）ので、曲がるぶんもここに織り込む
+      const xNet = from.x + v.vx * tNet + 0.5 * c * tNet * tNet;
+      if (yNet > netHeightAt(xNet) + margin) return v;
       t *= 1.12;
     }
     return velocityFor(t); // 収束しなくても一番山なりな解を返す

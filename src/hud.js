@@ -5,6 +5,7 @@
   const { pointLabel } = RallyOne.scoring;
   const {
     GUIDE, SERVE, WIND, STAMINA, SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, getRating,
+    SPECIAL, SPECIAL_MOVES,
   } = RallyOne.config;
   /** ガイドで「タイミングが効かない」と伝えるときの打ち方の呼び名。 */
   const STROKE_LABEL = {
@@ -33,6 +34,12 @@
     { label: 'ダブルフォルト', value: (t) => ({ text: `${t.doubleFaults}`, cmp: null }) },
     { label: 'ウィナー', value: (t) => ({ text: `${t.winners}`, cmp: t.winners }) },
     { label: 'ミス', value: (t) => ({ text: `${t.unforced}`, cmp: null }) },
+    {
+      label: '必殺技',
+      // 必殺技を使わない試合では行ごと出さない（CPU/AI は使わないので常に0）。
+      skipIfZero: true,
+      value: (t) => ({ text: `${t.specials}`, cmp: t.specials }),
+    },
     {
       label: '最速サーブ',
       value: (t) => (t.maxServeKmh
@@ -99,6 +106,10 @@
         chargeFill: $('chargeFill'),
         chargeMark: $('chargeMark'),
         smashTip: $('smashTip'),
+        specialTip: $('specialTip'),
+        specialUses: $('specialUses'),
+        specialSegs: $('specialSegs'),
+        specialNote: $('specialNote'),
         guide: $('guide'),
         guideText: $('guideText'),
         guideNeedle: $('guideNeedle'),
@@ -147,6 +158,114 @@
       this.el.tossOpts.forEach((el) => {
         el.addEventListener('click', () => handlers.onSelectToss(el.dataset.choice));
       });
+    }
+
+    /* -------------------------------------------------------- 必殺技 */
+
+    /**
+     * スタート画面の必殺技の選択ボタンを組み立てる（main.js から一度だけ呼ぶ）。
+     * 中身は config.SPECIAL_MOVES から作るので、技を足すときは config だけ触ればよい。
+     * 他の設定行と違い**複数選択**なので、押すたびにその技だけが入/切する
+     * （選んだ集合そのものは main.js が持ち、game.setSpecials() へ渡す）。
+     * 右端のプリセット（なし／おすすめ／すべて）は、キーボードの Z と同じ動作。
+     * @param {{onToggle:(key:string)=>void, onPreset:(name:'none'|'preset'|'all')=>void}} handlers
+     */
+    buildSpecials(handlers) {
+      const chips = SPECIAL_MOVES.map((move) => {
+        const el = document.createElement('span');
+        el.className = 'seg spec';
+        el.dataset.special = move.key;
+        el.title = move.hint;
+        const name = document.createElement('b');
+        name.textContent = move.label;
+        const when = document.createElement('em');
+        when.textContent = move.when;
+        el.append(name, when);
+        el.addEventListener('click', () => handlers.onToggle(move.key));
+        return el;
+      });
+      const preset = (name, label) => {
+        const el = document.createElement('span');
+        el.className = 'seg specPreset';
+        el.textContent = label;
+        el.addEventListener('click', () => handlers.onPreset(name));
+        return el;
+      };
+      this.el.specialSegs.replaceChildren(
+        ...chips,
+        preset('none', 'なし'),
+        preset('preset', 'おすすめ'),
+        preset('all', 'すべて'),
+      );
+      this.specialChips = chips;
+    }
+
+    /**
+     * 選ばれている必殺技の表示を更新する（値そのものは main.js が持つ）。
+     * @param {string[]} keys 選択中の技のキー
+     */
+    setSpecials(keys) {
+      const on = keys || [];
+      (this.specialChips || []).forEach((el) => {
+        el.classList.toggle('on', on.indexOf(el.dataset.special) !== -1);
+      });
+      this.el.specialNote.textContent = on.length
+        ? `選択中 ${on.length} 種 — 条件を満たした1打で自動的に出ます（専用の操作はなし。技ごとに1ゲーム ${SPECIAL.USES_PER_GAME} 回まで）。`
+        : '必殺技なし（これまでどおりのテニス）。技を選ぶと、条件を満たした1打で自動的に出るようになります。';
+    }
+
+    /**
+     * 「いま溜めキーを離したら何が出るか」（溜めバーの上）。必殺技は自動発動なので、
+     * これは操作の案内ではなく「この1打がどうなるか」の予告。
+     * @param {{move:string|null, label:string|null, spent:string|null,
+     *   usesLeft:number}|null} armed Game#specialArmed。null（打つ場面ではない）なら非表示。
+     *   spent は「回数さえ残っていれば出ていた技」の名前（使い切ったことを伝えるため）。
+     */
+    setSpecialTip(armed) {
+      const el = this.el.specialTip;
+      el.classList.toggle('on', !!armed);
+      if (!armed) return;
+      const ready = !!armed.move;
+      el.classList.toggle('ready', ready);
+      el.classList.toggle('spent', !ready && !!armed.spent);
+      // 回数が1回きりのときは「残りN」を出さない（○/● の表示と二重になるため）。
+      const left = SPECIAL.USES_PER_GAME > 1 ? `（残り ${armed.usesLeft}）` : '';
+      el.textContent = ready
+        ? `⚡ ${armed.label}${left}`
+        : armed.spent
+          ? `⚡ ${armed.spent} はこのゲームでは使用済み`
+          : '⚡ この場面で出せる技はありません';
+    }
+
+    /**
+     * 技ごとの残り回数（●＝使える／○＝このゲームは使用済み）。技どうしで融通はしないので、
+     * 「どれがまだ残っているか」が分かるよう装備している技を1つずつ並べる。
+     * 毎フレーム呼ばれるので、中身が変わったときだけ組み立て直す。
+     * @param {string[]} specials Game#specials（装備している技のキー）
+     * @param {{[key:string]: number}} uses Game#specialUses（技ごとの残り）
+     */
+    setSpecialUses(specials, uses) {
+      const el = this.el.specialUses;
+      const equipped = SPECIAL_MOVES.filter((m) => (specials || []).indexOf(m.key) !== -1);
+      const key = equipped.map((m) => `${m.key}:${(uses && uses[m.key]) || 0}`).join(',');
+      if (key === this.specialUsesKey) return;
+      this.specialUsesKey = key;
+      if (!equipped.length || SPECIAL.USES_PER_GAME <= 0) {
+        el.replaceChildren();
+        return;
+      }
+      const head = document.createElement('span');
+      head.className = 'spUseHead';
+      head.textContent = '⚡ 必殺技';
+      const chips = equipped.map((m) => {
+        const left = (uses && uses[m.key]) || 0;
+        const chip = document.createElement('span');
+        chip.className = `spUse${left > 0 ? ' on' : ''}`;
+        const count = SPECIAL.USES_PER_GAME > 1 ? `×${left}` : '';
+        chip.textContent = `${left > 0 ? '●' : '○'} ${m.short}${count}`;
+        return chip;
+      });
+      el.replaceChildren(head, ...chips);
     }
 
     /* ------------------------------------------------ 選手設定（能力値） */
@@ -506,6 +625,7 @@
       STAT_ROWS.forEach((spec) => {
         const you = spec.value(summary.you);
         const cpu = spec.value(summary.cpu);
+        if (spec.skipIfZero && !you.cmp && !cpu.cmp) return;
         rows.push(row('', spec.label, you, cpu));
       });
       this.el.msTable.replaceChildren(...rows);
@@ -537,11 +657,13 @@
      * 線を越えた分は赤く塗って、フォールトの確率が上がっていることを示す。
      * @param {number} fraction 溜め量 0〜1。0以下なら非表示。
      * @param {boolean} [serve] サーブの溜め中か（game.isServeCharging()）
+     * @param {boolean} [special] いま離すと必殺技が出る状態か（バーを金色にする）
      */
-    setCharge(fraction, serve = false) {
+    setCharge(fraction, serve = false, special = false) {
       const on = fraction > 0;
       this.el.charge.classList.toggle('on', on);
       this.el.charge.classList.toggle('serve', serve);
+      this.el.charge.classList.toggle('special', special);
       if (!on) return;
       this.el.chargeMark.style.left = `${SERVE.CHARGE_SWEET_MARK * 100}%`;
       this.el.chargeFill.style.width = `${Math.min(fraction, 1) * 100}%`;

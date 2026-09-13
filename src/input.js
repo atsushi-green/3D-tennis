@@ -35,6 +35,12 @@
   /** スタート画面でのみ有効。ガイド付きモード（打つ方向の表示）の入/切を切り替える */
   const GUIDE_KEYS = ['KeyG'];
   /**
+   * スタート画面でのみ有効。必殺技の選択をプリセットで切り替える
+   * （なし → おすすめ → すべて → なし）。個別の入/切はマウスで行う
+   * （8種それぞれにキーを割り当てると、他の設定キーと衝突せずに済む余りがないため）。
+   */
+  const SPECIAL_PRESET_KEYS = ['KeyZ'];
+  /**
    * トス（コイントス）に勝った人間だけが選ぶ。スタート画面の各種選択が終わった後の
    * 別画面（handlers.isAwaitingToss()）でだけ意味を持つので、Digit1/2 を使い回しても
    * 難易度選択（Digit1〜3）とは表示上・時間軸上で重ならない。
@@ -66,7 +72,7 @@
      * @param {{onStart:Function, onStartDoubles:Function, onChargeStart:Function,
      *   onChargeRelease:Function, onFormationNet:Function, onFormationBack:Function,
      *   onSelectDifficulty:Function, onSelectSurface:Function, onSelectStyle:Function,
-     *   onToggleGuide:Function,
+     *   onToggleGuide:Function, onCycleSpecials:Function,
      *   onSelectToss:Function, isAwaitingToss:Function,
      *   onSkipReplay:Function, isStarted:Function,
      *   isMatchStatsOpen:Function, onCloseMatchStats:Function}} handlers
@@ -86,6 +92,7 @@
           else if (SURFACE_KEYS[e.code]) handlers.onSelectSurface(SURFACE_KEYS[e.code]);
           else if (STYLE_KEYS[e.code]) handlers.onSelectStyle(STYLE_KEYS[e.code]);
           else if (GUIDE_KEYS.indexOf(e.code) !== -1) handlers.onToggleGuide();
+          else if (SPECIAL_PRESET_KEYS.indexOf(e.code) !== -1) handlers.onCycleSpecials();
           else handlers.onStart();
           return;
         }

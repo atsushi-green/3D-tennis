@@ -60,6 +60,21 @@ canvas{display:block}
 }
 #serveSpeed:empty{display:none}
 
+/* 技ごとの残り回数（●＝使える／○＝このゲームは使用済み）。技どうしで融通しないので
+   1つずつ並べる。1つも装備していないときは hud が中身を空にするので :empty で行ごと消える
+   （風・サーブ速度と同じ作り）。幅はスコアバーに合わせて2列で折り返す。 */
+#specialUses{
+  margin-top:6px;padding:4px 10px;max-width:214px;
+  background:rgba(9,20,34,.6);border-radius:2px;
+  border-left:3px solid #ffc83d;
+  display:flex;flex-wrap:wrap;gap:2px 8px;
+  font-size:11px;letter-spacing:.04em;
+}
+#specialUses:empty{display:none}
+.spUseHead{flex:1 0 100%;color:#ffc83d;letter-spacing:.12em}
+.spUse{flex:0 0 calc(50% - 4px);color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.spUse.on{color:#ffc83d}
+
 /* スタミナ（自分以外も含めた全員を常時表示。パートナー/CPU2はダブルスのときだけ）。
    ラリーで減り、ポイント間で少し回復する */
 #stamina{
@@ -161,9 +176,25 @@ canvas{display:block}
 #smashTip.on{opacity:1}
 #smashTip.ready{color:#ffe14a}
 #smashTip.late{color:#ef6b5a}
+
+/* Space を押している間だけ出る「いま離したら出る技」。スマッシュの案内と同じ体裁で、
+   色だけ必殺技の金色に振る（出せないときは灰色）。 */
+#specialTip{
+  font-size:12px;letter-spacing:.08em;white-space:nowrap;
+  background:rgba(9,20,34,.7);padding:5px 12px;border-radius:2px;
+  color:var(--dim);opacity:0;transition:opacity .12s
+}
+#specialTip.on{opacity:1}
+#specialTip.ready{color:#ffc83d;font-weight:700}
+#specialTip.spent{color:#ef6b5a}
 #chargeFill.full{background:#fff;box-shadow:0 0 10px 2px var(--ball)}
 /* 線を超えて溜めている間（＝フォールトの確率が上がっている間）は赤くする。 */
 #chargeFill.over{background:#ef6b5a;box-shadow:0 0 10px 2px rgba(239,107,90,.9)}
+/* 必殺技が乗る状態（Space を押していて、この場面で出せる技がある）。溜め具合に関わらず
+   バー全体を金色にするので、視線を下げずに「離せば出る」ことが分かる。
+   .full/.over より後に書いて、サーブ中でも金色が勝つようにする。 */
+#charge.special{border-color:#ffc83d;box-shadow:0 0 12px rgba(255,200,61,.45)}
+#charge.special #chargeFill{background:#ffc83d;box-shadow:0 0 10px 2px rgba(255,200,61,.85)}
 
 /* ガイド付きモードのタイミング目盛り（溜めている間だけ出る）。
    左＝早く振り出す（引っ張り）、右＝引きつける（流し）。針が「いま離したら」の位置で、
@@ -231,11 +262,31 @@ canvas{display:block}
 .seg:hover{opacity:.85;border-color:var(--ball)}
 .seg.on{opacity:1;color:var(--ball);border-color:var(--ball);font-weight:700;
   background:rgba(216,242,74,.10)}
-/* ボタンに添える対応キー。押せる場所そのものではないので、常に控えめに */
-.seg kbd{
+/* ボタン（と必殺技の行の見出し）に添える対応キー。押せる場所そのものではないので、常に控えめに */
+.seg kbd,.menuLabel kbd{
   display:inline-block;margin-left:6px;padding:0 4px;
   border:1px solid currentColor;border-radius:2px;
   font:inherit;font-size:9px;font-weight:400;opacity:.7;vertical-align:1px
+}
+
+/* 必殺技（複数選択）。他の設定行が排他選択なのに対し、ここは押した技だけが入/切する。
+   技名（b）の下に「どんな場面で出るか」（em）を小さく添えるので、1つぶんが2行になる。 */
+.specialSegs .seg.spec{
+  flex:0 1 auto;min-width:104px;display:flex;flex-direction:column;gap:2px;
+  padding:5px 8px;line-height:1.25
+}
+.specialSegs .seg.spec b{font-size:11px;font-weight:600}
+.specialSegs .seg.spec em{font-size:9px;font-style:normal;opacity:.65;letter-spacing:0}
+.specialSegs .seg.spec.on b{font-weight:700}
+/* プリセット（なし／おすすめ／すべて）。技そのものではないので、色を変えて区別する */
+.specialSegs .seg.specPreset{
+  flex:0 0 auto;min-width:0;font-size:10px;opacity:.45;border-style:dashed
+}
+.specialSegs .seg.specPreset:hover{opacity:.8}
+/* 選択中の技についての一言（選んだ数と使い方）。設定行の下に小さく敷く */
+.menuNote{
+  margin:-4px 0 10px 98px;text-align:left;
+  font-size:10px;line-height:1.6;color:var(--dim)
 }
 
 /* 開始ボタン。この画面で唯一の「決定」なので、選択ボタンより大きく明るくする */
@@ -337,5 +388,7 @@ canvas{display:block}
   /* 狭い画面ではラベルを上に折り返して、ボタンとつまみバーの幅を確保する */
   .menuRow{flex-wrap:wrap;gap:4px}
   .menuLabel{flex:1 0 100%}
+  .menuNote{margin-left:0}
+  .specialSegs .seg.spec{min-width:0;flex:1 1 45%}
   .rosterHint{display:none}
 }
