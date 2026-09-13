@@ -65,6 +65,23 @@
   const ACTORS = Object.keys(TEAM_OF);
 
   /**
+   * その選手にとっての「前」＝ネット越しに打ち込む向き（world の z 方向）。
+   * 手前側（you/youMate、z<0）は +z、奥側（cpu/cpuMate、z>0）は -z。
+   * 狙いの向き（hit() の aimDir）と、前進しているかの判定（actor.fwd）が同じ値を通る。
+   */
+  const NET_DIR = { you: 1, youMate: 1, cpu: -1, cpuMate: -1 };
+
+  /**
+   * バギーホイップで打球が曲がる向き（world の x 方向）。曲がる先＝落とす先でもある。
+   * 振り抜く方向は打ち方（フォアハンド）で決まっているので、ラケット側の逆＝
+   * コート中央を横切る側へ常に曲がる。手前の人間（RACKET_SIDE=-1）なら +x
+   * （画面では右から左）、向かい側の AI（+1）ならその鏡で -x。
+   */
+  function buggyCurveSign(who) {
+    return -RACKET_SIDE[who];
+  }
+
+  /**
    * 振り出しの早さ（スイングがボールを待った秒数）を -1〜+1 に直したもの。
    * +1＝早く振り出した＝引っ張り、0＝素直、-1＝引きつけて振った＝流し。
    */
@@ -331,6 +348,66 @@
   };
 
   /**
+   * 必殺技が乗っていなければ、この打点はどういう1打になるか。hit() の打ち方の判定
+   * （isSmash / isVolley）と、AI が技を選ぶときの材料が同じ式を通るように切り出した。
+   * @param {Game} g
+   * @param {string} who
+   * @param {object} ball 打点（通常は g.ball）
+   * @param {object} player 打つ本人
+   * @param {number} charge 人間の溜め量(0〜1)。AI は 0
+   * @returns {{smash:boolean, volley:boolean}}
+   */
+  function naturalStroke(g, who, ball, player, charge) {
+    const smash = who === 'you'
+      ? ball.y >= PLAYER.SMASH_MIN_Y && charge >= PLAYER.SMASH_MIN_CHARGE
+      : ball.y >= CPU.SMASH_MIN_Y && ball.vy <= CPU.SMASH_FALLING_VY
+        && Math.abs(player.z) <= CPU.SMASH_Z_MAX;
+    const volley = !smash && ball.bounces === 0 && (who === 'you'
+      ? player.z > -COURT.SERVICE
+      : Math.abs(player.z) <= PLAYER.VOLLEY_Z);
+    return { smash, volley };
+  }
+
+  /**
+   * CPU/AI 版の「今この場面でその技が出せるか」。人間の SPECIAL_MATCH と対になるが、
+   * 見るタイミングが違う：AI には溜め（これから打つ、という前置き）が無いので、
+   * **実際に当たる瞬間**の場面だけで決める（hit() から一度だけ呼ばれる）。
+   * 条件そのものは人間と同じ config の値（SPECIAL.DUNK.MIN_Y など）を使い、溜めや
+   * ←→ の入力を要求するところだけ AI 向けの代わり（settleT・runX）に置き換える。
+   * キックサーブだけはラリーではなくサーブなので、ここではなく serve() が拾う。
+   * @type {{[key:string]: (g: Game, c: object) => boolean}}
+   *   c ＝ {who, ball, player, bounces, contactY, behind, stroke, natural{smash,volley}}
+   */
+  const AI_SPECIAL_MATCH = {
+    // 前へ詰めながら、頭上の高いノーバウンドを叩く（人間とまったく同じ3条件）。
+    dunkSmash: (g, c) => c.bounces === 0
+      && c.contactY >= SPECIAL.DUNK.MIN_Y
+      && c.player.fwd >= SPECIAL.DUNK.MIN_FWD,
+    // 球に抜かれた（自分より後ろを通っている）ときの股抜きロブ。
+    tweener: (g, c) => c.behind > SPECIAL.TWEENER.BEHIND
+      && c.contactY >= SPECIAL.TWEENER.MIN_Y,
+    // 腰から頭の高さに浮いたノーバウンドを、待たずに強打する。
+    driveVolley: (g, c) => c.bounces === 0
+      && c.contactY >= SPECIAL.DRIVE.MIN_Y
+      && c.contactY < SPECIAL.DRIVE.MAX_Y,
+    // フォア側へ大きく振り回されて、追いつきざまに振り抜くグラウンドストローク。
+    // 人間の「V（トップスピン）で溜めた」に当たる条件は AI には無いので、残りの
+    // 3条件（フォアハンド・まだ止まりきっていない・ラケット側へ大きく走って寄った）で見る。
+    buggyWhip: (g, c) => {
+      if (c.natural.smash || c.natural.volley || c.stroke !== 'forehand') return false;
+      const { BUGGY } = SPECIAL;
+      const side = RACKET_SIDE[c.who]; // ラケット側を正にするための符号
+      return c.player.speed >= BUGGY.MIN_SPEED
+        && c.player.runX * side >= BUGGY.MIN_RUN_X
+        && c.player.x * side >= BUGGY.MIN_X;
+    },
+    // 足を止めて構えられた1打を、狙い澄ましてライン際へ。人間の「溜め5割以上」に
+    // 当たるのが settleT（目標地点に着いてから動かずに待てている秒数）。
+    hawkEye: (g, c) => !c.natural.smash && !c.natural.volley && c.bounces > 0
+      && c.player.settleT >= SPECIAL.AI.SETTLE_T,
+  };
+
+  /**
    * スタッツの入れ物（1チームぶん×2）。数え方はすべて「打った側／取った側」の視点で、
    * 表示（hud.js）はここの数字を並べるだけにする。
    * - points        取ったポイント数
@@ -338,7 +415,7 @@
    * - unforced      自分のミス（ネット／アウト／届かず／ダブルフォルト）で落としたポイント
    * - firstServes   打った1本目のサーブの数／firstServeIn はそのうちサービスボックスに入った数
    * - maxServeKmh   そのマッチでいちばん速かったサーブの初速
-   * - specials      決めた必殺技の回数（CPU/AI は使わないので常に0）
+   * - specials      決めた必殺技の回数（難易度 Hard では CPU/AI 側も増える。SPECIAL.AI 参照）
    */
   function teamStats() {
     const blank = () => ({
@@ -411,22 +488,22 @@
         // 書き換えられる形で更新されるので、ここで参照を1度持っておけば以後ずっと最新を指す。
         // 既定（全項目3）ならすべて 1.0＝設定を触らない限り従来と完全に同じ挙動になる。
         attr: ATTRS.you,
+        netDir: NET_DIR.you,
       };
       // chaseDist＝この球を追って走った距離、settleT＝目標地点に着いてから動かずに
       // 待っている秒数（どちらも moveTowards() が更新する。hit() の「余裕」判定に使う）。
-      this.cpu = {
-        x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, spin: 'flat', stamina: 1,
-        attr: ATTRS.cpu,
-      };
+      // 必殺技まわり（special / specialLabel / specialUses / runX / fwd）は人間と同じ
+      // 意味の値を AI も持つ：Hard では AI も技を使うので、打球の計算もフォーム
+      // （scene/player.js は player.special を見る）も人間とまったく同じ道を通る。
+      const aiActor = (x, z, who) => ({
+        x, z, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, spin: 'flat', stamina: 1,
+        runX: 0, fwd: 0, special: null, specialLabel: null, specialUses: {},
+        attr: ATTRS[who], netDir: NET_DIR[who],
+      });
+      this.cpu = aiActor(0, CPU.HOME_Z, 'cpu');
       // ダブルス（this.doubles === true）のときだけ動く AI パートナー。シングルスでは未使用のまま。
-      this.youMate = {
-        x: 0, z: DOUBLES.NET_Z_YOU, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, spin: 'flat', stamina: 1,
-        attr: ATTRS.youMate,
-      };
-      this.cpuMate = {
-        x: 0, z: DOUBLES.NET_Z_CPU, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, spin: 'flat', stamina: 1,
-        attr: ATTRS.cpuMate,
-      };
+      this.youMate = aiActor(0, DOUBLES.NET_Z_YOU, 'youMate');
+      this.cpuMate = aiActor(0, DOUBLES.NET_Z_CPU, 'cpuMate');
 
       this.phase = 'idle';
       /**
@@ -727,20 +804,26 @@
      * ふつうの曲がるストレート（BUGGY.CURVE）として打つ。
      * @param {{x:number, z:number}} target 落とす場所
      * @param {number} flight 飛翔時間(秒)
+     * @param {string} who 打つ選手（手前/奥で曲がる向きもネットを通る向きも反転する）
      * @returns {number} ball.curve に入れる横加速度
      */
-    aroundPostCurve(target, flight) {
+    aroundPostCurve(target, flight, who = 'you') {
       const { BUGGY } = SPECIAL;
+      const sign = buggyCurveSign(who); // 曲がる向き（コート中央へ向かう側）
+      const plain = sign * BUGGY.CURVE; // 回りきれないときのふつうの曲がるストレート
       const from = this.ball; // まだ打点のまま（solveShot が書き換えるのは速度だけ）
       const vz = (target.z - from.z) / flight;
-      if (!(vz > 0)) return BUGGY.CURVE;
+      if (!(vz * NET_DIR[who] > 0)) return plain; // 相手コートへ向かっていない
       const tNet = -from.z / vz; // ネット面(z=0)を通過する時刻
-      if (!(tNet > 0 && tNet < flight)) return BUGGY.CURVE;
-      const clearX = RACKET_SIDE.you * (COURT.NET_HALF + BUGGY.POST_CLEAR);
+      if (!(tNet > 0 && tNet < flight)) return plain;
+      const clearX = RACKET_SIDE[who] * (COURT.NET_HALF + BUGGY.POST_CLEAR);
       const chordX = from.x + (target.x - from.x) * (tNet / flight);
       const need = (2 * (clearX - chordX)) / (tNet * (tNet - flight));
-      if (!(need > BUGGY.CURVE)) return BUGGY.CURVE; // 既にポストの外にいる等
-      return need > BUGGY.MAX_CURVE ? BUGGY.CURVE : need;
+      // 大きさで比べる（向きは sign 側が持っている）。既にポストの外にいる等で
+      // ふつうの曲がり以下しか要らない／内側すぎて回りきれない、のどちらも plain。
+      const mag = need * sign;
+      if (!(mag > BUGGY.CURVE)) return plain;
+      return mag > BUGGY.MAX_CURVE ? plain : need;
     }
 
     /**
@@ -752,9 +835,80 @@
       return this.you.chargeStroke || classifyStroke('you', this.ball, this.you);
     }
 
-    /** その技がこのゲームであと何回使えるか。 */
-    usesLeft(move) {
-      return this.specialUses[move] || 0;
+    /**
+     * その技がこのゲームであと何回使えるか。回数は選手ごとに独立していて、
+     * 人間は this.specialUses、AI は actor.specialUses に持つ。
+     * @param {string} move
+     * @param {string} [who] 省略時は人間（'you'）
+     */
+    usesLeft(move, who = 'you') {
+      const from = who === 'you' ? this.specialUses : this.actor(who).specialUses;
+      return from[move] || 0;
+    }
+
+    /**
+     * AI_SPECIAL_MATCH に渡す「当たる瞬間の場面」。hit() の途中で作るが、テストや
+     * 見積もりからも同じものを作れるように切り出してある（引数を省けば今の状態から作る）。
+     * @param {string} who
+     * @param {string} [stroke] フォア／バック（省略時は今のボールとの位置関係で見る）
+     * @param {{smash:boolean, volley:boolean}} [natural] 技が乗らなければどうなる1打か
+     */
+    aiSpecialContext(who, stroke, natural) {
+      const ball = this.ball;
+      const player = this.actor(who);
+      return {
+        who,
+        ball,
+        player,
+        bounces: ball.bounces,
+        contactY: ball.y,
+        // 打点が自分より後ろ（自陣側）にどれだけ回り込んでいるか＝抜かれた量。
+        behind: (player.z - ball.z) * NET_DIR[who],
+        stroke: stroke || classifyStroke(who, ball, player),
+        natural: natural || naturalStroke(this, who, ball, player, 0),
+      };
+    }
+
+    /**
+     * Hard の AI がこの1打に乗せる必殺技（無ければ null）。人間の pickSpecial() と
+     * 同じ「並び順＝優先度、上から最初に条件の合った1つ」の拾い方をする。
+     * 回数が残っていない技は飛ばして次の候補へ落ちる。
+     * 条件がそろっても SPECIAL.AI.CHANCE で外すので、同じ場面で必ず出るわけではない
+     * （回数は実際に出たときだけ減るので、外れたぶんは後の場面に取っておかれる）。
+     * @param {string} who cpu / cpuMate / youMate
+     * @param {object} ctx AI_SPECIAL_MATCH に渡す「当たる瞬間の場面」
+     * @returns {string|null}
+     */
+    pickAiSpecial(who, ctx) {
+      if (!this.aiSpecialsOn()) return null;
+      const found = SPECIAL.AI.MOVES.find((move) => AI_SPECIAL_MATCH[move]
+        && this.usesLeft(move, who) > 0
+        && AI_SPECIAL_MATCH[move](this, ctx));
+      if (!found) return null;
+      return Math.random() < SPECIAL.AI.CHANCE ? found : null;
+    }
+
+    /**
+     * Hard の AI がこのサーブに乗せる必殺技（無ければ null）。ラリー中の技と違って
+     * 場面の条件は「自分のサーブであること」だけなので、ここは確率だけで決める。
+     * @param {string} who
+     * @returns {string|null}
+     */
+    pickAiServeSpecial(who) {
+      if (!this.aiSpecialsOn()) return null;
+      if (SPECIAL.AI.MOVES.indexOf('kickServe') === -1) return null;
+      if (this.usesLeft('kickServe', who) <= 0) return null;
+      return Math.random() < SPECIAL.AI.CHANCE ? 'kickServe' : null;
+    }
+
+    /**
+     * AI が必殺技を使える状態か。難易度 Hard（CPU.SPECIALS）が前提で、既定ではさらに
+     * 「人間が技を1つ以上選んでいること」も要る（スタート画面で何も選ばなければ
+     * 従来とまったく同じゲーム、という約束を壊さないため。SPECIAL.AI 参照）。
+     */
+    aiSpecialsOn() {
+      if (!CPU.SPECIALS) return false;
+      return !SPECIAL.AI.REQUIRE_PLAYER_SPECIALS || this.specials.length > 0;
     }
 
     /**
@@ -826,12 +980,14 @@
      * @param {string} move
      * @param {string} [label] 呼び名の上書き（同じ技でもコースで呼び方が変わる場合に使う）
      */
-    spendSpecial(move, label) {
-      this.specialUses[move] = this.usesLeft(move) - 1;
-      this.stats.you.specials++;
-      this.you.specialLabel = label || SPECIAL_LABEL[move];
+    spendSpecial(move, label, who = 'you') {
+      const actor = this.actor(who);
+      if (who === 'you') this.specialUses[move] = this.usesLeft(move) - 1;
+      else actor.specialUses[move] = this.usesLeft(move, who) - 1;
+      this.stats[TEAM_OF[who]].specials++;
+      actor.specialLabel = label || SPECIAL_LABEL[move];
       this.hooks.sound('special');
-      this.hooks.call(`${this.you.specialLabel}！`, '必殺技');
+      this.hooks.call(`${actor.specialLabel}！`, '必殺技');
       // ポイントが決まった後のコール（ポイント／ウィナー！）を消してしまわないよう、
       // まだラリーが続いているときだけ引っ込める。
       this.after(SPECIAL.CALL_T, () => {
@@ -839,9 +995,17 @@
       });
     }
 
-    /** ゲームが替わった（またはタイブレークが一巡した）ときに、全技の使用回数を戻す。 */
+    /**
+     * ゲームが替わった（またはタイブレークが一巡した）ときに、全技の使用回数を戻す。
+     * 人間だけでなく AI（Hard で技を使う）の持ち分も同じタイミングで回復させる。
+     */
     refreshSpecials() {
       SPECIAL_MOVES.forEach((m) => { this.specialUses[m.key] = SPECIAL.USES_PER_GAME; });
+      ACTORS.forEach((who) => {
+        if (who === 'you') return;
+        const uses = this.actor(who).specialUses;
+        SPECIAL.AI.MOVES.forEach((move) => { uses[move] = SPECIAL.USES_PER_GAME; });
+      });
     }
 
     /**
@@ -1098,6 +1262,8 @@
       this.you.serveMiss = false; // 前のサーブの「溜めすぎ」の抽選結果も持ち越さない
       this.you.special = null;    // 前の1打に乗っていた必殺技も持ち越さない
       this.you.dash = null;
+      // AI（Hard）ぶんも同じく持ち越さない
+      ACTORS.forEach((w) => { if (w !== 'you') this.actor(w).special = null; });
       this.specialArmed = null;
       ball.kick = false;
 
@@ -1235,7 +1401,10 @@
       // 必殺技「キックサーブ」。ネットのはるか上を通してボックスの深いところへ落とし、
       // 着地後に大きく跳ね上げる（bounce()）。溜めすぎのフォールト抽選も、強打のネット
       // 掛かりも起きない＝確実に入る代わりに、球速そのものは速くない。
-      const kick = who === 'you' && this.you.special === 'kickServe';
+      // 人間は溜めを離した瞬間に決まっている（you.special）。AI（Hard のみ）はサーブに
+      // 「これから打つ」瞬間が無く、ここが唯一の判断どころなのでこの場で選ぶ。
+      if (who !== 'you') this.actor(who).special = this.pickAiServeSpecial(who);
+      const kick = this.actor(who).special === 'kickServe';
       const side = this.match.serveSide;
       // CPU/AI のセカンドサーブ。1本目より遅く、コースも深さもラインから余裕を取り、回転で
       // 確実に入れにいく（SERVE.SECOND_*）。人間は溜め量とコース入力で自分で加減するので、
@@ -1309,7 +1478,7 @@
       ball.spin = spin;
       ball.curve = 0;   // サーブは曲がらない（バギーホイップ専用の効果）
       ball.kick = kick; // 1バウンド目だけ大きく跳ね上げる目印（bounce() が読んで消す）
-      if (kick) this.spendSpecial('kickServe'); // サーブは必ず「起きる」ので打った時点で消費
+      if (kick) this.spendSpecial('kickServe', undefined, who); // サーブは必ず「起きる」ので打った時点で消費
       // 打った瞬間の初速をそのままスコアボード脇に出す（次のポイントが始まるまで残す）
       const serveKmh = mpsToKmh(Math.hypot(ball.vx, ball.vy, ball.vz));
       this.hooks.serveSpeed(serveKmh);
@@ -1403,9 +1572,11 @@
       this.serveInFlight = false; // 一度でも打ち返されたら「ノーバウンド禁止」の制約は解除
       this.rallyShots++; // 観客の歓声・実況の盛り上がりに使う（ラリーが長いほど盛り上がる）
 
-      // この1打に乗っている必殺技（chargeRelease() が入れる）。人間だけが持つ。
-      // 溜めを離したあとに場面が変わっていたら（前へ詰めてボレーになった／バウンドを
-      // 待った）ここで下ろし、普通の1打として打つ（SPECIAL_STILL_VALID 参照）。
+      // この1打に乗っている必殺技。人間は chargeRelease() が溜めを離した瞬間に決めて
+      // あるので、場面が変わっていないか（前へ詰めてボレーになった／バウンドを待った）
+      // だけ確かめ、外れていたら下ろして普通の1打として打つ（SPECIAL_STILL_VALID）。
+      // AI（Hard のみ）は溜めが無く「これから打つ」瞬間が存在しないので、下の
+      // 打ち方の判定を済ませてからこの場で決める（後追い判定は要らない）。
       let special = who === 'you' ? this.you.special : null;
       const stillValid = special && SPECIAL_STILL_VALID[special];
       if (stillValid && !stillValid(this, ball)) {
@@ -1439,22 +1610,22 @@
       // スマッシュではなく、ただ高い打点の返球）。
       // 必殺技を出した1打は、どの打ち方になるかも技が決める（＝場面で選ばれた技どおりの
       // モーション・狙いになる。溜め量や打点の高さでの再判定は挟まない）。
-      const isSmash = special
-        ? special === 'dunkSmash'
-        : who === 'you'
-          ? ball.y >= PLAYER.SMASH_MIN_Y && charge >= PLAYER.SMASH_MIN_CHARGE
-          : ball.y >= CPU.SMASH_MIN_Y && ball.vy <= CPU.SMASH_FALLING_VY
-            && Math.abs(player.z) <= CPU.SMASH_Z_MAX;
+      // 技が乗っていなければどうなる1打か（＝AI が技を選ぶときの材料でもある）。
+      const natural = naturalStroke(this, who, ball, player, charge);
+
+      // AI の必殺技はここで決まる（人間の specialAim() に当たる分岐点）。
+      if (who !== 'you') {
+        special = this.pickAiSpecial(who, this.aiSpecialContext(who, baseStroke, natural));
+        player.special = special;
+      }
+
+      const isSmash = special ? special === 'dunkSmash' : natural.smash;
       // サービスラインより前（ネット寄り）で、ノーバウンドの球を返すときはボレー。
       // フォア/バックの区別はテイクバックのモーションにだけ使い、実際の威力・角度は
       // 溜めではなくボールとの左右距離で決まる（playerShot() 側で計算する）。
       // CPU/AI がノーバウンドで返せるのは元々ネット際（PLAYER.VOLLEY_Z 以内。
       // checkSwings() のゲート）だけなので、その1本がそのままボレーになる。
-      const isVolley = special
-        ? special === 'divingVolley'
-        : !isSmash && ball.bounces === 0 && (who === 'you'
-          ? player.z > -COURT.SERVICE
-          : Math.abs(player.z) <= PLAYER.VOLLEY_Z);
+      const isVolley = special ? special === 'divingVolley' : natural.volley;
       // ツイーナー（股抜き）は他のどれでもない専用のモーション。
       const stroke = special === 'tweener' ? 'tweener'
         : isSmash ? 'smash' : isVolley ? `volley-${baseStroke}` : baseStroke;
@@ -1490,23 +1661,27 @@
       // 以前はどの打ち方でも一律 cpuShot()（中速のグラウンドストローク）だったため、
       // ネット際で捕まえた球も頭上に上がってきた球も同じ速さ・深さで返っていた。
       const aimAt = TEAM_OF[who] === 'cpu' ? this.you : this.cpu; // 逆をつく相手
-      const aimDir = TEAM_OF[who] === 'cpu' ? -1 : 1;             // 打ち込む方向
+      const aimDir = NET_DIR[who];                                // 打ち込む方向
       // 打ち方に対応する能力（フォア／バック／ボレー／スマッシュ）と安定感を、倍率だけの
       // 小さなオブジェクトに畳んで渡す（ai.js は「誰が打つか」を知らないままでいられる）。
-      // 必殺技は狙いが技そのもので決まっているので、打点タイミング（引っ張り／流し）は
-      // 効かない＝常に素直なタイミングとして扱う。
+      // 必殺技が乗った1打は、人間も AI も同じ specialShot() を通る（技の効果・狙い・
+      // 球速は同じもの）。狙いが技そのもので決まっているので打点タイミング（引っ張り／
+      // 流し）は効かず、常に素直なタイミングとして扱う。AI は ←→ を持たないので
+      // aim=0＝常にクロス側、溜めの代わりに SPECIAL.AI.CHARGE を渡す。
       const shot = who === 'you'
         ? this.playerShot(stroke, special ? TIMING_AIM.NEUTRAL_WAIT_T : this.swingWaited(), false, special)
-        : isSmash
-          ? cpuSmashShot(aimAt, aimDir, smashStretch, shotSkill(player.attr, 'smash'))
-          : isVolley
-            ? cpuVolleyShot(aimAt, aimDir, stretch, ball.y, shotSkill(player.attr, 'volley'))
-            : cpuShot(aimAt, aimDir, stretch, lobScale, arcScale, shotSkill(player.attr, baseStroke));
+        : special
+          ? this.specialShot(special, baseStroke, 0, SPECIAL.AI.CHARGE, rand, who)
+          : isSmash
+            ? cpuSmashShot(aimAt, aimDir, smashStretch, shotSkill(player.attr, 'smash'))
+            : isVolley
+              ? cpuVolleyShot(aimAt, aimDir, stretch, ball.y, shotSkill(player.attr, 'volley'))
+              : cpuShot(aimAt, aimDir, stretch, lobScale, arcScale, shotSkill(player.attr, baseStroke));
 
       // 必殺技はここで初めて回数を使う（空振りしただけでは減らない）。縮地はこの1打では
       // なく「跳んだ瞬間」に済ませてあるので、ここでは数えない。呼び名は技が決めた
       // shot.label があればそれ（バギーホイップのポール回しなど）。
-      if (special && special !== 'shukuchi') this.spendSpecial(special, shot.label);
+      if (special && special !== 'shukuchi') this.spendSpecial(special, shot.label, who);
 
       // スピン選択は通常のグラウンドストローク限定（スマッシュ・ボレーはフラット固定）。
       // 人間は C＝スライス／V＝トップスピン。chargeStart() の瞬間に固定した値を使う（当たる
@@ -1819,18 +1994,23 @@
      * @param {(a:number,b:number)=>number} spread ばらつき（プレビューでは中央値に固定される rand）
      * @returns {object|null} null＝この技は狙いを変えない（通常の計算に落ちる）
      */
-    specialShot(move, stroke, aim, charge, spread) {
-      const attr = this.you.attr;
+    specialShot(move, stroke, aim, charge, spread, who = 'you') {
+      const actor = this.actor(who);
+      const attr = actor.attr;
       const ground = attr[stroke === 'backhand' ? 'backhand' : 'forehand'];
-      // 左右の向き。←→ の入力があればその側、無ければ通常のショットと同じくクロス側。
-      const dir = aim !== 0 ? Math.sign(aim) : -signOr(this.you.x, 1);
+      // 打ち込む向き（手前の人間は +z、向かい側の AI は -z）。技ごとの狙いの深さは
+      // config に「相手コート側を正」で書いてあるので、最後にこれを掛けて鏡にする。
+      const zDir = NET_DIR[who];
+      // 左右の向き。←→ の入力があればその側、無ければ通常のショットと同じくクロス側
+      // （AI は ←→ を持たないので常にクロス＝aim は 0 で呼ばれる）。
+      const dir = aim !== 0 ? Math.sign(aim) : -signOr(actor.x, 1);
 
       if (move === 'dunkSmash') {
         const { DUNK } = SPECIAL;
         const target = {
-          x: aim !== 0 ? aim * SHOT.AIM_X : -signOr(this.you.x, 1) * SHOT.DEFAULT_X,
+          x: aim !== 0 ? aim * SHOT.AIM_X : -signOr(actor.x, 1) * SHOT.DEFAULT_X,
           y: BALL_R,
-          z: DUNK.Z,
+          z: zDir * DUNK.Z,
         };
         // 打点が遠いほど飛翔時間を伸ばして初速を頭打ちにする（DUNK.MAX_SPEED 参照）。
         // ネット際で叩くぶんには SHOT.SMASH_T×T_MULT のまま＝いちばん速い。
@@ -1847,7 +2027,7 @@
       if (move === 'divingVolley') {
         const { DIVE } = SPECIAL;
         return {
-          target: { x: dir * DIVE.X, y: BALL_R, z: DIVE.Z },
+          target: { x: dir * DIVE.X, y: BALL_R, z: zDir * DIVE.Z },
           flight: DIVE.T * attr.volley,
           spin: 'flat',
           risk: 0,
@@ -1857,7 +2037,7 @@
       if (move === 'driveVolley') {
         const { DRIVE } = SPECIAL;
         return {
-          target: { x: dir * DRIVE.X, y: BALL_R, z: DRIVE.Z },
+          target: { x: dir * DRIVE.X, y: BALL_R, z: zDir * DRIVE.Z },
           flight: DRIVE.T * attr.volley,
           clearance: DRIVE.CLEARANCE,
           spin: 'top',
@@ -1868,7 +2048,7 @@
       if (move === 'tweener') {
         const { TWEENER } = SPECIAL;
         return {
-          target: { x: dir * TWEENER.X, y: BALL_R, z: TWEENER.Z },
+          target: { x: dir * TWEENER.X, y: BALL_R, z: zDir * TWEENER.Z },
           flight: TWEENER.T,
           clearance: TWEENER.CLEARANCE,
           spin: 'top',
@@ -1884,26 +2064,27 @@
         // コースは ←→ で2択：自分のいる側（＝ラケット側）を指せばストレート、
         // 無入力か逆側ならクロス。同じ曲がりでも、ストレートは「外へ膨らんでから戻る」
         // ＝ネットポストの外を回る軌道になる。
-        const straight = aim !== 0 && Math.sign(aim) === RACKET_SIDE.you;
+        const sign = buggyCurveSign(who);
+        const straight = aim !== 0 && Math.sign(aim) === RACKET_SIDE[who];
         if (!straight) {
           return {
-            target: { x: BUGGY.X, y: BALL_R, z: spread(BUGGY.Z_MIN, BUGGY.Z_MAX) },
+            target: { x: sign * BUGGY.X, y: BALL_R, z: zDir * spread(BUGGY.Z_MIN, BUGGY.Z_MAX) },
             flight: BUGGY.T * ground,
             clearance: BUGGY.CLEARANCE,
             // 空中で曲がる（solveShot が曲がるぶんを見越して内側へ打ち出すので、落ちる場所は
             // target のまま＝ほぼ真っ直ぐ飛び出してサイドライン際へ切れ込む）。
-            curve: BUGGY.CURVE,
+            curve: sign * BUGGY.CURVE,
             spin: 'top',
             risk: 0,
           };
         }
         const target = {
-          x: RACKET_SIDE.you * BUGGY.LINE_X,
+          x: RACKET_SIDE[who] * BUGGY.LINE_X,
           y: BALL_R,
-          z: spread(BUGGY.LINE_Z_MIN, BUGGY.LINE_Z_MAX),
+          z: zDir * spread(BUGGY.LINE_Z_MIN, BUGGY.LINE_Z_MAX),
         };
         const flight = BUGGY.LINE_T * ground;
-        const curve = this.aroundPostCurve(target, flight);
+        const curve = this.aroundPostCurve(target, flight, who);
         return {
           target,
           flight,
@@ -1912,7 +2093,7 @@
           spin: 'top',
           risk: 0,
           // ポールを回れたときだけ呼び名を変える（何が起きたのかが分かるように）
-          label: curve > BUGGY.CURVE ? `${SPECIAL_LABEL.buggyWhip}（ポール回し）` : undefined,
+          label: curve * sign > BUGGY.CURVE ? `${SPECIAL_LABEL.buggyWhip}（ポール回し）` : undefined,
         };
       }
 
@@ -1922,12 +2103,13 @@
           target: {
             x: dir * (HALF_W - HAWK.INSET),
             y: BALL_R,
-            z: lerp(HAWK.Z_MIN, HAWK.Z_MAX, charge),
+            z: zDir * lerp(HAWK.Z_MIN, HAWK.Z_MAX, charge),
           },
           flight: lerp(SHOT.TAP_T, SHOT.CHARGE_T, charge) * ground * HAWK.T_MULT,
           // 球種は押したキー（B/V/C）のまま。溜めずに離したスライスでもドロップには
           // ならない（ドロップの分岐より手前で返しているため）＝ライン際を突く技になる。
-          spin: this.you.chargeSpin,
+          // AI には押したキーが無いので、通常の返球と同じ aiSpin() で混ぜる。
+          spin: who === 'you' ? this.you.chargeSpin : aiSpin(),
           risk: 0,
         };
       }
@@ -2116,6 +2298,14 @@
     tickSpecial(dt) {
       const you = this.you;
       if (you.special && you.swing <= 0 && you.anim <= 0 && !you.charging) you.special = null;
+      // AI（Hard）も同じ扱い：振っている間は技が残るのでフォームに使え、モーションが
+      // 尽きたところで消える。AI には溜め（charging）もスイングの有効時間（swing）も
+      // 無いので、見るのはモーションの残り（anim）だけ。
+      ACTORS.forEach((w) => {
+        if (w === 'you') return;
+        const actor = this.actor(w);
+        if (actor.special && actor.anim <= 0) actor.special = null;
+      });
       if (you.dash) {
         you.dash.t -= dt;
         if (you.dash.t <= 0) you.dash = null;
@@ -2295,7 +2485,8 @@
         // （実際に動いていないのに走って見えるのを防ぐ）。
         const moved = Math.hypot(this.you.x - youBefore.x, this.you.z - youBefore.z);
         this.you.speed = moved / dt;
-        this.you.fwd = (this.you.z - youBefore.z) / dt; // ＋＝ネット方向へ前進している
+        // ＋＝ネット方向へ前進している（netDir で4人とも同じ意味に揃える）
+        this.you.fwd = this.you.netDir * (this.you.z - youBefore.z) / dt;
         // 左右の移動は符号つきで積む（行って戻れば打ち消される＝「振り回された」量になる）
         this.you.runX += this.you.x - youBefore.x;
         this.drainStamina(this.you, moved);
@@ -2459,10 +2650,11 @@
      * 実際に stretch を読む hit() の時点では常に「この球を追った距離」だけが入っている。
      */
     resetChase() {
-      this.you.runX = 0;
-      this.cpu.chaseDist = 0;
-      this.youMate.chaseDist = 0;
-      this.cpuMate.chaseDist = 0;
+      ACTORS.forEach((who) => {
+        const actor = this.actor(who);
+        actor.runX = 0;
+        if (who !== 'you') actor.chaseDist = 0;
+      });
     }
 
     /**
@@ -2487,6 +2679,10 @@
       const moved = Math.hypot(actor.x - before.x, actor.z - before.z);
       actor.speed = moved / dt;
       actor.chaseDist += moved;
+      // 人間の you と同じ意味の2つ。Hard の AI が必殺技を出せるかの判定に使う
+      // （fwd＝ネット方向へ前進している速さ、runX＝相手が打ってから左右へ動いた量）。
+      actor.fwd = actor.netDir * (actor.z - before.z) / dt;
+      actor.runX += actor.x - before.x;
       // 目標地点に着いて動かずにいる間だけ積む「待てている時間」。走り出したら0に戻る。
       // 走行距離(chaseDist)だけでは「遠くまで走ったが、先回りして落下点で待っていた」
       // 状況が「苦しい」と誤判定されるので、その打ち消しに使う（hit() のスマッシュ）。

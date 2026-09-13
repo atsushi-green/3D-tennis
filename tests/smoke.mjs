@@ -5506,6 +5506,223 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     ok(g.lastShotBy.you === '鷹の目', `the winning shot is named after the move, got ${g.lastShotBy.you}`);
   }
 
+  // --- Hard の CPU/AI も必殺技を使う ---
+  // (要望: CPUも、hard以上の難易度の時は必殺技を使うようにしてほしい)
+  {
+    const { applyCpuLevel, CPU, SPECIAL: SP, HALF_W: W, HALF_L: L } = R.config;
+    /** 難易度 hard の状態でひとつ確かめて、必ず normal へ戻す */
+    const onHard = (fn) => {
+      applyCpuLevel('hard');
+      try { fn(); } finally { applyCpuLevel('normal'); }
+    };
+    /** cpu 側に「人間コートから飛んできた球」を、cpu のすぐ横に置く */
+    const cpuBallAt = (g, y, bounces = 1, dz = -0.3) => {
+      g.ball.last = 'you';
+      g.ball.x = g.cpu.x + 0.3;
+      g.ball.y = y;
+      g.ball.z = g.cpu.z + dz;
+      g.ball.bounces = bounces;
+    };
+    /**
+     * 「AI がこの技を選んだ」1打を打たせる。技を選ぶかどうか（pickAiSpecial）と、
+     * 選んだ技がどう飛ぶか（specialShot）は別物なので、後者だけを見たいときに使う。
+     */
+    const aiHitWith = (g, move, who = 'cpu') => {
+      g.pickAiSpecial = () => move;
+      g.hit(who);
+    };
+
+    ok(CPU.SPECIALS === false, 'precondition: the tests start on normal (no AI specials)');
+
+    // 難易度が hard のときだけ AI は技を使える
+    {
+      onHard(() => ok(rally(ALL).aiSpecialsOn(), 'hard turns the AI specials on'));
+      ok(!rally(ALL).aiSpecialsOn(), 'normal leaves them off');
+      applyCpuLevel('easy');
+      ok(!rally(ALL).aiSpecialsOn(), 'easy leaves them off too');
+      applyCpuLevel('normal');
+    }
+
+    // 人間が技を1つも選んでいなければ、hard でも AI は使わない
+    // （スタート画面で何も選ばなければ従来とまったく同じゲーム、という約束を守るため）
+    onHard(() => {
+      const g = rally([]);
+      ok(!g.aiSpecialsOn(), 'with nothing equipped by the player, the AI stays plain');
+      g.setSpecials(['hawkEye']);
+      ok(g.aiSpecialsOn(), 'equipping one turns the AI side on as well');
+    });
+
+    // 回数は選手ごとに独立していて、ゲームが替わると回復する
+    onHard(() => {
+      const g = rally(ALL);
+      ok(g.usesLeft('hawkEye', 'cpu') === SP.USES_PER_GAME, 'the AI starts with its own budget');
+      g.spendSpecial('hawkEye', undefined, 'cpu');
+      ok(g.usesLeft('hawkEye', 'cpu') === 0, 'spending an AI move draws down the AI budget');
+      ok(g.usesLeft('hawkEye') === SP.USES_PER_GAME, "and leaves the human's alone");
+      ok(g.stats.cpu.specials === 1, 'and it is counted on the CPU side of the stats');
+      g.refreshSpecials();
+      ok(g.usesLeft('hawkEye', 'cpu') === SP.USES_PER_GAME, 'a new game restores the AI budget too');
+    });
+
+    // 場面ごとに選ばれる技（人間と同じ config の条件を、AI 向けの代わりで見る）
+    onHard(() => {
+      /** CHANCE で外れることがあるので、何度か引いて「その場面で出うる技」を集める */
+      const pick = (build) => {
+        const g = rally(ALL);
+        build(g);
+        const seen = [];
+        for (let i = 0; i < 300; i++) {
+          const move = g.pickAiSpecial('cpu', g.aiSpecialContext('cpu'));
+          if (move && seen.indexOf(move) === -1) seen.push(move);
+        }
+        return seen.join(',');
+      };
+      // 腰から頭の高さのノーバウンド → ドライブボレー
+      ok(pick((g) => { g.cpu.z = 3; cpuBallAt(g, 1.2, 0); }) === 'driveVolley',
+        `a floating no-bounce ball picks the drive volley for the AI, got ${pick((g) => { g.cpu.z = 3; cpuBallAt(g, 1.2, 0); })}`);
+      // 足を止めて構えられたグラウンドストローク → 鷹の目（人間の「溜め5割」に当たる）
+      ok(pick((g) => { g.cpu.z = 9; g.cpu.settleT = SP.AI.SETTLE_T + 0.2; cpuBallAt(g, 1.0); }) === 'hawkEye',
+        'a settled groundstroke picks the hawk eye');
+      // 前へ詰めながらの高いノーバウンド → ダンクスマッシュ
+      ok(pick((g) => { g.cpu.z = 3; g.cpu.fwd = SP.DUNK.MIN_FWD + 1; cpuBallAt(g, 2.6, 0); }) === 'dunkSmash',
+        'rushing in on a high no-bounce ball picks the dunk');
+      // 抜かれた（自分より後ろ＝自陣側を通っている）球 → ツイーナー
+      ok(pick((g) => { g.cpu.z = 9; cpuBallAt(g, 1.0, 1, 0.6); }).indexOf('tweener') !== -1,
+        'a ball behind the AI picks the tweener');
+      // フォア側へ大きく振り回されて、まだ止まりきっていない → バギーホイップ
+      // cpu は向かい側を向いた右利きなので、フォア側は world +x（game.js の RACKET_SIDE.cpu）。
+      const CPU_RACKET_SIDE = 1;
+      const draggedCpu = (g) => {
+        g.cpu.z = 9;
+        g.cpu.x = CPU_RACKET_SIDE * (SP.BUGGY.MIN_X + 0.6);
+        g.cpu.runX = CPU_RACKET_SIDE * (SP.BUGGY.MIN_RUN_X + 0.5);
+        g.cpu.speed = 5;
+        cpuBallAt(g, 1.0, 1, -0.3);
+        g.ball.x = g.cpu.x + CPU_RACKET_SIDE * 0.3; // ラケット側の球＝フォアハンド
+      };
+      {
+        const g = rally(ALL);
+        draggedCpu(g);
+        ok(g.aiSpecialContext('cpu').stroke === 'forehand',
+          `precondition: that is the AI's forehand side, got ${g.aiSpecialContext('cpu').stroke}`);
+      }
+      ok(pick(draggedCpu) === 'buggyWhip', 'dragged wide to the forehand side picks the buggy whip');
+      // 走ってもいない・止まってもいない普通の1打 → 何も出ない
+      ok(pick((g) => { g.cpu.z = 9; g.cpu.speed = 1; cpuBallAt(g, 1.0); }) === '',
+        'an ordinary groundstroke picks nothing');
+      // 回数を使い切った技は飛ばして次の候補へ落ちる（人間と同じ拾い方）
+      const g = rally(ALL);
+      g.cpu.z = 3; cpuBallAt(g, 1.2, 0);
+      g.cpu.specialUses.driveVolley = 0;
+      let picked = null;
+      for (let i = 0; i < 300 && !picked; i++) picked = g.pickAiSpecial('cpu', g.aiSpecialContext('cpu'));
+      ok(picked === null, `a spent AI move is skipped and nothing else matches here, got ${picked}`);
+    });
+
+    // 難易度が normal なら、同じ場面でも AI は何も出さない
+    {
+      const g = rally(ALL);
+      g.cpu.z = 9; g.cpu.settleT = SP.AI.SETTLE_T + 0.2; cpuBallAt(g, 1.0);
+      let picked = null;
+      for (let i = 0; i < 300 && !picked; i++) picked = g.pickAiSpecial('cpu', g.aiSpecialContext('cpu'));
+      ok(picked === null, `normal never picks an AI special, got ${picked}`);
+    }
+
+    // AI の打球は人間コート（z<0）に入る。人間と同じ specialShot を通るが、狙いの
+    // 深さも曲がる向きもすべて鏡になっていること。
+    onHard(() => {
+      SP.AI.MOVES.forEach((move) => {
+        if (move === 'kickServe') return; // サーブは serve() の担当（下で別に見る）
+        let outs = 0;
+        let worst = null;
+        for (let i = 0; i < 30; i++) {
+          const g = rally(ALL);
+          g.cpu.z = 6; g.cpu.x = 1;
+          cpuBallAt(g, 1.4, 0);
+          aiHitWith(g, move);
+          const land = R.physics.predictLanding(g.ball);
+          const inHumanCourt = !land.net && land.z < 0 && land.z >= -(L + COURT.LINE_SLACK)
+            && Math.abs(land.x) <= W + COURT.LINE_SLACK;
+          if (!inHumanCourt) { outs++; worst = land; }
+        }
+        ok(outs === 0, `the AI ${move} always lands in the human court: ${outs}/30 out`
+          + (worst ? ` (worst x=${worst.x.toFixed(2)} z=${worst.z.toFixed(2)} net=${worst.net})` : ''));
+      });
+    });
+
+    // バギーホイップの曲がりは打つ側で鏡になる（人間は +x へ、AI は -x へ）
+    onHard(() => {
+      const g = rally(ALL);
+      g.cpu.z = 6; g.cpu.x = 1;
+      cpuBallAt(g, 1.0);
+      aiHitWith(g, 'buggyWhip');
+      ok(g.ball.curve < 0, `the AI whip curves toward -x, got ${g.ball.curve}`);
+      const human = rally(['buggyWhip']);
+      human.you.z = -9;
+      ballAt(human, 1.0);
+      human.you.special = 'buggyWhip';
+      human.hit('you');
+      ok(human.ball.curve === -g.ball.curve,
+        `and is the exact mirror of the human's: ${human.ball.curve} vs ${g.ball.curve}`);
+    });
+
+    // AI のキックサーブ：技として乗り、回数を使い、1バウンド目で跳ね上がる目印がつく
+    onHard(() => {
+      const g = new R.Game({ input: idle, hooks: noHooks });
+      g.setSpecials(ALL);
+      g.start();
+      g.server = 'cpu';
+      g.phase = 'serve';
+      g.pickAiServeSpecial = () => 'kickServe';
+      g.serve('cpu');
+      ok(g.ball.kick === true, 'the AI kick serve is marked to bounce high');
+      ok(g.usesLeft('kickServe', 'cpu') === 0, 'and it spends the AI budget for it');
+      ok(g.stats.cpu.specials === 1, 'and is counted on the CPU side');
+    });
+
+    // 技が乗った1打の後始末：モーションが尽きたら消え、ポイントをまたがない
+    onHard(() => {
+      const g = rally(ALL);
+      g.cpu.z = 6;
+      cpuBallAt(g, 1.4, 0);
+      aiHitWith(g, 'driveVolley');
+      ok(g.cpu.special === 'driveVolley', 'the move stays on while the motion plays');
+      g.cpu.anim = 0;
+      g.tickSpecial(1 / 60);
+      ok(g.cpu.special === null, 'and is cleared once the motion is done');
+      g.cpu.special = 'hawkEye';
+      g.newPoint();
+      ok(g.cpu.special === null, 'a new point never carries one over');
+    });
+
+    // hard のフルマッチ（AI の技が混ざり続けてもフリーズ・NaN・回数のマイナスがない）
+    onHard(() => {
+      const g = new R.Game({ input: fakeInput, hooks: noHooks });
+      g.setSpecials(ALL);
+      g.start();
+      let minUses = Infinity;
+      let aiSpecials = 0;
+      const spend = g.spendSpecial.bind(g);
+      g.spendSpecial = (move, label, who = 'you') => {
+        if (who !== 'you') aiSpecials++;
+        return spend(move, label, who);
+      };
+      for (let i = 0; i < 60 * 600; i++) {
+        if (g.phase === 'serve' && g.server === 'you') tap(g);
+        if (g.phase === 'rally' && i % 6 === 0) tap(g);
+        g.update(1 / 60);
+        SP.AI.MOVES.forEach((m) => {
+          minUses = Math.min(minUses, g.usesLeft(m, 'cpu'), g.usesLeft(m, 'cpuMate'), g.usesLeft(m, 'youMate'));
+        });
+      }
+      ok(Number.isFinite(g.ball.x) && Number.isFinite(g.cpu.x), 'ball and AI stay finite on hard');
+      ok(minUses >= 0, `the AI budget never goes negative, low water mark ${minUses}`);
+      ok(aiSpecials > 0, `and the AI actually used some over a full match: ${aiSpecials}`);
+    });
+
+    ok(CPU.SPECIALS === false, 'the difficulty is left back on normal for the tests that follow');
+  }
+
   // --- 技は振り終わるまで残り、そこで消える（フォームの表示に使うため） ---
   {
     const g = rally(['hawkEye']);
