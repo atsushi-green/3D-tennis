@@ -2675,6 +2675,60 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `receiving team (youMate) is not dragged out of its stance before the serve, got x=${g2.youMate.x} z=${g2.youMate.z}`);
 }
 
+// --- ダブルス：「下がれ」を指示したパートナーは、ロブを叩きに前へ出ない ---
+// (ユーザー報告: パートナーに「下がれ」を指示していても、ロブが上がるたびにネット際まで
+//  走り出てスマッシュしてしまい、指示が事実上効いていなかった。ai.smashApproach() は
+//  「叩けるなら叩く」だけを見ていて、指示（youMateFormation）がそこまで届いていなかった)
+{
+  const { DOUBLES, COURT } = R.config;
+  const { smashApproach, chasePosition } = R.ai;
+  const mate = (z) => ({ x: 0, z, attr: { reach: 1, speed: 1 }, stamina: 1 });
+  /** 落ちてくる途中の高いロブ（まだノーバウンド）。vz が大きいほど奥へ落ちる */
+  const lob = (y, z, vz) => ({ x: 0, y, z, vx: 0, vy: 0, vz, bounces: 0, age: 0.3, spin: 'flat' });
+
+  // ネット際に落ちてくる短いロブ：指示が無ければ叩きに出るが、「下がれ」なら出ない
+  const short = lob(7, 1, -3);
+  const rush = smashApproach(short, mate(-6), -1);
+  ok(rush && rush.z > -COURT.SERVICE,
+    `precondition: without an order the partner runs up to smash a short lob, got ${rush && rush.z.toFixed(2)}`);
+  ok(smashApproach(short, mate(-6), -1, DOUBLES.BACK_SMASH_Z) === null,
+    'told to stay back, the partner does not go up to smash it');
+  ok(chasePosition(short, -1, mate(-6), DOUBLES.BACK_SMASH_Z).z
+    < chasePosition(short, -1, mate(-6)).z,
+    'so the spot it chases stays deeper than the smash spot (it waits for the bounce instead)');
+
+  // 「下がれ」でも、下がったまま叩ける深いロブは今までどおり叩く（指示は前に出ることだけを止める）
+  const deep = lob(8, 0, -8);
+  const back = smashApproach(deep, mate(-9), -1, DOUBLES.BACK_SMASH_Z);
+  ok(back && back.z <= -COURT.SERVICE,
+    `a lob that comes down deep is still smashed from back there, got ${back && back.z.toFixed(2)}`);
+
+  // 指示が実際に追いかけ方まで届いている（moveDoublesTeams 経由）
+  const lobRally = (formation) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(true);
+    g.setYouMateFormation(formation);
+    g.phase = 'rally';
+    g.serveInFlight = false;   // サーブリターン中はレシーバー固定なので、通常のラリーにする
+    g.ball.last = 'cpu';
+    Object.assign(g.ball, { x: 0, y: 7, z: 1, vx: 0, vy: 0, vz: -3, bounces: 0, age: 0.3, live: true });
+    g.you.x = -6; g.you.z = -11; // 人間は遠くへ置いて、この球の担当を youMate に回す
+    g.youMate.x = 0; g.youMate.z = -6;
+    g.reactTimers.youMate = 0;
+    g.recoverTimers.youMate = 0;
+    ok(g.doublesResponder('you') === 'youMate',
+      `precondition: the partner is the one answering this lob (${formation})`);
+    for (let i = 0; i < 40; i++) g.moveDoublesTeams(1 / 60);
+    return g.youMate.z;
+  };
+  const zNet = lobRally('net');
+  const zBack = lobRally('back');
+  ok(zBack < zNet - 1,
+    `the order reaches the chase itself: net z=${zNet.toFixed(2)} vs back z=${zBack.toFixed(2)}`);
+  ok(zNet > -COURT.SERVICE && Math.abs(zNet - rush.z) < 0.01,
+    `and without it the partner really does run to the smash spot, got z=${zNet.toFixed(2)}`);
+}
+
 // --- ダブルス：フルマッチのシミュレーション（フリーズ・タイマーリークがないか） ---
 {
   const events = [];
@@ -4779,11 +4833,19 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     ballAt(high, 2.6, 0.3, 0);
     ok(high.pickSpecial() === 'dunkSmash', `a high ball picks the dunk smash, got ${high.pickSpecial()}`);
 
-    // ネット前のノーバウンド（高くない）→ 飛びつきボレー
+    // ネット前のノーバウンドでも、普通に届く球には飛び込まない（下の優先度へ落ちる）
+    const easy = rally(ALL);
+    easy.you.z = -3;
+    ballAt(easy, 1.0, 0.3, 0);
+    ok(easy.pickSpecial() !== 'divingVolley',
+      `a volley within normal reach does not dive, got ${easy.pickSpecial()}`);
+
+    // 普通のリーチでは届かないノーバウンド → 飛びつきボレー
     const net = rally(ALL);
     net.you.z = -3;
     ballAt(net, 1.0, 0.3, 0);
-    ok(net.pickSpecial() === 'divingVolley', `a no-bounce ball at the net picks the diving volley, got ${net.pickSpecial()}`);
+    net.ball.x = net.you.x - 2.4; // 通常(1.55)では届かず、飛びつき(×1.95)なら届く距離
+    ok(net.pickSpecial() === 'divingVolley', `an out-of-reach no-bounce ball picks the diving volley, got ${net.pickSpecial()}`);
 
     // ベースライン寄りのノーバウンドの浮き球 → ドライブボレー
     const drive = rally(ALL);
@@ -5583,9 +5645,18 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       // 足を止めて構えられたグラウンドストローク → 鷹の目（人間の「溜め5割」に当たる）
       ok(pick((g) => { g.cpu.z = 9; g.cpu.settleT = SP.AI.SETTLE_T + 0.2; cpuBallAt(g, 1.0); }) === 'hawkEye',
         'a settled groundstroke picks the hawk eye');
-      // 前へ詰めながらの高いノーバウンド → ダンクスマッシュ
-      ok(pick((g) => { g.cpu.z = 3; g.cpu.fwd = SP.DUNK.MIN_FWD + 1; cpuBallAt(g, 2.6, 0); }) === 'dunkSmash',
-        'rushing in on a high no-bounce ball picks the dunk');
+      // 攻めの位置での高いノーバウンド → ダンクスマッシュ。AI は打点へ先回りして止まって
+      // 待つ動きなので、人間の「前へ踏み込みながら」（fwd）は出ない＝踏み込み0でも出ること。
+      // (ユーザー報告「ダブルスの hard で CPU が必殺技を打たない」の正体：人間と同じ
+      //  DUNK.MIN_FWD を要求していたため、この技だけ事実上 AI に存在しなかった)
+      ok(pick((g) => { g.cpu.z = 3; g.cpu.fwd = 0; cpuBallAt(g, 2.6, 0); }) === 'dunkSmash',
+        'a high no-bounce ball in the attacking court picks the dunk even standing still');
+      // 同じ球でも、ベースライン際まで押し戻されていれば決め球にはならない
+      ok(pick((g) => { g.cpu.z = SP.AI.DUNK_MAX_Z + 1.5; g.cpu.fwd = 0; cpuBallAt(g, 2.6, 0); }) === '',
+        'but the same ball, hit from deep behind the baseline, is just a high return');
+      // 高さの線は人間とまったく同じ（SPECIAL.DUNK.MIN_Y）
+      ok(pick((g) => { g.cpu.z = 3; g.cpu.fwd = 0; cpuBallAt(g, SP.DUNK.MIN_Y - 0.2, 0); }) !== 'dunkSmash',
+        'and a ball below the dunk line is not one');
       // 抜かれた（自分より後ろ＝自陣側を通っている）球 → ツイーナー
       ok(pick((g) => { g.cpu.z = 9; cpuBallAt(g, 1.0, 1, 0.6); }).indexOf('tweener') !== -1,
         'a ball behind the AI picks the tweener');
@@ -5718,6 +5789,34 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       ok(Number.isFinite(g.ball.x) && Number.isFinite(g.cpu.x), 'ball and AI stay finite on hard');
       ok(minUses >= 0, `the AI budget never goes negative, low water mark ${minUses}`);
       ok(aiSpecials > 0, `and the AI actually used some over a full match: ${aiSpecials}`);
+    });
+
+    // ダブルスの hard でも、相手ペアが実際に技を使う（ロブの多いダブルスで目に見える
+    // 決め球＝ダンクスマッシュが出ることも含めて）
+    // (ユーザー報告: ダブルスの hard で CPU が必殺技を打ってこない)
+    onHard(() => {
+      const input = { moveX: 0, moveZ: 0, lob: false };
+      const g = new R.Game({ input, hooks: noHooks });
+      g.setSpecials(ALL);
+      g.start(true);
+      const used = {};
+      const spend = g.spendSpecial.bind(g);
+      g.spendSpecial = (move, label, who = 'you') => {
+        if (who !== 'you') used[`${who}:${move}`] = (used[`${who}:${move}`] || 0) + 1;
+        return spend(move, label, who);
+      };
+      for (let i = 0; i < 60 * 600; i++) {
+        input.moveX = Math.sin(i / 37) > 0 ? 1 : -1;
+        input.moveZ = Math.sin(i / 53) > 0 ? 1 : -1;
+        if (g.phase === 'serve' && g.server === 'you') tap(g);
+        if (g.phase === 'rally' && i % 6 === 0) tap(g);
+        g.update(1 / 60);
+      }
+      const byOpponent = Object.keys(used).filter((k) => k.indexOf('cpu') === 0);
+      ok(byOpponent.length > 0, `doubles on hard: the opposing pair uses specials, got ${JSON.stringify(used)}`);
+      ok(byOpponent.some((k) => k.indexOf('dunkSmash') !== -1),
+        `including the dunk smash on a lob, got ${JSON.stringify(used)}`);
+      ok(Number.isFinite(g.ball.x) && Number.isFinite(g.cpuMate.x), 'and the doubles match stays finite');
     });
 
     ok(CPU.SPECIALS === false, 'the difficulty is left back on normal for the tests that follow');

@@ -121,14 +121,20 @@
    * 走って間に合わないなら null を返し、呼び出し側は従来どおりバウンド後の頂点を追う
    * （空中で叩きにいって届かず、そのまま頭上を抜かれる、という最悪の形を避ける）。
    * @param {1|-1} side 追う選手がいる陣地（1＝cpu 陣地 z>0）
+   * @param {number} [nearZ] 叩きにいく範囲のネット側の限界（ネットからの深さ。正の値で渡す）。
+   *   既定は CPU.SMASH_Z_MIN＝ネット際まで詰めて叩く。前へ出てはいけない選手——ダブルスで
+   *   「下がれ」を指示されたパートナー（game.js#moveDoublesTeams）——はここを深くして渡す。
+   *   これより手前を通るロブは「叩ける区間」と見なさないので、そのままバウンドを待つ
+   *   （＝指示どおり下がったまま、1バウンドさせてグラウンドストロークで返す）。
    * @returns {{x:number, z:number}|null}
    */
-  function smashApproach(ball, player, side) {
+  function smashApproach(ball, player, side, nearZ = CPU.SMASH_Z_MIN) {
     if (ball.bounces > 0) return null;
     const top = PLAYER.CPU_REACH_Y - CPU.SMASH_Y_SLACK;
     if (top <= CPU.SMASH_MIN_Y) return null;
-    const zMin = side > 0 ? CPU.SMASH_Z_MIN : -CPU.SMASH_Z_MAX;
-    const zMax = side > 0 ? CPU.SMASH_Z_MAX : -CPU.SMASH_Z_MIN;
+    if (nearZ >= CPU.SMASH_Z_MAX) return null; // 叩ける区間が残っていない
+    const zMin = side > 0 ? nearZ : -CPU.SMASH_Z_MAX;
+    const zMax = side > 0 ? CPU.SMASH_Z_MAX : -nearZ;
     // 帯に入るまでに自陣の上空をどこまで高く通ったか。predictWindow() は軌道を時間順に
     // なめるので、帯へ降りてくる時点でこの値には「それ以前の最高到達点」が入っている。
     let peak = 0;
@@ -158,16 +164,18 @@
    *   既に届く位置にいるならそこに留まり、ネット際で canPoach() できるときは
    *   着地点（＝深い場所）まで下がらせるのではなく、その場でボールが自分の前を通る
    *   位置まで横に寄らせるだけにする（＝ポーチできる態勢を保つ）。
+   * @param {number} [smashNearZ] ロブを叩きにいく範囲のネット側の限界。そのまま
+   *   smashApproach() に渡す（省略時はネット際まで詰めて叩く既定のまま）。
    * @returns {{x:number, z:number}}
    */
-  function chasePosition(ball, side = 1, player) {
+  function chasePosition(ball, side = 1, player, smashNearZ) {
     if (player && inReachOf(player, ball)) {
       return { x: player.x, z: player.z };
     }
     // 頭上に上がってきた球は、バウンドを待たずに叩ける位置へ先回りする（＝スマッシュ）。
     // 間に合わないと判断したときだけ null が返り、従来どおりバウンド後の頂点を追う。
     if (player) {
-      const smash = smashApproach(ball, player, side);
+      const smash = smashApproach(ball, player, side, smashNearZ);
       if (smash) return smash;
     }
     if (player && canPoach(player, ball)) {

@@ -286,7 +286,7 @@
    * （＝優先度）に上から当てていき、最初に true になったひとつだけが**自動で**発動する
    * （Game#pickSpecial）。条件が重ならないよう、技ごとに担当する場面を分けてある：
    * サーブ／前に詰めながらの高いノーバウンド／届かない球／抜かれた球／
-   * ネット前のノーバウンド／浮いたノーバウンド／
+   * 届かないノーバウンド／浮いたノーバウンド／
    * 走らされているフォアハンド／足を止めて溜めたグラウンドストローク。
    * @type {{[key:string]: (g: Game, c: object) => boolean}}
    */
@@ -317,7 +317,13 @@
     tweener: (g, c) => !c.serving && !!c.contact('tweener')
       && g.ball.z < g.you.z - SPECIAL.TWEENER.BEHIND
       && g.ball.y >= SPECIAL.TWEENER.MIN_Y,
-    divingVolley: (g, c) => !c.serving && isVolleyContact(g, c.contact('divingVolley')),
+    // 「ノーバウンドだが、普通に振ったのでは届かない」球だけ。伸びたリーチ（DIVE.REACH_MULT）
+    // でなら捉えられて、通常のリーチでは同じノーバウンドを捉えられない、という差が発動条件。
+    // これを見ないと、正面に来たふつうのボレー——手を伸ばさなくても届く球——にまで飛び込んで
+    // しまい、硬直（DIVE.RECOVER）だけ背負って次の球が返せなくなる。
+    divingVolley: (g, c) => !c.serving
+      && isVolleyContact(g, c.contact('divingVolley'))
+      && !isVolleyContact(g, c.contact(null)),
     // 「ノーバウンドで、腰から頭までの高さに浮いた球」を横振りで叩く場面だけ。
     // ・ネット前に限らない（ベースライン寄りで浮いたノーバウンドを叩くのもドライブ
     //   ボレー）ので、isVolleyContact ではなく「ノーバウンド＋高さ」で見る。
@@ -379,10 +385,16 @@
    *   c ＝ {who, ball, player, bounces, contactY, behind, stroke, natural{smash,volley}}
    */
   const AI_SPECIAL_MATCH = {
-    // 前へ詰めながら、頭上の高いノーバウンドを叩く（人間とまったく同じ3条件）。
+    // 頭上の高いノーバウンドを叩き落とす。高さ（SPECIAL.DUNK.MIN_Y）は人間とまったく
+    // 同じで、人間の「前へ踏み込みながら」（DUNK.MIN_FWD）だけが AI 向けの代わりに
+    // 置き換わる——ai.smashApproach() は頭上の球の打点へ**先回りして止まって待つ**動きを
+    // するので、叩く瞬間はほぼ必ず静止していて踏み込みが出ない（実測：ダブルス Hard
+    // 900秒で AI のスマッシュ59本の fwd は中央値 0.00・最大 0.12 で、MIN_FWD=2.2 を
+    // 満たしたのは0本＝この技だけ事実上 AI に存在しなかった）。代わりに「攻めの位置で
+    // 叩けている」＝打点がサービスライン付近（SPECIAL.AI.DUNK_MAX_Z）より前、で見る。
     dunkSmash: (g, c) => c.bounces === 0
       && c.contactY >= SPECIAL.DUNK.MIN_Y
-      && c.player.fwd >= SPECIAL.DUNK.MIN_FWD,
+      && Math.abs(c.player.z) <= SPECIAL.AI.DUNK_MAX_Z,
     // 球に抜かれた（自分より後ろを通っている）ときの股抜きロブ。
     tweener: (g, c) => c.behind > SPECIAL.TWEENER.BEHIND
       && c.contactY >= SPECIAL.TWEENER.MIN_Y,
@@ -2618,10 +2630,13 @@
       // youMate：人間（you）の打球が向かってくる番で、自分が応答すべき側なら追う
       // （doublesResponder：サーブリターン中はレシーバー固定、それ以外は近い方）。
       // 自陣（z<0）を追わせるため chasePosition には side=-1 を渡す。
+      // 「下がれ」を指示されている間は、ロブを叩きにネット際まで走り出ていかない
+      // （DOUBLES.BACK_SMASH_Z より手前のロブは、下がったままバウンドを待って返す）。
       const mateChasing = this.phase === 'rally' && ball.last === 'cpu'
         && this.doublesResponder('you') === 'youMate';
+      const mateSmashNearZ = this.youMateFormation === 'back' ? DOUBLES.BACK_SMASH_Z : undefined;
       if (mateChasing && this.reactTimers.youMate <= 0) {
-        this.moveIfRecovered('youMate', this.youMate, youMateBefore, chasePosition(ball, -1, this.youMate), PLAYER.CPU_CHASE, dt);
+        this.moveIfRecovered('youMate', this.youMate, youMateBefore, chasePosition(ball, -1, this.youMate, mateSmashNearZ), PLAYER.CPU_CHASE, dt);
       } else if (mateChasing) {
         this.youMate.speed = 0;
       } else {
