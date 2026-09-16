@@ -1750,8 +1750,11 @@
       player.stroke = stroke;
       player.spin = spin; // 振っている間のフォーム（scene/player.js）に使う
       // 必殺技で決めたときは球種名ではなく技名を出す（「何で取ったか」がそのまま伝わる）。
+      // 技名は打った本人（who）の specialLabel を見る。以前はここで常に this.you を見て
+      // いたため、cpu/cpuMate/youMate が技を決めても「you」側の（多くは無関係な）技名が
+      // 出てしまっていた。
       this.lastShotBy[TEAM_OF[who]] = special
-        ? (this.you.specialLabel || SPECIAL_LABEL[special])
+        ? (player.specialLabel || SPECIAL_LABEL[special])
         : shotLabel(stroke, spin, shot.lob);
       // 音程はチーム単位（誰が打っても同じ）。音色は打ち方(stroke)とスピンで変わる。
       this.hooks.sound('hit', TEAM_OF[who], stroke, charge, spin);
