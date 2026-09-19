@@ -6156,5 +6156,193 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   }
 }
 
+
+// --- レシーブ（サーブを打ち返す1打）の緩和 ---
+// ユーザー報告「プレイヤーがレシーブするとき、返すのがかなり難しい」への対応。
+// 球速・コース・深さは一切変えず（＝体感の速さはそのまま）、
+//   1) サーブが来る前からテイクバックを引いて待てる
+//   2) この1打だけスイングの有効時間とリーチが広い（RETURN.SWING_WINDOW / REACH_MULT）
+//   3) predictContact()（＝ガイド）が「いま離せば当たる」と言ったら本当に当たる
+// の3点で「なんとか返せる」ようにしてある。ここではその3点を検証する。
+{
+  const { RETURN, PHYSICS } = R.config;
+
+  /** CPU のサーブが実際に打たれる（phase が 'rally' に変わる）直前まで進める。 */
+  const upToServe = (input = { moveX: 0, moveZ: 0, lob: false }) => {
+    const g = new R.Game({ input, hooks: noHooks });
+    g.started = true;
+    g.server = 'cpu';
+    g.newPoint();
+    return g;
+  };
+  const runToServe = (g) => {
+    for (let i = 0; i < 4000 && !(g.serveInFlight && g.ball.live); i++) g.update(1 / 240);
+    return g.serveInFlight && g.ball.live;
+  };
+  /** そのサーブがサービスボックスに入るか（＝返球を論じる意味があるか） */
+  const servedIn = (g) => {
+    const L = R.physics.predictLanding({ ...g.ball });
+    return !L.net && L.z < 0 && L.z > -COURT.SERVICE - 0.02 && Math.abs(L.x) <= HALF_W + 0.02;
+  };
+
+  // 1) サーブを待っている間もテイクバックが溜まる（以前は chargeStart() が素通りだった）
+  {
+    const g = upToServe();
+    g.chargeStart('slice');
+    ok(g.you.charging, 'the receiver can start the takeback before the serve is struck');
+    for (let i = 0; i < 30; i++) g.update(1 / 60);
+    ok(g.you.chargeTime > 0.4,
+      `and it keeps charging while waiting, got ${g.you.chargeTime.toFixed(2)}s`);
+    ok(g.you.chargeSpin === 'slice', 'the spin key held while waiting is the one that comes out');
+    ok(g.you.chargeStroke === null,
+      'forehand/backhand is left undecided while the ball is still in the server hand');
+    ok(runToServe(g), 'precondition: the CPU serves');
+    ok(g.you.charging && g.you.chargeTime > 0.4,
+      `the takeback survives the moment the serve is struck, got ${g.you.chargeTime.toFixed(2)}s`);
+    ok(g.you.chargeStroke === 'forehand' || g.you.chargeStroke === 'backhand',
+      `and forehand/backhand is fixed right then, got ${g.you.chargeStroke}`);
+  }
+
+  // 1b) 1本目がフォールトしても、押しっぱなしのテイクバックは握り直さずに済む
+  {
+    const g = upToServe();
+    g.chargeStart('top');
+    for (let i = 0; i < 20; i++) g.update(1 / 60);
+    g.serveNumber = 1;
+    g.serveFault('アウト');
+    for (let i = 0; i < 300 && g.phase !== 'serve'; i++) g.update(1 / 60);
+    ok(g.phase === 'serve' && g.serveNumber === 2, 'precondition: a second serve is being set up');
+    ok(g.you.charging && g.you.chargeSpin === 'top',
+      'the held takeback carries into the second serve instead of being dropped');
+  }
+
+  // 1c) 自分のサーブでは、前のトスの溜めをきっちり持ち越さない（従来どおり）
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.started = true;
+    g.server = 'you';
+    g.newPoint();
+    g.chargeStart('slice');
+    for (let i = 0; i < 20; i++) g.update(1 / 60);
+    g.beginServe('アウト');
+    ok(!g.you.charging && g.you.chargeTime === 0 && g.you.chargeSpin === 'flat',
+      'the server own charge is still cleared when the stance is set up again');
+  }
+
+  // 2) スイングの有効時間は、レシーブのときだけ長い
+  {
+    const g = upToServe();
+    ok(runToServe(g), 'precondition: the CPU serves');
+    ok(Math.abs(g.swingWindow() - RETURN.SWING_WINDOW) < 1e-9,
+      `returning a serve uses the wider window, got ${g.swingWindow()}`);
+    ok(RETURN.SWING_WINDOW > PLAYER.SWING_WINDOW, 'which is wider than the normal one');
+    g.chargeStart();
+    g.chargeRelease();
+    ok(Math.abs(g.you.swing - RETURN.SWING_WINDOW) < 1e-9,
+      `and the released swing really lives that long, got ${g.you.swing.toFixed(3)}`);
+    // 返球された後（serveInFlight が下りた後）は通常の窓に戻る
+    g.serveInFlight = false;
+    ok(Math.abs(g.swingWindow() - PLAYER.SWING_WINDOW) < 1e-9,
+      'once the serve has been returned, the normal window is back');
+  }
+
+  // 2b) 窓が広がっても「早振り＝引っ張り／引きつけ＝流し」の関係は変わらない
+  // （待ち時間を秒のまま測ると、レシーブは必ず引っ張り最大＝サイドライン際へ散る）
+  {
+    const g = upToServe();
+    ok(runToServe(g), 'precondition: the CPU serves');
+    g.chargeStart();
+    g.chargeRelease();
+    const waitedAtRelease = g.swingWaited();
+    ok(waitedAtRelease < 1e-6, `waiting time starts at 0, got ${waitedAtRelease}`);
+    for (let i = 0; i < 12; i++) g.update(1 / 240);
+    const scaled = g.swingWaited();
+    const elapsed = RETURN.SWING_WINDOW - g.you.swing;
+    ok(scaled < elapsed,
+      `the wider window is read as a ratio, not raw seconds: ${scaled.toFixed(3)} < ${elapsed.toFixed(3)}`);
+    ok(Math.abs(scaled - elapsed * (PLAYER.SWING_WINDOW / RETURN.SWING_WINDOW)) < 1e-9,
+      'and it is scaled back onto the normal window exactly');
+  }
+
+  // 3) predictContact() が「いま離せば当たる」と言ったら本当に当たる。
+  // 以前は physics.predictWindow() が上限（スイングの有効時間）を1コマ越えた打点まで
+  // 返していたため、ガイドが当たると言った瞬間に離しても数ミリ秒差で必ず空振りしていた。
+  // これが空振りの主因だった（実測：レシーブ失敗の 64/66 が空振り）。
+  {
+    let tried = 0;
+    let connected = 0;
+    for (let i = 0; i < 200; i++) {
+      const input = { moveX: 0, moveZ: 0, lob: false };
+      const g = upToServe(input);
+      if (!runToServe(g)) continue;
+      if (!servedIn(g)) continue;
+      let released = false;
+      for (let f = 0; f < 800; f++) {
+        if (!released && g.predictContact() !== null) {
+          g.chargeStart();
+          g.chargeRelease();
+          released = true;
+          tried++;
+        }
+        g.update(1 / 240);
+        if (g.ball.last === 'you') { connected++; break; }
+        if (g.phase !== 'rally' || !g.ball.live || g.ball.bounces >= 2) break;
+      }
+    }
+    // 棒立ちのままラケットの円に入るのは、入ったサーブのうち半分ほど（残りは走らないと
+    // 届かない）。200本流して数十本が残る。
+    ok(tried > 40, `precondition: enough serves to swing at, got ${tried}`);
+    ok(connected >= tried * 0.98,
+      `releasing the moment predictContact() says it connects really does connect: ${connected}/${tried}`);
+  }
+
+  // 4) 通しで見て、レシーブが「なんとか返せる」水準になっている。
+  // 反応してから落下点へ走り、ボールが3mまで来たら離すだけ（人間にできる操作）で、
+  // 入ったサーブのほとんどが返る。たまにエースが決まるのは許容範囲。
+  {
+    const REACT = 0.28;
+    for (const level of ['normal', 'hard']) {
+      R.config.applyCpuLevel(level);
+      let inBox = 0;
+      let returned = 0;
+      let charge = 0;
+      for (let i = 0; i < 150; i++) {
+        const input = { moveX: 0, moveZ: 0, lob: false };
+        const g = upToServe(input);
+        g.chargeStart(); // サーブを待つ間にテイクバックを引いておく
+        if (!runToServe(g)) continue;
+        if (!servedIn(g)) continue;
+        inBox++;
+        let t = 0;
+        let released = false;
+        for (let f = 0; f < 1200; f++) {
+          const b = g.ball;
+          if (t >= REACT) {
+            const at = R.physics.predictAtZ(b, g.you.z, 3, 1) || R.physics.predictLanding(b);
+            const dx = (at.x || 0) - g.you.x;
+            input.moveX = Math.abs(dx) > 0.05 ? (dx > 0 ? -1 : 1) : 0; // INPUT_X_TO_WORLD = -1
+            if (!released && Math.hypot(b.x - g.you.x, b.z - g.you.z) < 3) {
+              g.chargeRelease();
+              released = true;
+            }
+          }
+          g.update(1 / 240);
+          t += 1 / 240;
+          if (g.ball.last === 'you') { returned++; charge += g.you.swingCharge; break; }
+          if (g.phase !== 'rally' || !g.ball.live || g.ball.bounces >= 2) break;
+        }
+      }
+      // 1本目は実際のテニスと同じく6割強しか入らない（SERVE.CPU_FIRST_MISS）。
+      ok(inBox > 60, `precondition: enough serves in the box on ${level}, got ${inBox}`);
+      ok(returned >= inBox * 0.9,
+        `${level}: most serves that land in are returnable, got ${returned}/${inBox}`);
+      ok(charge / Math.max(1, returned) > 0.3,
+        `${level}: and waiting with the racket back pays off, avg charge ${(charge / Math.max(1, returned)).toFixed(2)}`);
+    }
+    R.config.applyCpuLevel('normal');
+    ok(PHYSICS.BALL_R > 0, 'difficulty is left back on normal for anything that follows');
+  }
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);

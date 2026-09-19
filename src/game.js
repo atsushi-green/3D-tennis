@@ -46,6 +46,11 @@
    */
   const INPUT_X_TO_WORLD = -1;
 
+  // physics.predictWindow()／predictAtZ() が軌道を刻む幅(秒)。predictWindow は
+  // 「上限を越えた次の1コマ」までサンプルを返しうるので、上限を渡す側がこのぶん
+  // 手前で打ち切る必要がある（predictContact() 参照）。
+  const PREDICT_STEP = 1 / 120;
+
   function reaches(ball, player, reach) {
     return Math.hypot(ball.x - player.x, ball.z - player.z) < reach;
   }
@@ -477,6 +482,9 @@
         // 見分けるために使う（hit() は成功した時点で swing を0にするので、残り時間だけでは
         // 空振りと区別できない。詳細は update() の missSwing() の呼び出し箇所を参照）。
         swingConnected: false,
+        // 直前に振ったときのスイング入力の有効時間(秒)。レシーブだけ長い
+        // （RETURN.SWING_WINDOW）ので、引っ張り／流しの換算（swingWaited()）に使う。
+        swingSpan: PLAYER.SWING_WINDOW,
         serveMiss: false, // このサーブは「溜めすぎ」の抽選に当たった＝狙いを外す（chargeRelease()で抽選）
         chargeFrac: 0, // 溜めている間だけ 0〜1 で増える、テイクバックの深さ用（chargeTime のポーズ表示版）
         chargeStroke: null, // chargeStart() の瞬間に固定するフォア/バック。溜めている間は変えない
@@ -779,6 +787,19 @@
         this.you.chargeSpin = spin;
         return;
       }
+      // レシーブ側は、サーブが飛んでくる前からラケットを引いて待てる（実際のテニスと
+      // 同じ「テイクバックして待つ」）。以前はここが素通りで、サーブが打たれて
+      // phase が 'rally' になるまで溜め始めることすらできず、0.6秒しかない猶予の中で
+      // 「反応する→走る→押す→離す」を全部やる必要があった（＝レシーブが返せない一因）。
+      // フォア/バックはボールがまだ静止していて決められないので、サーブが打たれた
+      // 瞬間（serve()）に確定させる。
+      if (this.phase === 'serve' && !myServe) {
+        this.you.charging = true;
+        this.you.chargeTime = 0;
+        this.you.chargeSpin = spin;
+        this.you.chargeStroke = null;
+        return;
+      }
       if ((myServe && this.tossActive) || this.phase === 'rally') {
         this.you.charging = true;
         this.you.chargeTime = 0;
@@ -826,7 +847,8 @@
         this.you.swingConnected = false; // この1振りはまだ当たっていない
         // 縮地だけは打点まで瞬間移動するぶん、届くまでスイングの有効時間を伸ばす
         // （通常の SWING_WINDOW のままでは、跳んだ先で待っている間に振り終わってしまう）。
-        this.you.swing = move === 'shukuchi' ? this.dashToBall() : PLAYER.SWING_WINDOW;
+        this.you.swing = move === 'shukuchi' ? this.dashToBall() : this.swingWindow();
+        this.you.swingSpan = this.you.swing; // 引っ張り／流しの換算（swingWaited()）に使う
       }
     }
 
@@ -1185,13 +1207,45 @@
     }
 
     /**
+     * いま人間が「サーブを打ち返す1打」に向かっているか（＝RETURN の緩和が効く場面か）。
+     * サーブが一度も返球されていない間（serveInFlight）で、かつ飛んできているのが
+     * 自分の打った球ではないとき。自分がサーバーのときも serveInFlight は立っているので、
+     * ball.last でチームを確かめる。
+     */
+    returningServe() {
+      return this.serveInFlight && this.ball.last !== 'you';
+    }
+
+    /**
+     * いま溜めを離したときの、スイング入力の有効時間(秒)。レシーブだけ長い
+     * （RETURN.SWING_WINDOW）。理由は config.js の RETURN のコメント参照。
+     */
+    swingWindow() {
+      return this.returningServe() ? RETURN.SWING_WINDOW : PLAYER.SWING_WINDOW;
+    }
+
+    /**
+     * いまの「手の届く範囲」の倍率（PLAYER.REACH に掛ける）。能力値「リーチ・読み」に、
+     * レシーブのときだけ RETURN.REACH_MULT を重ねる。
+     */
+    reachMult() {
+      return this.you.attr.reach * (this.returningServe() ? RETURN.REACH_MULT : 1);
+    }
+
+    /**
      * 溜め時間を毎フレーム加算する。ラリー中・トス中以外の文脈になったら
      * （ポイントが終わった、トスが自動リセットされた等）溜めを打ち切ってキャンセルする。
      */
     tickCharge(dt) {
       if (!this.you.charging) return;
       const myServe = this.phase === 'serve' && this.servingPlayer() === 'you';
-      const validContext = this.phase === 'rally' || (myServe && this.tossActive);
+      // 相手のサーブを待っている間も、テイクバックを引いたまま溜め続けられる
+      // （chargeStart() のコメント参照）。1本目がフォールトしてから2本目の構えに入る
+      // までの間（phase==='fault'）も含める：ここで切ってしまうと、キーを押したままでも
+      // ゲージが空になり、握り直さないと溜まらなくなる。
+      const waitingReturn = this.servingPlayer() !== 'you'
+        && (this.phase === 'serve' || this.phase === 'fault');
+      const validContext = this.phase === 'rally' || (myServe && this.tossActive) || waitingReturn;
       if (!validContext) {
         this.you.charging = false;
         return;
@@ -1320,10 +1374,18 @@
       ball.wind = 0; // サーブの飛翔中（1本目の着地まで）は無風にする。返球後は hit() で this.wind に差し替える
       ball.curve = 0; // 前の打球の曲がり（バギーホイップ）を持ち越さない
 
-      this.you.charging = false;
+      // 自分のサーブなら、前のトスの溜めを持ち越さないよう完全に解除する。
+      // 相手（または味方）のサーブを待つ側は、溜めキーを押したままならテイクバックを
+      // 引いたまま構え続けられる（chargeStart() 参照）。1本目がフォールトして2本目の
+      // 構えに入り直すときも、握り直さずにそのまま待てるようにするため、ここでは
+      // charging も chargeSpin（押しているキー＝球種）も落とさない。
+      const iServe = this.servingPlayer() === 'you';
+      if (iServe) {
+        this.you.charging = false;
+        this.you.chargeSpin = 'flat';
+      }
       this.you.chargeTime = 0; // 前のサーブの溜めを持ち越さない
       this.you.chargeStroke = null;
-      this.you.chargeSpin = 'flat';
       this.you.serveMiss = false; // 前のサーブの「溜めすぎ」の抽選結果も持ち越さない
       this.you.special = null;    // 前の1打に乗っていた必殺技も持ち越さない
       this.you.dash = null;
@@ -1561,6 +1623,13 @@
         ? SPECIAL_LABEL.kickServe
         : shotLabel('serve', spin, false, serveCourse(magnitude));
       this.resetTrail();
+
+      // レシーブ側の人間が、サーブが来る前からラケットを引いて待っていた場合
+      // （chargeStart()）、フォア/バックはここで確定させる。chargeStart() の時点では
+      // ボールがまだサーバーの手元で静止していて、左右のどちらへ来るか決められない。
+      if (who !== 'you' && this.you.charging && !this.you.chargeStroke) {
+        this.you.chargeStroke = classifyStroke('you', ball, this.you);
+      }
 
       this.tossActive = false;
       this.aiTossActive = false;
@@ -1842,15 +1911,21 @@
     /**
      * 今の1打で「スイングがボールを待った時間」(秒)。溜めキーを離してから実際に当たるまで
      * 何秒かかったか＝どれだけ早めに振り出したか、で、引っ張り／流しの打ち分けに使う
-     * （TIMING_AIM 参照）。this.you.swing は離した瞬間に SWING_WINDOW から減り始めるので、
-     * その残りから逆算できる。
+     * （TIMING_AIM 参照）。this.you.swing は離した瞬間に有効時間（swingSpan）から
+     * 減り始めるので、その残りから逆算できる。
+     * 測った時間はそのまま秒で使わず、「有効時間に対する割合」を通常の
+     * PLAYER.SWING_WINDOW に換算して返す。レシーブだけ有効時間が長い
+     * （RETURN.SWING_WINDOW）ため、秒のまま測ると早振りが必ず引っ張り最大になり、
+     * レシーブがいつもサイドライン際へ散ってしまう（TIMING_AIM.RISK_SPREAD）。
+     * 割合で測れば、窓が広がっても「早めに振れば引っ張り／引きつければ流し」という
+     * 打ち分けの関係はそのまま保たれる。
      * スイングを介さずに hit('you') を直接呼んだ場合（テストなど）は、狙いがずれない
      * 「素直なタイミング」を返す。
      */
     swingWaited() {
-      return this.you.swing > 0
-        ? PLAYER.SWING_WINDOW - this.you.swing
-        : TIMING_AIM.NEUTRAL_WAIT_T;
+      if (this.you.swing <= 0) return TIMING_AIM.NEUTRAL_WAIT_T;
+      const span = this.you.swingSpan || PLAYER.SWING_WINDOW;
+      return (span - this.you.swing) * (PLAYER.SWING_WINDOW / span);
     }
 
     /**
@@ -1888,7 +1963,7 @@
     predictContact(reachMult = 1, reachYBonus = 0) {
       const ball = this.ball;
       const you = this.you;
-      const reach = PLAYER.REACH * you.attr.reach * reachMult;
+      const reach = PLAYER.REACH * this.reachMult() * reachMult;
       const reachY = PLAYER.REACH_Y + reachYBonus;
       // サーブは1バウンドするまで打てない（checkSwings() の mustBounceFirst と同じ条件）
       const canHit = (at, bounces) => at.z < PLAYER.NET_MARGIN && at.y < reachY
@@ -1899,7 +1974,16 @@
           t: 0, x: ball.x, y: ball.y, z: ball.z, bounces: ball.bounces,
         };
       }
-      const window = predictWindow(ball, (at) => canHit(at, at.bounces), PLAYER.SWING_WINDOW, 1);
+      // predictWindow() は上限を越えた次の1コマまでサンプルを返しうる（刻みは
+      // PREDICT_STEP）。そのコマを「いま離せば当たる」として返すと、スイングの有効時間が
+      // 尽きた直後にボールが届く＝必ず空振りになる1本をガイドが「当たる」と言ってしまう
+      // （実測：この取りこぼしが空振りの主因だった）。しかも predictWindow() は
+      // PREDICT_STEP（1/120秒）刻みなのに対し実際の物理は PHYSICS.STEP（1/240秒）刻みで、
+      // 同じ軌道でも打点に届く時刻が1コマぶん前後しうる。両方を吸収するため2コマ手前で
+      // 打ち切る＝「当たる」と言ったら必ず当たる側に倒す。
+      const window = predictWindow(
+        ball, (at) => canHit(at, at.bounces), this.swingWindow() - 2 * PREDICT_STEP, 1,
+      );
       return window ? window.enter : null;
     }
 
@@ -1942,7 +2026,12 @@
       // まだボールが遠い＝いま離しても当たらない。「早すぎる」ことだけ伝える（コースは、
       // 一番早く当たったときと同じ＝引っ張り最大の向きを出しておく）。
       const tooEarly = contact === null;
-      const waited = tooEarly ? PLAYER.SWING_WINDOW : contact.t;
+      // swingWaited() と同じ換算（有効時間に対する割合 → PLAYER.SWING_WINDOW 相当）。
+      // ここを揃えないと、レシーブのときだけガイドと実際の打球がずれる。
+      const span = this.swingWindow();
+      const waited = tooEarly
+        ? PLAYER.SWING_WINDOW
+        : contact.t * (PLAYER.SWING_WINDOW / span);
       const charge = clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1);
       const stroke = this.previewStroke(contact, charge, special);
       // 実際に打つときと同じ関数を通す（preview=true でばらつきだけ中央値に固定）ので、
@@ -2435,7 +2524,13 @@
       });
       if (this.you.charging) this.you.spin = this.you.chargeSpin;
       if (this.phase !== 'rally') {
-        this.you.prep = null;
+        // 相手のサーブを待っている間も、溜めキーを押していればテイクバックの構えを出す
+        // （サーブが来る前からラケットを引いて待てる＝chargeStart()。構えが画面に出ないと
+        // 「もう引いて待てている」ことが分からない）。フォア/バックはサーブが打たれた
+        // 瞬間に決まる（serve()）ので、それまではラケット側＝フォアの構えにしておく。
+        const waitingReturn = this.you.charging && this.servingPlayer() !== 'you'
+          && (this.phase === 'serve' || this.phase === 'fault');
+        this.you.prep = waitingReturn ? (this.you.chargeStroke || 'forehand') : null;
         this.cpu.prep = null;
         this.youMate.prep = null;
         this.cpuMate.prep = null;
@@ -3018,7 +3113,8 @@
         // 能力値「リーチ・読み」で手の届く範囲が広がる／狭まる（attr.reach）。
         // 必殺技（飛びつきボレー・ツイーナー・ダンクスマッシュ）はさらにその上から広がる。
         const extra = specialReach(this.you.special);
-        if (reaches(ball, this.you, PLAYER.REACH * this.you.attr.reach * extra.mult)
+        // レシーブ（サーブを打ち返す1打）だけ RETURN.REACH_MULT ぶん広い（reachMult()）。
+        if (reaches(ball, this.you, PLAYER.REACH * this.reachMult() * extra.mult)
           && ball.y < PLAYER.REACH_Y + extra.y) {
           this.hit('you');
           this.you.swing = 0;
