@@ -19,6 +19,8 @@
   const {
     chasePosition, homePosition, netRushPosition, cpuShot, cpuVolleyShot, cpuSmashShot,
     isResponder, coverPosition, reactReach, aiSpin,
+    pairResponder, poachRun, frontPosition, backPosition,
+    doublesRallyShot, doublesVolleyShot, doublesSmashShot,
   } = RallyOne.ai;
   const { Match } = RallyOne.scoring;
 
@@ -618,6 +620,12 @@
       };
       /** 直前フレームの ball.last。変化を検知して反応遅延タイマーを起動するために使う。 */
       this.lastBallOwnerSeen = null;
+      /**
+       * ダブルスの前衛が、いま飛んできている1球に対して「ポーチに出る」と決めたか。
+       * 相手が打った瞬間に球ごと1回だけ抽選し（updateReactTimers）、次の球まで持ち越さない。
+       * true の間だけ、前衛は構え位置ではなく ai.poachRun() の迎撃点へ全力で走る。
+       */
+      this.poachCommit = { cpuMate: false, youMate: false };
       /** 今のポイントのサーブが1本目(1)か、1本目がフォールトした後のセカンドサーブ(2)か。 */
       this.serveNumber = 1;
       /**
@@ -667,15 +675,60 @@
      * ダブルスで、今の球にチームのどちらが応答するか。
      * サーブがまだ一度も返されていない間（serveInFlight）は、実際のダブルスと同じく
      * レシーバーが固定：落下点に近くても、レシーブ側でない相方（ネット際で構えている方）は
-     * 手を出さない。一度でも返球された後は通常のラリーとして、落下点に近い方が応答する。
+     * 手を出さない。
+     *
+     * 一度でも返球された後は、雁行陣（後衛＝you/cpu、前衛＝相方）の役割で決める
+     * （ai.pairResponder）：前衛がポーチできるならポーチ優先、そうでなければ落下点が
+     * どちらの持ち場かで決まる。単に「落下点に近い方」だと中途半端な深さの球のたびに
+     * 前衛が下がって雁行が崩れていた。
+     * パートナーに「下がれ」を指示している間は前衛がいない＝従来どおり近い方（isResponder）。
      * @param {'you'|'cpu'} team 応答する側のチーム
      * @returns {'you'|'youMate'|'cpu'|'cpuMate'}
      */
     doublesResponder(team) {
       if (this.serveInFlight) return this.receivingPlayer(team, this.match.serveSide);
-      const primaryKey = team === 'you' ? 'you' : 'cpu';
-      const mateKey = team === 'you' ? 'youMate' : 'cpuMate';
-      return isResponder(this[primaryKey], this[mateKey], this.ball) ? primaryKey : mateKey;
+      const backKey = team === 'you' ? 'you' : 'cpu';
+      const frontKey = team === 'you' ? 'youMate' : 'cpuMate';
+      if (!this.hasFrontPlayer(team)) {
+        return isResponder(this[backKey], this[frontKey], this.ball) ? backKey : frontKey;
+      }
+      return pairResponder(this[backKey], this[frontKey], this.ball) === 'back' ? backKey : frontKey;
+    }
+
+    /**
+     * そのチームが雁行陣を敷いているか（＝相方が前衛として前にいるか）。
+     * you チームだけは人間がパートナーに「下がれ」（E）を指示できるので、その間は
+     * 2人とも後衛＝前衛なしとして扱う。
+     * @param {'you'|'cpu'} team
+     */
+    hasFrontPlayer(team) {
+      if (!this.doubles) return false;
+      return team === 'cpu' || this.youMateFormation !== 'back';
+    }
+
+    /**
+     * ダブルスで、who から見た相手ペアの並び。
+     * - near / far：単純にネットに近い方／遠い方（常にどちらも入る）
+     * - atNet：near がネット際（DOUBLES.FRONT_MAX_Z 以内）にいればその選手。ボレーの狙いを
+     *   「その人の逆」にするために使う（目の前の相手へ打ち込んで至近距離のボレー合戦に
+     *   なるのを防ぐ）。2人とも下がっていれば null。
+     * - front / back：雁行（前衛がネット際・後衛はそれより深く）になっているときだけ
+     *   front が入る。2人とも下がっている／2人とも前に出ているときは front=null で、
+     *   後衛の配球は従来どおり（cpuShot）に戻る。
+     * @param {'you'|'youMate'|'cpu'|'cpuMate'} who 打つ本人
+     * @returns {{near: object, far: object, atNet: object|null, front: object|null, back: object}}
+     */
+    doublesFoes(who) {
+      const foeTeam = TEAM_OF[who] === 'cpu' ? 'you' : 'cpu';
+      const main = this.actor(foeTeam);
+      const mate = this.actor(foeTeam === 'you' ? 'youMate' : 'cpuMate');
+      const near = Math.abs(main.z) <= Math.abs(mate.z) ? main : mate;
+      const far = near === main ? mate : main;
+      const atNet = Math.abs(near.z) <= DOUBLES.FRONT_MAX_Z ? near : null;
+      const gankou = atNet && Math.abs(far.z) > DOUBLES.FRONT_MAX_Z;
+      return {
+        near, far, atNet, front: gankou ? near : null, back: far,
+      };
     }
 
     /* -------------------------------------------------------------- 入力 */
@@ -1289,6 +1342,8 @@
       this.recoverTimers.youMate = 0;
       this.recoverTimers.you = 0;
       this.lastBallOwnerSeen = null;
+      this.poachCommit.cpuMate = false;
+      this.poachCommit.youMate = false;
 
       const side = this.match.serveSide; // クロス(-1)から始まり、ポイントごとに逆クロス(+1)と交互になる
       const serverTeam = this.server;
@@ -1672,7 +1727,19 @@
       // CPU/AI は打ち方（スマッシュ／ボレー／グラウンドストローク）ごとに狙いを変える。
       // 以前はどの打ち方でも一律 cpuShot()（中速のグラウンドストローク）だったため、
       // ネット際で捕まえた球も頭上に上がってきた球も同じ速さ・深さで返っていた。
-      const aimAt = TEAM_OF[who] === 'cpu' ? this.you : this.cpu; // 逆をつく相手
+      // 逆をつく相手。ダブルスでは相手ペアのうち「実際に拾いにくる方」＝後衛を見る
+      // （前衛はネット際にいるので、その逆をついても意味がない）。
+      const foes = this.doubles ? this.doublesFoes(who) : null;
+      const aimAt = foes ? foes.back : (TEAM_OF[who] === 'cpu' ? this.you : this.cpu);
+      // ボレーだけは別枠。相手がネット際にいる場面では「逆サイドを狙う」＝その相手の目の前を
+      // 横切らせることになり、至近距離のボレーの打ち合いになる（ユーザー報告）。
+      // ai.doublesVolleyShot() は横切らずに相手の外側へ抜くか、抜けなければ頭を越す。
+      // 雁行かどうかではなく「ネット際に誰かいるか」で見る：2人とも前に出ている場面でも
+      // 目の前の相手は避けたい。
+      const netFoe = foes && foes.atNet;
+      // 自分もネット際にいるか。ここが「目の前を横切らせない」配慮が要る条件で、
+      // ベースラインから打つスマッシュには不要（コートの長さぶん横に開く余裕がある）。
+      const atNetToo = netFoe && Math.abs(player.z) <= PLAYER.VOLLEY_Z;
       const aimDir = NET_DIR[who];                                // 打ち込む方向
       // 打ち方に対応する能力（フォア／バック／ボレー／スマッシュ）と安定感を、倍率だけの
       // 小さなオブジェクトに畳んで渡す（ai.js は「誰が打つか」を知らないままでいられる）。
@@ -1685,10 +1752,22 @@
         : special
           ? this.specialShot(special, baseStroke, 0, SPECIAL.AI.CHARGE, rand, who)
           : isSmash
-            ? cpuSmashShot(aimAt, aimDir, smashStretch, shotSkill(player.attr, 'smash'))
+            // ネット際からのスマッシュも、ボレーと同じ理由で相手の真ん前を横切らせない。
+            ? (atNetToo
+              ? doublesSmashShot(netFoe, foes.far, player.x, aimDir, smashStretch,
+                shotSkill(player.attr, 'smash'))
+              : cpuSmashShot(aimAt, aimDir, smashStretch, shotSkill(player.attr, 'smash')))
             : isVolley
-              ? cpuVolleyShot(aimAt, aimDir, stretch, ball.y, shotSkill(player.attr, 'volley'))
-              : cpuShot(aimAt, aimDir, stretch, lobScale, arcScale, shotSkill(player.attr, baseStroke));
+              ? (atNetToo
+                ? doublesVolleyShot(netFoe, foes.far, player.x, aimDir, stretch, ball.y,
+                  shotSkill(player.attr, 'volley'))
+                : cpuVolleyShot(aimAt, aimDir, stretch, ball.y, shotSkill(player.attr, 'volley')))
+              // ダブルスで相手が雁行（前衛がネット際・後衛が深く）なら、後衛の配球は
+              // 「前衛を避けてクロス、隙があればストレートをパッシング」に切り替える。
+              : foes && foes.front
+                ? doublesRallyShot(foes.front, foes.back, aimDir, stretch, lobScale, arcScale,
+                  shotSkill(player.attr, baseStroke))
+                : cpuShot(aimAt, aimDir, stretch, lobScale, arcScale, shotSkill(player.attr, baseStroke));
 
       // 必殺技はここで初めて回数を使う（空振りしただけでは減らない）。縮地はこの1打では
       // なく「跳んだ瞬間」に済ませてあるので、ここでは数えない。呼び名は技が決めた
@@ -2536,11 +2615,39 @@
         if (owner === 'you') {
           this.reactTimers.cpu = PLAYER.CPU_REACT * this.cpu.attr.react;
           this.reactTimers.cpuMate = PLAYER.CPU_REACT * this.cpuMate.attr.react;
+          this.rollPoach('cpuMate', 'cpu');
         } else if (owner === 'cpu') {
           this.reactTimers.youMate = PLAYER.CPU_REACT * this.youMate.attr.react;
+          this.rollPoach('youMate', 'you');
         }
       }
       this.lastBallOwnerSeen = owner;
+    }
+
+    /**
+     * 飛んできた1球に対して、その前衛が「ポーチに出る」かどうかを1回だけ決める。
+     * 立っていれば触れる球（ai.poachSpot）は担当の判定で自然に拾うので、ここで決めるのは
+     * 「ストレートを守る位置を捨てて中央へ仕掛けにいくか」だけ。能力値「ネット志向」
+     * （attr.net）が高い選手ほどよく仕掛ける。
+     * @param {'cpuMate'|'youMate'} mate 前衛
+     * @param {'cpu'|'you'} team その前衛のチーム
+     */
+    rollPoach(mate, team) {
+      // サーブへは仕掛けない。実際のダブルスと同じくレシーバー以外は手を出せない球なので、
+      // 飛び出しても触れず、ネット際を空けるだけになる。
+      this.poachCommit[mate] = this.doubles && !this.serveInFlight && this.hasFrontPlayer(team)
+        && Math.random() < DOUBLES.POACH_CHANCE * this.actor(mate).attr.net;
+    }
+
+    /**
+     * ポーチに出ると決めている前衛の、いまの迎撃点。出ると決めていない／どこにも
+     * 間に合わない（＝仕掛けても届かない）なら null で、通常どおり構え位置に戻る。
+     * @param {'cpuMate'|'youMate'} mate
+     * @param {1|-1} side その前衛がいる陣地
+     */
+    poachTarget(mate, side) {
+      if (!this.poachCommit[mate] || this.phase !== 'rally') return null;
+      return poachRun(this.ball, this.actor(mate), side);
     }
 
     /** シングルスの CPU 移動（従来どおり）。ダブルスでは使わない。 */
@@ -2583,8 +2690,12 @@
     }
 
     /**
-     * ダブルスの4人の移動。各ペアは、落下点に近い方（＝ isResponder ）が返球に向かい、
-     * もう一方は相方の反対サイドのネット際で構える（本格的なフォーメーション戦略ではない簡易版）。
+     * ダブルスの4人の移動。ソフトテニスの雁行陣（後衛＝you/cpu、前衛＝相方）を敷き、
+     * 取りにいく側（doublesResponder）が返球に向かい、もう一方は役割どおりの位置で構える：
+     * - 後衛が追っている間、前衛は展開（クロス／ストレート）に応じた構え（ai.frontPosition）。
+     * - 前衛がポーチに出ている間、後衛はベースライン付近で逆サイドを開ける（ai.backPosition）。
+     * 以前はどちらの場合も coverPosition()＝ネット際の鏡映しだったので、前衛がポーチに
+     * 出ると後衛までネット際へ上がってしまい、触れなかったときに自陣ががら空きになっていた。
      *
      * サーブ待ち中（phase==='serve'）は4人とも動かさない。newPoint() が既にサーバー・
      * レシーバー・両者の相方を正しいスタンスへ置いているので、ここで通常のラリー用の
@@ -2611,23 +2722,30 @@
       // （doublesResponder：サーブリターン中はレシーバー固定、それ以外は近い方）。
       // 反応遅延タイマーが残っている間は、担当側でも静止したまま（＝逆を突かれる余地）。
       const cpuTeamChasing = this.phase === 'rally' && ball.last === 'you';
+      // cpu 陣地の前衛（cpuMate）の構え。相手の後衛（you チームの深い方）と味方後衛(cpu)の
+      // 位置関係＝展開で、ストレートを守るか・真ん中を越えて攻めに出るかが決まる。
+      const cpuFront = () => frontPosition(this.doublesFoes('cpuMate').back, this.cpu, DOUBLES.NET_Z_CPU);
       if (cpuTeamChasing && this.doublesResponder('cpu') === 'cpu') {
         if (this.reactTimers.cpu <= 0) {
           this.moveIfRecovered('cpu', this.cpu, cpuBefore, chasePosition(ball, 1, this.cpu), PLAYER.CPU_CHASE, dt);
         } else {
           this.cpu.speed = 0;
         }
-        this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore, coverPosition(this.cpu.x, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
+        // 後衛が追っている間、前衛は「仕掛ける」と決めていれば迎撃点へ全力で出て
+        // （＝ポーチ）、そうでなければ展開に応じた構え位置へ寄る。
+        const poach = this.reactTimers.cpuMate <= 0 ? this.poachTarget('cpuMate', 1) : null;
+        this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore,
+          poach || cpuFront(), poach ? PLAYER.CPU_CHASE : DOUBLES.FRONT_MOVE, dt);
       } else if (cpuTeamChasing) {
         if (this.reactTimers.cpuMate <= 0) {
           this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore, chasePosition(ball, 1, this.cpuMate), PLAYER.CPU_CHASE, dt);
         } else {
           this.cpuMate.speed = 0;
         }
-        this.moveIfRecovered('cpu', this.cpu, cpuBefore, coverPosition(this.cpuMate.x, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
+        this.moveIfRecovered('cpu', this.cpu, cpuBefore, backPosition(this.cpuMate.x, 1), PLAYER.CPU_RECOVER, dt);
       } else {
         this.moveIfRecovered('cpu', this.cpu, cpuBefore, homePosition(), PLAYER.CPU_RECOVER, dt);
-        this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore, coverPosition(0, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
+        this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore, cpuFront(), DOUBLES.FRONT_MOVE, dt);
       }
 
       // youMate：人間（you）の打球が向かってくる番で、自分が応答すべき側なら追う
@@ -2642,9 +2760,15 @@
         this.moveIfRecovered('youMate', this.youMate, youMateBefore, chasePosition(ball, -1, this.youMate, mateSmashNearZ), PLAYER.CPU_CHASE, dt);
       } else if (mateChasing) {
         this.youMate.speed = 0;
+      } else if (this.hasFrontPlayer('you')) {
+        // 前衛として構える。cpu 側の前衛と同じ考え方（ポーチに出るか／展開に応じた構え）。
+        const poach = this.reactTimers.youMate <= 0 ? this.poachTarget('youMate', -1) : null;
+        this.moveIfRecovered('youMate', this.youMate, youMateBefore,
+          poach || frontPosition(this.doublesFoes('youMate').back, this.you, DOUBLES.NET_Z_YOU),
+          poach ? PLAYER.CPU_CHASE : DOUBLES.FRONT_MOVE, dt);
       } else {
-        const youMateZ = this.youMateFormation === 'back' ? DOUBLES.BACK_Z_YOU : DOUBLES.NET_Z_YOU;
-        this.moveIfRecovered('youMate', this.youMate, youMateBefore, coverPosition(this.you.x, youMateZ), PLAYER.CPU_RECOVER, dt);
+        // 「下がれ」を指示されている間は前衛ではない＝従来どおり人間の逆サイドで構える。
+        this.moveIfRecovered('youMate', this.youMate, youMateBefore, coverPosition(this.you.x, DOUBLES.BACK_Z_YOU), PLAYER.CPU_RECOVER, dt);
       }
     }
 
@@ -2902,36 +3026,44 @@
       }
 
       // ダブルスの youMate：人間が届かなかった／振らなかった球を、CPUと同様に自動で拾う。
-      // ただし自分が応答すべき側（doublesResponder：サーブリターン中はレシーバー固定、それ
-      // 以外は近い方）のときだけ。そうしないと、人間が取るべき球やレシーブの権利がない球まで
-      // 先に振ってしまう。ノーバウンドで返す（ボレー）のはネット際（VOLLEY_Z 以内）にいるときだけ。
+      // 基本は自分が応答すべき側（doublesResponder）のときだけ——そうしないと人間が取る
+      // べき球まで先に振ってしまう——だが、人間がどうやっても届かない球だけは担当外でも
+      // 拾わせる（目の前に来た球を「担当ではないから」と見逃さないため。ユーザー報告）。
+      // サーブリターン中だけはこの救済を外す：レシーバー以外が返してはいけない球なので。
+      // ノーバウンドで返す（ボレー）のはネット際（VOLLEY_Z 以内）にいるときだけ。
       // それより後ろにいるなら、前に詰めていない＝1バウンド待ってグラウンドストロークで返す。
-      if (this.doubles && ball.last !== 'you' && ball.z < PLAYER.NET_MARGIN
-        && this.doublesResponder('you') === 'youMate') {
-        const inRange = ball.y < PLAYER.CPU_REACH_Y && ball.y > PLAYER.CPU_REACH_Y_MIN;
-        const canReturn = aiCanReturnNow(this.youMate, ball);
-        const mateReach = reactReach(ball.age, this.youMate.attr.reach);
-        if (canReturn && reaches(ball, this.youMate, mateReach) && inRange) this.hit('youMate');
+      if (this.doubles && ball.last !== 'you' && ball.z < PLAYER.NET_MARGIN) {
+        const rescue = !this.serveInFlight
+          && !reaches(ball, this.you, PLAYER.REACH * this.you.attr.reach);
+        if (this.doublesResponder('you') === 'youMate' || rescue) this.swingAiAt('youMate', ball);
       }
 
-      // CPU は届く範囲なら自動で振る。ダブルスでは応答すべき側（doublesResponder）だけが
-      // 手を出す。youMate と同様、前に出ていなければ1バウンド待つ。
+      // CPU は届く範囲なら自動で振る。ダブルスでは応答すべき側（doublesResponder）を
+      // 先に試し、その人が実際には届かなかったときだけ相方に回す（同じく見逃し防止）。
+      // サーブリターン中はレシーバー固定なので相方には回さない。
       if (ball.last !== 'cpu' && ball.z > PLAYER.NET_MARGIN) {
-        const inRange = ball.y < PLAYER.CPU_REACH_Y && ball.y > PLAYER.CPU_REACH_Y_MIN;
         const responder = this.doubles ? this.doublesResponder('cpu') : 'cpu';
-        const cpuCanReturn = responder === 'cpu' && aiCanReturnNow(this.cpu, ball);
-        const cpuMateCanReturn = this.doubles && responder === 'cpuMate'
-          && aiCanReturnNow(this.cpuMate, ball);
-        // 反応に使える時間ぶんに狭めた守備範囲で判定する（ai.reactReach 参照）。
-        // 打たれてすぐ届く球（スマッシュ・至近距離のボレー）は体の近くしか触れない。
-        // 能力値「リーチ・読み」の倍率は選手ごとに違うので、2人ぶん別々に求める。
-        if (cpuCanReturn && reaches(ball, this.cpu, reactReach(ball.age, this.cpu.attr.reach)) && inRange) {
-          this.hit('cpu');
-        } else if (cpuMateCanReturn
-          && reaches(ball, this.cpuMate, reactReach(ball.age, this.cpuMate.attr.reach)) && inRange) {
-          this.hit('cpuMate');
-        }
+        const order = !this.doubles || this.serveInFlight
+          ? [responder]
+          : (responder === 'cpu' ? ['cpu', 'cpuMate'] : ['cpuMate', 'cpu']);
+        order.some((key) => this.swingAiAt(key, ball));
       }
+    }
+
+    /**
+     * その CPU/AI がいま実際にその球を打てるなら打つ。
+     * 反応に使える時間ぶんに狭めた守備範囲で判定する（ai.reactReach 参照）。
+     * 打たれてすぐ届く球（スマッシュ・至近距離のボレー）は体の近くしか触れない。
+     * 能力値「リーチ・読み」の倍率は選手ごとに違うので、1人ずつ求める。
+     * @returns {boolean} 実際に振ったら true
+     */
+    swingAiAt(who, ball) {
+      const actor = this.actor(who);
+      if (!aiCanReturnNow(actor, ball)) return false;
+      if (ball.y >= PLAYER.CPU_REACH_Y || ball.y <= PLAYER.CPU_REACH_Y_MIN) return false;
+      if (!reaches(ball, actor, reactReach(ball.age, actor.attr.reach))) return false;
+      this.hit(who);
+      return true;
     }
 
     /* ---------------------------------------------------------- タイマー */

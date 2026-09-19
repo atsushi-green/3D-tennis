@@ -2440,6 +2440,251 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(cover.x < 0, `coverPosition mirrors away from the responder's side, x=${cover.x}`);
 }
 
+// --- ダブルス雁行陣：前衛の構えが展開（クロス／ストレート）で変わる ---
+// クロス展開（相手後衛と味方後衛が対角）＝相手後衛と同じ側へ寄ってストレートを守る。
+// ストレート展開（同じ側）＝真ん中を越えてラリー側へ踏み込み、ネットにも詰める（攻めの姿勢）。
+{
+  const { frontPosition } = R.ai;
+  const { DOUBLES } = R.config;
+  const NET = DOUBLES.NET_Z_CPU;
+
+  const cross = frontPosition({ x: 3 }, { x: -3 }, NET);   // 相手 右 / 味方 左
+  const straight = frontPosition({ x: 3 }, { x: 3 }, NET); // 相手 右 / 味方 右
+  ok(cross.x > straight.x && straight.x > 0,
+    `cross guards wider than straight, both on the hitter's side: cross=${cross.x.toFixed(2)} straight=${straight.x.toFixed(2)}`);
+  ok(cross.x >= DOUBLES.FRONT_GUARD_X - 0.01,
+    `cross: the net player covers the down-the-line lane, x=${cross.x.toFixed(2)}`);
+  ok(straight.x >= DOUBLES.FRONT_LEAN_X - 0.01,
+    `straight: the net player steps past the middle onto the rally side, x=${straight.x.toFixed(2)}`);
+  ok(Math.abs(straight.z) < Math.abs(cross.z),
+    `straight: and closer to the net (attacking), |z|=${Math.abs(straight.z).toFixed(2)} vs ${Math.abs(cross.z).toFixed(2)}`);
+
+  // 鏡映し：左右を入れ替えれば立ち位置も左右が入れ替わるだけ
+  const crossL = frontPosition({ x: -3 }, { x: 3 }, NET);
+  ok(Math.abs(crossL.x + cross.x) < 1e-9 && crossL.z === cross.z,
+    `mirrored sides mirror the stance, got x=${crossL.x.toFixed(2)}`);
+  // 相手後衛が中央にいるうちは、どちらにも出られるよう前衛も中央
+  ok(Math.abs(frontPosition({ x: 0 }, { x: 3 }, NET).x) < 0.01,
+    'a centred opponent keeps the net player centred');
+  // you 陣地（netZ が負）でも自陣側に構える
+  ok(frontPosition({ x: 3 }, { x: -3 }, DOUBLES.NET_Z_YOU).z < 0,
+    'the you-side net player stands on its own side of the net');
+}
+
+// --- ダブルス雁行陣：前衛は自分の真横だけでなく、半歩ぶん前後を通る球にも触れる ---
+// (退行テスト: 以前の canPoach() は「自分がいまいる深さ z ちょうど」の1点しか見ておらず、
+//  頭の少し上を越えていく球や半歩前を通る球を目の前で素通りさせていた＝ユーザー報告
+//  「近くに来たボールを見逃す」)
+{
+  const { poachSpot } = R.ai;
+  const { solveShot, predictAtZ } = R.physics;
+  const front = { x: 2.0, z: 1.8 }; // cpu 側のネット際に立つ前衛
+  const from = { x: 0, y: 1.0, z: -10 };
+  const ball = Object.assign(
+    { x: from.x, y: from.y, z: from.z, spin: 'flat', wind: 0, curve: 0, bounces: 0, age: 0.25 },
+    solveShot(from, { x: 1.8, y: R.config.PHYSICS.BALL_R, z: 6 }, 1.3, undefined, 'flat', 0),
+  );
+  const atOwnZ = predictAtZ(ball, front.z);
+  ok(atOwnZ && atOwnZ.y > R.config.PLAYER.CPU_REACH_Y,
+    `precondition: right at the net player's line the ball is over their head, y=${atOwnZ && atOwnZ.y.toFixed(2)}`);
+  const spot = poachSpot(front, ball);
+  ok(spot && Math.abs(spot.z - front.z) > 0.01,
+    `half a step off their line they can still volley it, got ${JSON.stringify(spot)}`);
+  ok(spot && Math.abs(spot.z) <= R.config.PLAYER.VOLLEY_Z && Math.abs(spot.z) >= R.config.DOUBLES.POACH_MIN_Z,
+    `and the spot stays inside the net zone, z=${spot && spot.z.toFixed(2)}`);
+
+  // 完全に頭上を越えていくロブには手を出さない（バウンドを待つ／後衛に任せる）
+  const lob = Object.assign(
+    { x: from.x, y: from.y, z: from.z, spin: 'flat', wind: 0, curve: 0, bounces: 0, age: 0.25 },
+    solveShot(from, { x: 0, y: R.config.PHYSICS.BALL_R, z: 10.5 }, 1.9, undefined, 'flat', 0),
+  );
+  ok(poachSpot(front, lob) === null, 'a lob over their head is not claimed as a poach');
+}
+
+// --- ダブルス雁行陣：仕掛けるポーチ（ストレートを守る位置から中央へ出ていける） ---
+// poachSpot() は「立っていれば触れる球」しか拾わないので、それだけではクロス展開で
+// サイドを守っている前衛は一生ポーチに出られない。poachRun() は走る時間を織り込む。
+{
+  const { poachRun, poachSpot } = R.ai;
+  const { solveShot } = R.physics;
+  const from = { x: 3, y: 1.0, z: -10 };
+  // 相手後衛(右)が左へクロスで打った球。前衛は右サイド(ストレート)を守って立っている。
+  const ball = Object.assign(
+    { x: from.x, y: from.y, z: from.z, spin: 'flat', wind: 0, curve: 0, bounces: 0, age: 0.05 },
+    solveShot(from, { x: -2.6, y: R.config.PHYSICS.BALL_R, z: 8.5 }, 1.0, undefined, 'flat', 0),
+  );
+  const front = { x: R.config.DOUBLES.FRONT_GUARD_X, z: R.config.DOUBLES.NET_Z_CPU };
+  ok(poachSpot(front, ball) === null,
+    'precondition: standing still on the line, the net player cannot touch the cross-court ball');
+  const run = poachRun(ball, front, 1);
+  ok(run && run.x < 0, `but reading it early they can run across and cut it off, got ${JSON.stringify(run)}`);
+  ok(run && run.z > 0 && Math.abs(run.z) <= R.config.PLAYER.VOLLEY_Z,
+    `and the interception stays in the net zone, z=${run && run.z.toFixed(2)}`);
+
+  // 走っても間に合わない球には仕掛けない（出ていって抜かれる最悪の形を避ける）
+  const fast = Object.assign(
+    { x: from.x, y: from.y, z: from.z, spin: 'flat', wind: 0, curve: 0, bounces: 0, age: 0.05 },
+    solveShot(from, { x: -4.6, y: R.config.PHYSICS.BALL_R, z: 9.5 }, 0.42, undefined, 'flat', 0),
+  );
+  ok(poachRun(fast, front, 1) === null, 'a ball it cannot reach in time is not chased');
+  // もうバウンドした球はポーチではない
+  ok(poachRun({ ...ball, bounces: 1 }, front, 1) === null, 'a ball that already bounced is not a poach');
+}
+
+// --- ダブルス雁行陣：どちらが取りにいくか（前衛が下がりすぎて陣形が崩れない） ---
+{
+  const { pairResponder } = R.ai;
+  const { solveShot } = R.physics;
+  const back = { x: 0, z: 10.9 };
+  const front = { x: 2.0, z: 1.8 };
+  const from = { x: 0, y: 1.0, z: -10 };
+  const shot = (tx, tz, flight) => Object.assign(
+    { x: from.x, y: from.y, z: from.z, spin: 'flat', wind: 0, curve: 0, bounces: 0, age: 0.25 },
+    solveShot(from, { x: tx, y: R.config.PHYSICS.BALL_R, z: tz }, flight, undefined, 'flat', 0),
+  );
+  // 深い展開球は後衛の持ち場。前衛の近くを通っても（通過点が高すぎて触れないなら）出ていかない
+  ok(pairResponder(back, front, shot(-3, 9.5, 1.0)) === 'back',
+    'a deep ball to the open side is the baseliner\'s ball');
+  // ネット際に落ちる短い球は前衛の持ち場（後衛をわざわざ走らせない）
+  ok(pairResponder(back, front, shot(2.5, 2.2, 0.75)) === 'front',
+    'a short ball in front of the net player is the net player\'s ball');
+}
+
+// --- ダブルス雁行陣：前衛がポーチに出ている間、後衛はベースライン付近で開ける ---
+// (退行テスト: 以前は前衛がポーチに出ても後衛まで coverPosition()＝ネット際へ上がっており、
+//  前衛が触れなかったときに自陣の深いところががら空きになっていた)
+{
+  const { backPosition } = R.ai;
+  const { DOUBLES } = R.config;
+  const spot = backPosition(2.5, 1);
+  ok(spot.z > R.config.CPU.NET_Z,
+    `the baseliner stays back while the partner poaches, z=${spot.z.toFixed(2)}`);
+  ok(spot.x < 0, `and opens the side the poacher left, x=${spot.x.toFixed(2)}`);
+  ok(backPosition(2.5, -1).z === -spot.z, 'the you-side mirror stays on its own side');
+}
+
+// --- ダブルス：ネット際の相手の「目の前を横切る」ボレーを打たない ---
+// (退行テスト: 通常の cpuVolleyShot() は相手の逆サイドを狙う。相手もネット際にいる場面では
+//  その球が相手の真ん前を至近距離で通ることになり、反応時間0.2秒足らずでボレーを打ち返され
+//  続ける——「前衛同士のボレー合戦」というユーザー報告——の原因になっていた)
+{
+  const { doublesVolleyShot, doublesSmashShot } = R.ai;
+  // 自分は you 陣地のネット際(z=-1.5)、相手はその向かいのネット際(z=+1.5)。
+  // 打った球が相手の深さを通過するときの横位置を直線近似で求め、相手からどれだけ
+  // 離れているかを見る（ボレーもスマッシュも、離れているほど「横切っていない」）。
+  const FROM_Z = -1.5; const FOE_Z = 1.5;
+  const TOO_CLOSE = PLAYER.CPU_BLIND_REACH * 3;
+  const crossX = (fromX, shot) => fromX
+    + (shot.target.x - fromX) * ((FOE_Z - FROM_Z) / (shot.target.z - FROM_Z));
+  const run = (make, fromX, foeX) => {
+    const foe = { x: foeX, z: FOE_Z };
+    const back = { x: -foeX, z: 10.0 };
+    let crossed = 0; let lobs = 0; let clear = 0; let worst = Infinity;
+    for (let i = 0; i < 2000; i++) {
+      const shot = make(foe, back, fromX);
+      if (shot.lob) { lobs++; continue; }
+      ok(shot.target.z > 0, 'the shot still goes into the opponent half');
+      // わざとラインを割る1本（scatterOut）はコートの外へ飛ばす「ミス」なので、狙いの
+      // 評価からは外す（ミス球が相手の近くを通るのは現実どおり）。
+      if (Math.abs(shot.target.z) > HALF_L || Math.abs(shot.target.x) > COURT.DW / 2) continue;
+      const gap = Math.abs(crossX(fromX, shot) - foeX);
+      worst = Math.min(worst, gap);
+      // 至近距離で届く範囲（PLAYER.CPU_BLIND_REACH）より十分に外していれば「横切っていない」
+      if (gap < TOO_CLOSE) crossed++; else clear++;
+    }
+    return { crossed, lobs, clear, worst };
+  };
+  const volley = (foe, back, fromX) => doublesVolleyShot(foe, back, fromX, 1, 0, 1.6);
+  const smash = (foe, back, fromX) => doublesSmashShot(foe, back, fromX, 1, 0);
+
+  // 相手が中央寄りに立っている＝外側に抜くスペースがある
+  const open = run(volley, 1.8, 0.6);
+  ok(open.crossed === 0,
+    `the volley never passes within a racket of the net player: crossed=${open.crossed}, closest=${open.worst.toFixed(2)}m`);
+  ok(open.clear > 0 && open.lobs === 0,
+    `and it is played past them rather than lobbed when there is room: clear=${open.clear} lobs=${open.lobs}`);
+
+  // 前衛同士が真正面で向かい合う（同じ横位置）。ここで中央側へ逃がすと相手の x を
+  // そのまま通過してしまうので、サイドライン側へ抜ける必要がある。
+  const face = run(volley, 1.9, 1.9);
+  ok(face.crossed === 0 && face.lobs === 0,
+    `face to face it still goes outside them: crossed=${face.crossed} lobs=${face.lobs} closest=${face.worst.toFixed(2)}m`);
+
+  // スマッシュも同じ（ネット際から打つスマッシュが相手の真ん前を通らない）
+  const sm = run(smash, 1.9, 1.9);
+  ok(sm.crossed === 0,
+    `the same holds for a smash from the net: crossed=${sm.crossed}, closest=${sm.worst.toFixed(2)}m`);
+
+  // 相手がサイドライン際を締めていて、自分はさらにその外＝横に抜く隙間が残っていない。
+  // ボレーはこのときだけ頭を越す（ロブボレー）。
+  const shut = run(volley, 5.0, 4.2);
+  ok(shut.lobs === 2000,
+    `with the line shut off the volley goes over their head instead: lobs=${shut.lobs}/2000`);
+  // スマッシュを打った後にロブへ切り替えるのは形として不自然なので、そちらは従来の狙いに戻る
+  ok(run(smash, 5.0, 4.2).lobs === 0, 'a smash never turns into a lob');
+
+  // 左右を入れ替えても同じ（符号だけの対称）
+  const mirrored = run(volley, -1.8, -0.6);
+  ok(mirrored.crossed === 0 && mirrored.lobs === 0, 'the mirrored case behaves the same');
+}
+
+// --- ダブルス：向かいのネット際から打たれた球は、反応が間に合わず返せない ---
+// (退行テスト: 反応時間の下限が CPU_REFLEX_REACH(0.53m) 止まりだったため、3mほどの至近距離で
+//  打たれた球にも届いてしまい、前衛同士がボレーを打ち合い続けていた＝ユーザー報告)
+{
+  const { DOUBLES, PLAYER, PHYSICS } = R.config;
+  const netToNet = (age) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(true);
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    Object.assign(g.cpuMate, { x: 0, z: DOUBLES.NET_Z_CPU });
+    Object.assign(g.cpu, { x: 0, z: HALF_L - 0.5 });
+    // 0.4m 横をかすめて通る球。立っていれば触れる距離だが、反応する時間があるかどうか。
+    Object.assign(g.ball, {
+      x: 0.4, y: 1.2, z: DOUBLES.NET_Z_CPU, px: 0.4, py: 1.2, pz: DOUBLES.NET_Z_CPU,
+      vx: 0, vy: 0, vz: 9, bounces: 0, last: 'you', live: true, age, wind: 0, spin: 'flat',
+    });
+    g.checkSwings();
+    return g.ball.last === 'cpu';
+  };
+  ok(netToNet(0.15) === false,
+    'a ball struck from the opposite net position goes past before they can move');
+  ok(netToNet(0.9) === true,
+    'the same ball played from the baseline gives them time to reach it');
+}
+
+// --- ダブルス雁行陣：後衛の配球は「前衛を避けてクロス、隙があればストレートを抜く」 ---
+{
+  const { doublesRallyShot } = R.ai;
+  const { DOUBLES } = R.config;
+  const back = { x: -3, z: 10.5 };
+  const run = (frontX, stretch) => {
+    const front = { x: frontX, z: 1.8 };
+    let cross = 0; let pass = 0; let lob = 0;
+    for (let i = 0; i < 4000; i++) {
+      const shot = doublesRallyShot(front, back, -1, stretch, 1, 1);
+      if (shot.lob) lob++;
+      else if (Math.sign(shot.target.x) === Math.sign(frontX) && Math.abs(shot.target.x) > 2.5) pass++;
+      else cross++;
+      ok(shot.target.z < 0, 'doubles rally shot always aims into the opponent half');
+    }
+    return { cross, pass, lob };
+  };
+  // 前衛がサイドを締めている（ストレートに隙がない）＝ほぼクロス一辺倒
+  const tight = run(3.2, 0);
+  ok(tight.cross > tight.pass * 6,
+    `a net player covering the line is played cross-court: cross=${tight.cross} pass=${tight.pass}`);
+  // 前衛が中央へ寄ってポーチを狙っている＝ストレートのパッシングが増える
+  const loose = run(0.6, 0);
+  ok(loose.pass > tight.pass * 3,
+    `a net player leaning to the middle gets passed down the line more: ${tight.pass} -> ${loose.pass}`);
+  ok(loose.cross > loose.pass,
+    `but cross-court stays the staple: cross=${loose.cross} pass=${loose.pass}`);
+  // 走らされているときは抜きにいかない（無理をしない）
+  ok(run(0.6, 1).pass === 0, 'a stretched baseliner never tries the pass');
+}
+
 // --- ダブルス：chasePosition(ball, side) は side=-1 のとき自陣(z<0)側に鏡映しになる ---
 // (退行テスト: side を渡さないと常に cpu 陣地(z>0)基準の値を返していたため、
 //  youMate が you 陣地の落下点を追うときにネットの向こう側へ寄ってしまうバグがあった)
@@ -2727,6 +2972,74 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `the order reaches the chase itself: net z=${zNet.toFixed(2)} vs back z=${zBack.toFixed(2)}`);
   ok(zNet > -COURT.SERVICE && Math.abs(zNet - rush.z) < 0.01,
     `and without it the partner really does run to the smash spot, got z=${zNet.toFixed(2)}`);
+}
+
+// --- ダブルス雁行陣：展開が変わると CPU の前衛が実際に立ち位置を変える（moveDoublesTeams 経由） ---
+{
+  const { DOUBLES } = R.config;
+  // you 陣地の後衛（人間）を左右に置き分けて、cpu の前衛(cpuMate)がどちらへ構えるか見る。
+  // cpu（味方後衛）は右(+x)固定なので、人間も右＝ストレート展開／人間が左＝クロス展開。
+  const stance = (youX) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(true);
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.ball.last = 'cpu'; // cpu チームが打った直後＝前衛は構えに戻るだけ（追わない）
+    Object.assign(g.ball, { x: 0, y: 1.2, z: -2, vx: 0, vy: 1, vz: -6, bounces: 0, age: 0.2, live: true });
+    g.you.x = youX; g.you.z = -10.5;
+    g.youMate.x = -youX; g.youMate.z = DOUBLES.NET_Z_YOU;
+    g.cpu.x = 3; g.cpu.z = 10.5;
+    g.cpuMate.x = 0; g.cpuMate.z = DOUBLES.NET_Z_CPU;
+    g.poachCommit.cpuMate = false;
+    for (let i = 0; i < 240; i++) {
+      g.poachCommit.cpuMate = false; // ここで見たいのは「仕掛けない」ときの構え
+      // 後衛たちは展開そのものなので固定する（放っておくと両者ともセンターへ戻ってしまい、
+      // 「クロスかストレートか」自体が消えてしまう）
+      g.cpu.x = 3; g.cpu.z = 10.5;
+      g.you.x = youX; g.you.z = -10.5;
+      g.moveDoublesTeams(1 / 60);
+    }
+    return { x: g.cpuMate.x, z: g.cpuMate.z };
+  };
+  const straight = stance(3);   // 人間も cpu も +x 側＝ストレート展開
+  const cross = stance(-3);     // 人間が -x 側＝クロス展開
+  ok(straight.x > 0 && straight.x >= DOUBLES.FRONT_LEAN_X - 0.1,
+    `straight rally: the CPU net player steps past the middle onto the rally side, x=${straight.x.toFixed(2)}`);
+  ok(cross.x < 0 && Math.abs(cross.x) >= DOUBLES.FRONT_GUARD_X - 0.1,
+    `cross rally: it moves over to guard the line instead, x=${cross.x.toFixed(2)}`);
+  ok(straight.z < cross.z,
+    `and stands closer to the net on the straight pattern, z=${straight.z.toFixed(2)} vs ${cross.z.toFixed(2)}`);
+}
+
+// --- ダブルス雁行陣：CPU の後衛は相手の前衛を避けて打つ ---
+// (退行テスト: 以前は常に「相手チームの主力(you)」の逆をつくだけで、相手前衛がどこに
+//  立っていようと配球が変わらず、ネット際の前衛へ自分から打ち込んでいた)
+{
+  const aimSides = (frontX) => {
+    let towardFront = 0; let away = 0;
+    for (let i = 0; i < 300; i++) {
+      const g = new R.Game({ input: fakeInput, hooks: noHooks });
+      g.start(true);
+      g.phase = 'rally';
+      g.serveInFlight = false;
+      // you チームは雁行（前衛がネット際・後衛が深く）。cpu の後衛がこれから打つ。
+      g.you.x = frontX; g.you.z = R.config.DOUBLES.NET_Z_YOU;
+      g.youMate.x = -frontX * 0.5; g.youMate.z = -10.5;
+      g.cpu.x = 0; g.cpu.z = 9.5;
+      Object.assign(g.ball, {
+        x: 0, y: 1.0, z: 9.5, vx: 0, vy: 0, vz: 0, bounces: 1, age: 1.2, live: true, last: 'you',
+      });
+      g.hit('cpu');
+      if (Math.sign(g.ball.vx) === Math.sign(frontX)) towardFront++; else away++;
+    }
+    return { towardFront, away };
+  };
+  const right = aimSides(3.0);
+  ok(right.away > right.towardFront * 3,
+    `the CPU baseliner plays away from the net player: away=${right.away} toward=${right.towardFront}`);
+  const left = aimSides(-3.0);
+  ok(left.away > left.towardFront * 3,
+    `and the same with the net player on the other side: away=${left.away} toward=${left.towardFront}`);
 }
 
 // --- ダブルス：フルマッチのシミュレーション（フリーズ・タイマーリークがないか） ---
@@ -3765,15 +4078,22 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const DOUBLES = R.config.DOUBLES;
   const {
     CPU_REACH, CPU_REFLEX_REACH, CPU_REFLEX_T_MIN, CPU_REFLEX_T_MAX,
+    CPU_BLIND_REACH, CPU_BLIND_T,
   } = PLAYER;
 
-  ok(reactReach(0) === CPU_REFLEX_REACH, `no time at all leaves only the reflex reach, got ${reactReach(0)}`);
-  ok(reactReach(CPU_REFLEX_T_MIN) === CPU_REFLEX_REACH, 'at T_MIN it is still the reflex reach');
+  ok(reactReach(0) === CPU_BLIND_REACH, `no time at all leaves only a body block, got ${reactReach(0)}`);
+  ok(reactReach(CPU_BLIND_T) === CPU_BLIND_REACH, 'at the blind limit it is still only a body block');
+  ok(reactReach(CPU_REFLEX_T_MIN) === CPU_REFLEX_REACH, 'at T_MIN the reflex reach is back');
   ok(reactReach(CPU_REFLEX_T_MAX) === CPU_REACH, 'at T_MAX the full reach is available again');
   ok(reactReach(5) === CPU_REACH, 'plenty of time is still just the full reach (no bonus)');
-  ok(reactReach(undefined) === CPU_REFLEX_REACH, 'a ball with no age recorded is treated as the strictest case');
+  ok(reactReach(undefined) === CPU_BLIND_REACH, 'a ball with no age recorded is treated as the strictest case');
+  const blind = reactReach((CPU_BLIND_T + CPU_REFLEX_T_MIN) / 2);
+  ok(blind > CPU_BLIND_REACH && blind < CPU_REFLEX_REACH, `it ramps out of the blind zone, got ${blind}`);
   const mid = reactReach((CPU_REFLEX_T_MIN + CPU_REFLEX_T_MAX) / 2);
   ok(mid > CPU_REFLEX_REACH && mid < CPU_REACH, `it ramps in between, got ${mid}`);
+  // 至近距離のボレー（ネット際同士は 0.2 秒ほどで届く）は、体の正面しか触れない
+  ok(reactReach(0.17) < 0.3,
+    `a volley from the opposite net position leaves almost no reach, got ${reactReach(0.17)}`);
 
   // 実際の当たり判定：打たれた直後に届く球（＝スマッシュやネット際のボレー）は取りこぼす
   const netPlayerTry = (age) => {
