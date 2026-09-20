@@ -1881,6 +1881,56 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(g.you.charging === false, 'charging is cancelled when the toss resets');
 }
 
+// --- 溜めキーを押しっぱなしのままポイントをまたいでも、次のポイントで構えられる ---
+// this.you.charging は「キーが今も押されているか」そのものなので、ポイントが決まった
+// 瞬間（phase==='over'）にここを false へ落としてしまうと、キーは押されたままで
+// keydown が二度と来ない＝chargeStart() が呼ばれず、次のポイントで構えが出ないまま
+// 離しても chargeRelease() が素通りする、という手詰まりになっていた。
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(false, 'cpu'); // cpu のサーブ＝人間はレシーブ側
+  g.chargeStart('flat'); // サーブを待ちながらラケットを引く（押したまま離さない）
+  ok(g.you.charging === true, 'precondition: holding while waiting for the serve');
+
+  for (let i = 0; i < 60 * 30 && g.phase !== 'over'; i++) g.update(1 / 60);
+  ok(g.phase === 'over', 'precondition: the point finished');
+  ok(g.you.charging === true, 'the hold survives the end of the point (the key is still down)');
+  ok(g.you.chargeTime === 0, 'but the charge itself is emptied between points');
+
+  for (let i = 0; i < 60 * 30 && g.phase !== 'serve'; i++) g.update(1 / 60);
+  ok(g.phase === 'serve' && g.servingPlayer() !== 'you', 'precondition: waiting for the next serve');
+  for (let i = 0; i < 20; i++) g.update(1 / 60);
+  ok(g.you.charging === true, 'still holding into the next point');
+  ok(g.you.chargeTime > 0, `the takeback starts filling again, got ${g.you.chargeTime}`);
+  ok(g.you.prep !== null, `and the stance is shown again, got ${g.you.prep}`);
+
+  // サーブが来たら、握り直さずに離すだけで溜まったリターンが打てる
+  for (let i = 0; i < 60 * 10 && g.phase !== 'rally'; i++) g.update(1 / 60);
+  ok(g.phase === 'rally', 'precondition: the serve is on its way');
+  g.chargeRelease();
+  ok(g.you.swing > 0, 'releasing swings without having to re-press the key');
+  ok(g.you.swingCharge > 0, `and the swing carries a real charge, got ${g.you.swingCharge}`);
+}
+
+// --- フォールトのコール中に押し直しても、そのまま2本目の構えに入れる ---
+// chargeStart() が phase==='serve' しか見ていなかった頃は、この1.3秒の間に押すと
+// どこにも引っかからず、キーが押されたままなので握り直しになっていた。
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(false, 'cpu');
+  // 1本目をわざとロングにしてフォールトさせる
+  for (let i = 0; i < 60 * 60 && g.phase !== 'fault'; i++) {
+    g.update(1 / 60);
+    if (g.phase === 'rally' && g.serveInFlight) { g.ball.vz *= 1.8; g.ball.vy *= 1.3; }
+  }
+  ok(g.phase === 'fault', 'precondition: the first serve faulted');
+  g.chargeStart('flat');
+  ok(g.you.charging === true, 'pressing during the fault call arms the takeback');
+  for (let i = 0; i < 20; i++) g.update(1 / 60);
+  ok(g.you.chargeTime > 0, `and it fills while waiting for the second serve, got ${g.you.chargeTime}`);
+  ok(g.you.prep !== null, `the stance is shown during the fault call, got ${g.you.prep}`);
+}
+
 // --- サーブのコースを ←→ で打ち分けられる ---
 {
   const { AIM_WIDE_MIN, AIM_WIDE_MAX, AIM_T_MIN, AIM_T_MAX, AIM_BODY_MIN, AIM_BODY_MAX } = SERVE;

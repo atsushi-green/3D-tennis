@@ -17,7 +17,6 @@
 
 ### バグ（実測で再現を確認したもの）
 
-- [ ] S 溜めキーを押したまま次のポイントに入るとテイクバックが効かない — `tickCharge()` はポイントが決まった瞬間（`phase==='over'`）に `charging=false` にするが、キーは物理的に押されたままなので keydown が二度と来ない＝`chargeStart()` が呼ばれない。次のポイントで構えが出ず、離しても `chargeRelease()` が素通りする（実測で確認）。同じ理由で**フォールトのコール中（`phase==='fault'`）に押し直しても無効**——`chargeStart()` が `phase==='serve'` しか見ていないため、README が約束している「1本目がフォールトしても押したまま2本目を待てる」は*フォールト前から押していた場合しか*成立しない。受け入れ条件：キーを押しっぱなしのままポイントをまたいでも、次のサーブ待ちに入った時点で構えが復帰する（`input.js` が phase 遷移で押下状態を再送するか、`chargeStart()` を `'over'`/`'fault'` でも受け付けて `tickCharge()` 側で保留する）。
 - [ ] S `predictLanding()` の着地点が実際の着地点より常に進行方向へ行き過ぎる — `reflectBounce()` は `groundCrossing()` で本当の接地点へ補間するのに、`predictLanding()`／`predictApex()`／`predictBounceApex()` は**1コマ進めた後の座標をそのまま返す**。刻みが 1/120 秒なので速い球ほど進行方向へ行き過ぎ、実測で平均 8cm・最大 34cm、しかも常に外側へ偏る。`ai.chaseTarget()` の追跡目標と `dashUnreachable()`（縮地を出すかの判定）がこのぶんずれている。受け入れ条件：着地として返す座標を `groundCrossing()` 相当で補間し、`PHYSICS.STEP` 刻みの実物理と数 cm 以内で一致する（テストで差を測る）。
 
 ### 表示・ドキュメントのズレ

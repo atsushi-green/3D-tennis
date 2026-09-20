@@ -793,7 +793,14 @@
       // 「反応する→走る→押す→離す」を全部やる必要があった（＝レシーブが返せない一因）。
       // フォア/バックはボールがまだ静止していて決められないので、サーブが打たれた
       // 瞬間（serve()）に確定させる。
-      if (this.phase === 'serve' && !myServe) {
+      // 'serve' だけでなく 'fault'（1本目が外れてから2本目の構えに入るまで）と
+      // 'over'（ポイントが決まってから次のサーブ待ちに入るまで）も受け付ける：
+      // この1〜2秒の間に押してしまうと、以前はどこにも引っかからず握り直しになっていた
+      // （キーは押されたままなので keydown は二度と来ない）。tickCharge() 側で
+      // 実際に溜まり始めるのは 'serve'/'fault' になってからなので、ここで構えを
+      // 受け付けても「ポイント間に溜めておける」ことにはならない。
+      if (this.servingPlayer() !== 'you'
+        && (this.phase === 'serve' || this.phase === 'fault' || this.phase === 'over')) {
         this.you.charging = true;
         this.you.chargeTime = 0;
         this.you.chargeSpin = spin;
@@ -1247,7 +1254,21 @@
         && (this.phase === 'serve' || this.phase === 'fault');
       const validContext = this.phase === 'rally' || (myServe && this.tossActive) || waitingReturn;
       if (!validContext) {
-        this.you.charging = false;
+        // 自分のサーブでトスが流れた（＝上げたまま離さずに落としてしまった）ときだけは、
+        // 押しっぱなしを解除する。この場面で押し直すことには「もう一度トスを上げる」と
+        // いう意味があるので、握ったままの状態を残しても使い道がない。
+        if (myServe) {
+          this.you.charging = false;
+          return;
+        }
+        // それ以外（ポイント間＝phase 'over' など）では **charging を落とさない**：
+        // this.you.charging は「溜めキーが今も押されているか」そのものなので、ここで
+        // false にすると、押しっぱなしのままポイントをまたいだときに二度と戻せなくなる
+        // （キーは押されたままなので keydown が来ない＝chargeStart() が呼ばれない）。
+        // 実際そうなっていて、ポイント間ずっと握っていた人は次のポイントで構えが出ず、
+        // 離しても chargeRelease() が素通りしていた。溜めだけを0に戻して、打てる場面に
+        // 入ったところ（次のサーブ待ち）から改めて溜め直させる。
+        this.you.chargeTime = 0;
         return;
       }
       if (myServe) {
