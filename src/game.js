@@ -22,7 +22,7 @@
     pairResponder, poachRun, frontPosition, backPosition,
     doublesRallyShot, doublesVolleyShot, doublesSmashShot,
   } = RallyOne.ai;
-  const { Match } = RallyOne.scoring;
+  const { Match, pointStakes } = RallyOne.scoring;
 
   const { BALL_R, STEP } = PHYSICS;
 
@@ -438,11 +438,15 @@
    * - firstServes   打った1本目のサーブの数／firstServeIn はそのうちサービスボックスに入った数
    * - maxServeKmh   そのマッチでいちばん速かったサーブの初速
    * - specials      決めた必殺技の回数（難易度 Hard では CPU/AI 側も増える。SPECIAL.AI 参照）
+   * - breakPoints   自分がレシーブ側で「あと1点でそのゲームを取れる」状態だった回数
+   *                 （＝ブレークのチャンス）／breaksWon はそのうち実際に取った回数。
+   *                 タイブレークは数えない（scoring.pointStakes() 参照）
    */
   function teamStats() {
     const blank = () => ({
       aces: 0, doubleFaults: 0, points: 0, winners: 0, unforced: 0,
       firstServes: 0, firstServeIn: 0, maxServeKmh: 0, specials: 0,
+      breakPoints: 0, breaksWon: 0,
     });
     return { you: blank(), cpu: blank() };
   }
@@ -553,6 +557,12 @@
        * newPoint() で毎ポイント消す。
        */
       this.lastShotBy = { you: null, cpu: null };
+      /**
+       * 次の1点に何がかかっているか（scoring.pointStakes() の結果。かかっていなければ null）。
+       * beginServe() で毎ポイント決め直し、ポイントが決まった時点（endPoint）で消す。
+       * 表示（スコアボードの見出し）とスタッツ（ブレークポイントの本数）の両方がここを読む。
+       */
+      this.stakes = null;
       /** このポイントで何本打たれたか（サーブも1本に数える）。beginServe() で数え直す。 */
       this.rallyShots = 0;
       /**
@@ -1389,6 +1399,10 @@
       this.serveInFlight = false;
       this.cpuNetRush = false;
       this.rallyShots = 0; // このサーブ（フォールトからのやり直しも含む）から数え直す
+      // この1点に何がかかっているか（ブレークポイント／セットポイント）。スコアと
+      // サーバーだけで決まる＝ポイント中は変わらないので、ここで一度だけ求める
+      // （セカンドサーブでもう一度通っても同じ結果になる）。
+      this.stakes = pointStakes(this.match, this.server);
 
       const ball = this.ball;
       ball.live = false;
@@ -2369,7 +2383,20 @@
       const outcome = reason === 'ダブルフォルト' ? 'doubleFault'
         : isAce ? 'ace'
           : reason === 'ツーバウンド' ? 'winner' : 'error';
-      this.hooks.sound('point', winner, outcome, this.rallyShots);
+      // かかっていた1点（ブレークポイント／セットポイント）は、取っても凌いでも
+      // 観客の沸き方が変わる。取った＝その技の見出しそのまま、凌いだ＝'saved'。
+      const stakes = this.stakes;
+      const stakeKey = !stakes ? null : (stakes.team === winner ? stakes.kind : 'saved');
+      this.hooks.sound('point', winner, outcome, this.rallyShots, stakeKey);
+
+      // ブレークポイントの本数（スタッツ画面用）。チャンスを持っていたのはレシーブ側で、
+      // 実際に取れたかどうかで converted を分ける（実際のテニスの「3/5」と同じ数え方）。
+      if (stakes && stakes.breakPoint) {
+        this.stats[stakes.team].breakPoints++;
+        if (stakes.team === winner) this.stats[stakes.team].breaksWon++;
+      }
+      // 決着した1点なので、この先（リプレイ中も含めて）見出しは出しっぱなしにしない。
+      this.stakes = null;
 
       // 試合後のスタッツ画面（matchSummary()）のための集計。決まり方（outcome）はもう
       // 出してあるので、それをそのまま「決め球で取った(winners)」「相手のミスで取った
@@ -2427,8 +2454,10 @@
       // 「ツーバウンド」は判定としては正しいが表現として味気ないので、実況らしく言い換える：
       // サーブが一度も触れられずに決まったなら「エース！」、ラリー中の決定打なら「ウィナー！」。
       const twoBounceCall = isAce ? 'エース！' : 'ウィナー！';
+      // ブレークで取ったゲームはそう言う（サーブを持っていない側が取った＝試合が動く1ゲーム）。
+      const broke = stakes && stakes.breakPoint && stakes.team === winner;
       const sub = result.type === 'game'
-        ? `ゲーム — ${mine ? 'YOU' : 'CPU'}${result.tiebreak ? '（6-6 タイブレーク！）' : ''}`
+        ? `ゲーム — ${mine ? 'YOU' : 'CPU'}${broke ? '（ブレーク！）' : ''}${result.tiebreak ? '（6-6 タイブレーク！）' : ''}`
         : reason === 'ツーバウンド' ? twoBounceCall : reason;
       // 取った側がこのポイントで最後に放ったショット（決め球、または相手のミスを誘った球）。
       // 相手のネット／アウトで決まった場合は「その1本前に自分が打った球」になる。

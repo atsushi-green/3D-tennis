@@ -259,6 +259,7 @@
       hud.setCharge(game.chargeMeter(), game.isServeCharging(), !!(armed && armed.move));
       hud.setSpecialTip(armed);
       hud.setSpecialUses(game.specials, game.specialUses);
+      hud.setStakes(game.stakes);
       hud.setSmashTip(game.smashHint);
       hud.setSwingGuide(game.swingGuide, game.you.x);
       syncStamina();

@@ -159,8 +159,11 @@
    * @param {number} rallyShots このポイントで何本打たれたか（サーブも1本）
    * @param {'ace'|'winner'|'error'|'doubleFault'} outcome 決まり方
    * @param {'you'|'cpu'} winner 取った側
+   * @param {'set'|'break'|'game'|'saved'|null} [stake] その1点に何がかかっていたか
+   *   （scoring.pointStakes()）。決めた側から見た意味で、'saved' は「かけられていた側が
+   *   凌いだ」。null（ふつうの1点）なら倍率1＝従来とまったく同じ音になる。
    */
-  function crowd(rallyShots, outcome, winner) {
+  function crowd(rallyShots, outcome, winner, stake) {
     const ac = context();
     if (!ac) return;
     try {
@@ -170,9 +173,11 @@
       const excitement = clamp((Math.max(1, rallyShots || 1) - 1) / (C.EXCITEMENT_SHOTS - 1), 0, 1);
       const sideVol = C.WINNER_VOL_MULT[winner] === undefined ? 1 : C.WINNER_VOL_MULT[winner];
       const sideHz = C.WINNER_FILTER_MULT[winner] === undefined ? 1 : C.WINNER_FILTER_MULT[winner];
-      const dur = jDur(lerp(C.BASE_DUR, C.MAX_DUR, excitement));
+      const stakeVol = (stake && C.STAKE_VOL_MULT[stake]) || 1;
+      const stakeDur = (stake && C.STAKE_DUR_MULT[stake]) || 1;
+      const dur = jDur(lerp(C.BASE_DUR, C.MAX_DUR, excitement) * stakeDur);
       const vol = jVol(lerp(C.BASE_VOL, C.MAX_VOL, excitement)
-        * (C.OUTCOME_VOL_MULT[outcome] || 1) * sideVol);
+        * (C.OUTCOME_VOL_MULT[outcome] || 1) * sideVol * stakeVol);
       const freq = lerp(C.FILTER_BASE_HZ, C.FILTER_EXCITED_HZ, excitement) * sideHz;
 
       const buffer = noiseBuffer(ac);
@@ -191,7 +196,7 @@
       // 拍手。粒ごとに開始時刻をずらすことで、揃った1発ではなくパチパチとばらける。
       const P = C.CLAP;
       const claps = Math.round(lerp(P.MIN, P.MAX, excitement)
-        * (C.OUTCOME_VOL_MULT[outcome] || 1) * sideVol);
+        * (C.OUTCOME_VOL_MULT[outcome] || 1) * sideVol * stakeVol);
       for (let i = 0; i < claps; i++) {
         noiseVoice(ac, {
           type: 'highpass',
@@ -298,7 +303,7 @@
      * 浮いて聞こえるようになったため廃止した（config.js の CROWD.WINNER_VOL_MULT
      * のコメント参照）。今は歓声と拍手の大きさ・明るさだけで勝敗が分かる。
      */
-    point: (winner, outcome, rallyShots) => crowd(rallyShots, outcome, winner),
+    point: (winner, outcome, rallyShots, stake) => crowd(rallyShots, outcome, winner, stake),
   };
 
   RallyOne.audio = { unlock, sfx };

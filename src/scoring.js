@@ -92,7 +92,70 @@
       }
       return { type: 'game', winner };
     }
+
+    /**
+     * awardPoint(winner) が「何を返すか」だけを、スコアを進めずに覗く。
+     * 次の1点に何がかかっているか（pointStakes）を、ルールを書き写さずに求めるための足場。
+     * 実際に awardPoint() を通して結果だけ持ち帰り、触った状態は元に戻す＝デュース・
+     * アドバンテージ・6-6のタイブレーク入り・タイブレークの2点差、といった条件が
+     * 将来変わっても、判定がここだけ取り残されることがない。
+     * @param {'you'|'cpu'} winner
+     * @returns {{type:'point'|'game'|'set', winner:'you'|'cpu', tiebreak?:boolean}}
+     */
+    peek(winner) {
+      const before = {
+        points: { ...this.points },
+        games: { ...this.games },
+        tiebreak: this.tiebreak,
+        tiebreakPoints: { ...this.tiebreakPoints },
+      };
+      const result = this.awardPoint(winner);
+      Object.assign(this, before);
+      return result;
+    }
   }
 
-  RallyOne.scoring = { POINT_LABELS, pointLabel, Match };
+  /** kind → 画面に出す呼び名。 */
+  const STAKE_LABELS = {
+    set: 'セットポイント',
+    break: 'ブレークポイント',
+    game: 'ゲームポイント',
+  };
+
+  /**
+   * 次の1点に何がかかっているか（かかっていなければ null）。
+   *
+   * 1点でゲームが決まるのは多くても片側だけ（40-40 では両者とも決まらない）なので、
+   * 両方を peek() して先に見つかった方を返せばよい。セットまで決まるなら
+   * 「セットポイント」が最大の見出しで、そうでなければサーバー側なら「ゲームポイント」、
+   * レシーブ側なら「ブレークポイント」。
+   *
+   * breakPoint はスタッツ用の別の旗で、見出しが「セットポイント」でも、それが
+   * レシーブ側の1点ならブレークのチャンスとして数える（実際のテニスのスタッツと同じ）。
+   * タイブレーク中は数えない（サーブが2本ごとに回るので「ブレーク」の意味が変わるため）。
+   *
+   * @param {Match} match
+   * @param {'you'|'cpu'} server いまサーブしている側
+   * @returns {{team:'you'|'cpu', kind:'set'|'break'|'game', label:string,
+   *   breakPoint:boolean}|null}
+   */
+  function pointStakes(match, server) {
+    const receiver = server === 'you' ? 'cpu' : 'you';
+    for (const team of [server, receiver]) {
+      const result = match.peek(team);
+      if (result.type === 'point') continue;
+      const kind = result.type === 'set' ? 'set' : (team === server ? 'game' : 'break');
+      return {
+        team,
+        kind,
+        label: STAKE_LABELS[kind],
+        breakPoint: team !== server && !match.tiebreak,
+      };
+    }
+    return null;
+  }
+
+  RallyOne.scoring = {
+    POINT_LABELS, pointLabel, Match, pointStakes, STAKE_LABELS,
+  };
 })(window.RallyOne = window.RallyOne || {});

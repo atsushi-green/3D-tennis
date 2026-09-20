@@ -96,6 +96,58 @@ ok(pointLabel(3, 3) === '40' && pointLabel(4, 3) === 'Ad' && pointLabel(3, 4) ==
   ok(m.serveSide === -1, `after 2 tiebreak points, the serve side flips back, got ${m.serveSide}`);
 }
 
+// --- ブレークポイント／ゲームポイント／セットポイントの判定（scoring.pointStakes） ---
+{
+  const { pointStakes } = R.scoring;
+  /** 判定結果を「呼び名(取れば決まる側) bp=ブレークのチャンスか」の1行に畳む */
+  const at = (setup, server) => {
+    const m = new Match();
+    Object.assign(m, setup);
+    const s = pointStakes(m, server);
+    return s ? `${s.label}(${s.team}) bp=${s.breakPoint}` : 'なし';
+  };
+  const g = (you, cpu) => ({ games: { you, cpu } });
+
+  ok(at({ points: { you: 3, cpu: 0 } }, 'you') === 'ゲームポイント(you) bp=false',
+    `40-0 on serve is a game point, got ${at({ points: { you: 3, cpu: 0 } }, 'you')}`);
+  ok(at({ points: { you: 0, cpu: 3 } }, 'you') === 'ブレークポイント(cpu) bp=true',
+    `0-40 on serve is a break point for the receiver, got ${at({ points: { you: 0, cpu: 3 } }, 'you')}`);
+  ok(at({ points: { you: 3, cpu: 3 } }, 'you') === 'なし', 'deuce has nothing riding on it');
+  ok(at({ points: { you: 4, cpu: 3 } }, 'you') === 'ゲームポイント(you) bp=false', 'advantage on serve is a game point');
+  ok(at({ points: { you: 3, cpu: 4 } }, 'you') === 'ブレークポイント(cpu) bp=true', 'advantage against serve is a break point');
+  ok(at({ points: { you: 2, cpu: 0 } }, 'you') === 'なし', '30-0 is not a game point yet');
+
+  // セットまで決まる1点は「セットポイント」が見出しになる
+  ok(at({ ...g(5, 0), points: { you: 3, cpu: 0 } }, 'you') === 'セットポイント(you) bp=false',
+    '5-0 40-0 on serve is a set point');
+  ok(at({ ...g(0, 5), points: { you: 0, cpu: 3 } }, 'you') === 'セットポイント(cpu) bp=true',
+    'a set point won by the receiver is still counted as a break chance');
+  // 5-6 で1ゲーム取っても 6-6＝タイブレークに入るだけ（セットは決まらない）
+  ok(at({ ...g(5, 6), points: { you: 3, cpu: 0 } }, 'you') === 'ゲームポイント(you) bp=false',
+    `5-6 40-0 only reaches 6-6 (a tiebreak), so it is not a set point yet, got ${at({ ...g(5, 6), points: { you: 3, cpu: 0 } }, 'you')}`);
+  ok(at({ ...g(6, 5), points: { you: 3, cpu: 0 } }, 'you') === 'セットポイント(you) bp=false',
+    '6-5 40-0 on serve is a set point (7-5 takes the set)');
+
+  // タイブレーク：取ればセットなので常にセットポイント。ブレークとしては数えない
+  const tb = { games: { you: 6, cpu: 6 }, tiebreak: true };
+  ok(at({ ...tb, tiebreakPoints: { you: 6, cpu: 3 } }, 'cpu') === 'セットポイント(you) bp=false',
+    'a tiebreak point to close it out is a set point, and never a break point');
+  ok(at({ ...tb, tiebreakPoints: { you: 5, cpu: 5 } }, 'you') === 'なし', '5-5 in a tiebreak has nothing riding on it');
+  ok(at({ ...tb, tiebreakPoints: { you: 6, cpu: 6 } }, 'you') === 'なし', '6-6 in a tiebreak needs a 2-point margin');
+
+  // peek() はスコアを一切進めない
+  {
+    const m = new Match();
+    m.points = { you: 3, cpu: 0 };
+    const snapshot = JSON.stringify([m.points, m.games, m.tiebreak, m.tiebreakPoints]);
+    ok(m.peek('you').type === 'game', 'peek reports what awardPoint would return');
+    ok(JSON.stringify([m.points, m.games, m.tiebreak, m.tiebreakPoints]) === snapshot,
+      'and peek leaves the score exactly as it was');
+    ok(m.awardPoint('you').type === 'game', 'awardPoint still works afterwards');
+    ok(m.games.you === 1, 'and it is the one that actually moves the score');
+  }
+}
+
 const {
   HALF_W, HALF_L, COURT, PLAYER, SERVE, BOUNDS,
 } = R.config;
@@ -103,6 +155,76 @@ const fakeInput = { moveX: 0, moveZ: 0, lob: false };
 const noHooks = {
   sound() {}, call() {}, clearCall() {}, score() {}, wind() {}, serveSpeed() {}, matchEnd() {},
 };
+
+// --- Game: 1点ごとに stakes が立ち、ブレークポイントがスタッツに乗る ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(false, 'you'); // 人間のサーブから
+  ok(g.stakes === null, '0-0 has nothing riding on it');
+
+  // 0-40 まで CPU に取らせる＝ブレークポイント
+  g.match.points = { you: 0, cpu: 2 };
+  g.endPoint('cpu', 'ツーバウンド'); // 0-40 になり、次のポイントの stakes が立つ
+  for (let i = 0; i < 60 * 5 && g.phase !== 'serve'; i++) g.update(1 / 60);
+  ok(!!g.stakes && g.stakes.kind === 'break' && g.stakes.team === 'cpu',
+    `0-40 on the human serve is a break point for the CPU, got ${JSON.stringify(g.stakes)}`);
+
+  // サーバーが凌ぐ＝チャンスは数えるが converted は増えない
+  g.endPoint('you', 'ツーバウンド');
+  ok(g.stats.cpu.breakPoints === 1 && g.stats.cpu.breaksWon === 0,
+    `a saved break point counts as a chance only, got ${g.stats.cpu.breakPoints}/${g.stats.cpu.breaksWon}`);
+  ok(g.stakes === null, 'the badge clears the moment the point is decided');
+
+  // 15-40 でもう一度ブレークポイント。今度は決める
+  for (let i = 0; i < 60 * 5 && g.phase !== 'serve'; i++) g.update(1 / 60);
+  ok(!!g.stakes && g.stakes.kind === 'break', 'precondition: 15-40 is another break point');
+  g.endPoint('cpu', 'ツーバウンド');
+  ok(g.stats.cpu.breakPoints === 2 && g.stats.cpu.breaksWon === 1,
+    `converting it counts both, got ${g.stats.cpu.breakPoints}/${g.stats.cpu.breaksWon}`);
+  ok(g.match.games.cpu === 1, 'precondition: the CPU actually broke');
+  ok(g.stats.you.breakPoints === 0, 'the serving side is not credited with a break chance');
+}
+
+// --- ブレークで取ったゲームはコールでそう言う／かかっていた1点は歓声も変わる ---
+{
+  const calls = [];
+  const sounds = [];
+  const hooks = {
+    ...noHooks,
+    call: (big, sub) => calls.push(`${big}|${sub || ''}`),
+    sound: (name, ...args) => sounds.push([name, ...args]),
+  };
+  const g = new R.Game({ input: fakeInput, hooks });
+  g.start(false, 'you');
+  g.match.points = { you: 0, cpu: 3 }; // 0-40＝ブレークポイント
+  g.beginServe();
+  ok(!!g.stakes && g.stakes.breakPoint, 'precondition: a break point is on');
+  calls.length = 0;
+  sounds.length = 0;
+  g.endPoint('cpu', 'ツーバウンド');
+  ok(calls.some((c) => c.includes('ブレーク！')), `the game call says it was a break, got ${JSON.stringify(calls)}`);
+  const point = sounds.find((sfx) => sfx[0] === 'point');
+  ok(!!point && point[4] === 'break',
+    `the crowd is told a break point was converted, got ${JSON.stringify(point)}`);
+
+  // 凌いだ側のときは 'saved'
+  const g2 = new R.Game({ input: fakeInput, hooks });
+  g2.start(false, 'you');
+  g2.match.points = { you: 0, cpu: 3 };
+  g2.beginServe();
+  sounds.length = 0;
+  g2.endPoint('you', 'ツーバウンド');
+  const saved = sounds.find((sfx) => sfx[0] === 'point');
+  ok(!!saved && saved[4] === 'saved', `saving it is told apart, got ${JSON.stringify(saved)}`);
+
+  // 何もかかっていない1点では従来どおり（null＝倍率1）
+  const g3 = new R.Game({ input: fakeInput, hooks });
+  g3.start(false, 'you');
+  sounds.length = 0;
+  g3.endPoint('you', 'ツーバウンド');
+  const plain = sounds.find((sfx) => sfx[0] === 'point');
+  ok(!!plain && plain[4] === null, `an ordinary point passes null, got ${JSON.stringify(plain)}`);
+}
 
 /**
  * ボールを「ちょうど (x, z) へ接地する1ステップ」の状態に置いてから bounce() を呼ぶ。
