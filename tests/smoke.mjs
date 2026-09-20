@@ -2295,6 +2295,54 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(g.cpu.x !== before.x || g.cpu.z !== before.z, 'cpu starts chasing once it has reacted');
 }
 
+// --- サーブにも必ず反応遅延が掛かる（前のポイントで最後に打ったのが誰であっても） ---
+// ball.last は beginServe() をまたいでも前のポイントの値のまま残る。以前は
+// lastBallOwnerSeen をラリー外でも更新していたため、「前のポイントの最後の打者」＝
+// 「次のサーバー」のときだけ owner が変化せず、そのサーブへの反応遅延が丸ごと
+// 飛んでいた（＝自分のミス／ウィナーで終えた次の自分のサーブでは CPU がノータイム
+// でリターンに動き出す）。どちらのケースでも同じだけ掛かることを見る。
+{
+  const { CPU_REACT } = R.config.PLAYER;
+  /** 人間のサーブを1本打たせて、そのときの cpu の反応遅延を返す（シングルス）。 */
+  const serveWith = (previousHitter) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(false, 'you');
+    g.ball.last = previousHitter; // 前のポイントの名残
+    g.lastBallOwnerSeen = null;
+    for (let i = 0; i < 10; i++) g.update(1 / 60); // サーブ待ちのフレーム
+    g.chargeStart('flat');
+    g.you.chargeTime = 0.5;
+    for (let i = 0; i < 5; i++) g.update(1 / 60); // トスが上がる
+    g.chargeRelease();
+    g.update(1 / 60);
+    return g;
+  };
+  const want = CPU_REACT * R.config.ATTRS.cpu.react;
+  const after = serveWith('you');
+  ok(after.phase === 'rally', `precondition: the serve went out, phase=${after.phase}`);
+  ok(Math.abs(after.reactTimers.cpu - want) < 1e-9,
+    `the previous point ending on a "you" shot still gives the CPU its reaction delay: `
+    + `${after.reactTimers.cpu} (want ${want})`);
+  ok(Math.abs(serveWith('cpu').reactTimers.cpu - want) < 1e-9,
+    'and so does a previous point that ended on a "cpu" shot (unchanged)');
+
+  // ダブルスも同じ：cpu チームがサーブするとき youMate に反応遅延が掛かる
+  const doublesServe = (previousHitter) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(true, 'cpu');
+    g.ball.last = previousHitter;
+    g.lastBallOwnerSeen = null;
+    for (let i = 0; i < 10; i++) g.update(1 / 60);
+    for (let guard = 0; g.phase === 'serve' && guard < 600; guard++) g.update(1 / 60);
+    return g.reactTimers.youMate;
+  };
+  const wantMate = CPU_REACT * R.config.ATTRS.youMate.react;
+  ok(Math.abs(doublesServe('cpu') - wantMate) < 1e-9,
+    `doubles: the receiving partner reacts late even when the serving team hit last, `
+    + `got ${doublesServe('cpu')} (want ${wantMate})`);
+  ok(Math.abs(doublesServe('you') - wantMate) < 1e-9, 'doubles: unchanged the other way round');
+}
+
 // --- タイブレーク：Game#endPoint() 経由でも、1本目はサーバーそのまま・以降は2ポイントごとに交代する ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });

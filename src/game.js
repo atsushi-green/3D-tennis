@@ -2704,8 +2704,19 @@
       this.recoverTimers.youMate = Math.max(0, this.recoverTimers.youMate - dt);
       this.recoverTimers.you = Math.max(0, this.recoverTimers.you - dt);
 
+      // ラリー外（サーブ待ち・フォールトのコール・ポイント間）では「打った側」を
+      // 覚えない。ball.last は beginServe() をまたいでも前のポイントの値のまま残るので、
+      // ここで覚えてしまうと「前のポイントで最後に打ったチーム」＝「次のサーバー」の
+      // ときだけ owner が変化せず、そのサーブに対する反応遅延が丸ごと飛んでいた
+      // （＝自分のミスやウィナーでポイントを終えた次の自分のサーブでは、CPU が
+      // ノータイムでリターンに動き出していた）。null に戻しておけば、サーブが打たれて
+      // phase が 'rally' になった最初のフレームで必ず「変化した」と見なされる。
+      if (this.phase !== 'rally') {
+        this.lastBallOwnerSeen = null;
+        return;
+      }
       const owner = this.ball.last;
-      if (this.phase === 'rally' && owner !== this.lastBallOwnerSeen) {
+      if (owner !== this.lastBallOwnerSeen) {
         // 能力値「リーチ・読み」が高い選手ほど反応遅延が短い（attr.react）。
         if (owner === 'you') {
           this.reactTimers.cpu = PLAYER.CPU_REACT * this.cpu.attr.react;
