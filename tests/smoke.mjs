@@ -2729,15 +2729,21 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const { solveShot } = R.physics;
   const from = { x: 3, y: 1.0, z: -10 };
   // 相手後衛(右)が左へクロスで打った球。前衛は右サイド(ストレート)を守って立っている。
+  // 狙いの横位置は PLAYER.CPU_CHASE で1秒ほどに走り切れる範囲にしてある（前衛の守備
+  // 位置 FRONT_GUARD_X=3.1 から 2〜3m の横移動＝現実のポーチの間合い）。ここをコート
+  // 半面ぶん（x=-2.6 など）にすると、ネット際を1秒で5m以上走れる足を前提にすることになる。
   const ball = Object.assign(
     { x: from.x, y: from.y, z: from.z, spin: 'flat', wind: 0, curve: 0, bounces: 0, age: 0.05 },
-    solveShot(from, { x: -2.6, y: R.config.PHYSICS.BALL_R, z: 8.5 }, 1.0, undefined, 'flat', 0),
+    solveShot(from, { x: -1.5, y: R.config.PHYSICS.BALL_R, z: 8.5 }, 1.0, undefined, 'flat', 0),
   );
   const front = { x: R.config.DOUBLES.FRONT_GUARD_X, z: R.config.DOUBLES.NET_Z_CPU };
   ok(poachSpot(front, ball) === null,
     'precondition: standing still on the line, the net player cannot touch the cross-court ball');
   const run = poachRun(ball, front, 1);
-  ok(run && run.x < 0, `but reading it early they can run across and cut it off, got ${JSON.stringify(run)}`);
+  // 「守っていた線を捨てて中央へ出ていける」ことが見たいので、絶対位置(x<0)ではなく
+  // 守備位置からどれだけ寄れたかで見る。
+  ok(run && run.x < front.x - 1,
+    `but reading it early they can run across and cut it off, got ${JSON.stringify(run)}`);
   ok(run && run.z > 0 && Math.abs(run.z) <= R.config.PLAYER.VOLLEY_Z,
     `and the interception stays in the net zone, z=${run && run.z.toFixed(2)}`);
 
@@ -3151,8 +3157,11 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   /** 落ちてくる途中の高いロブ（まだノーバウンド）。vz が大きいほど奥へ落ちる */
   const lob = (y, z, vz) => ({ x: 0, y, z, vx: 0, vy: 0, vz, bounces: 0, age: 0.3, spin: 'flat' });
 
-  // ネット際に落ちてくる短いロブ：指示が無ければ叩きに出るが、「下がれ」なら出ない
-  const short = lob(7, 1, -3);
+  // ネット際に落ちてくる短いロブ：指示が無ければ叩きに出るが、「下がれ」なら出ない。
+  // 高さは PLAYER.CPU_CHASE で z=-6 から打点まで走り着ける滞空時間になるよう取ってある
+  // （smashApproach() は dist/CPU_CHASE で「間に合うか」を見積もるので、足の速さを
+  // 変えるとこの前提も動く）。
+  const short = lob(9, 1, -3);
   const rush = smashApproach(short, mate(-6), -1);
   ok(rush && rush.z > -COURT.SERVICE,
     `precondition: without an order the partner runs up to smash a short lob, got ${rush && rush.z.toFixed(2)}`);
@@ -3176,14 +3185,18 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     g.phase = 'rally';
     g.serveInFlight = false;   // サーブリターン中はレシーバー固定なので、通常のラリーにする
     g.ball.last = 'cpu';
-    Object.assign(g.ball, { x: 0, y: 7, z: 1, vx: 0, vy: 0, vz: -3, bounces: 0, age: 0.3, live: true });
+    // 上の short とまったく同じロブを使う（別々に書くと、片方だけ直したときに静かにずれる）
+    Object.assign(g.ball, short, { live: true });
     g.you.x = -6; g.you.z = -11; // 人間は遠くへ置いて、この球の担当を youMate に回す
     g.youMate.x = 0; g.youMate.z = -6;
     g.reactTimers.youMate = 0;
     g.recoverTimers.youMate = 0;
     ok(g.doublesResponder('you') === 'youMate',
       `precondition: the partner is the one answering this lob (${formation})`);
-    for (let i = 0; i < 40; i++) g.moveDoublesTeams(1 / 60);
+    // 目標へ着き切るだけ回す。目標は動かないので着いたらそこで止まる＝多めに回して問題ない
+    // （frame 数をぎりぎりにすると PLAYER.CPU_CHASE を変えたとき「着く手前で打ち切った」
+    // だけで落ちる）。
+    for (let i = 0; i < 200; i++) g.moveDoublesTeams(1 / 60);
     return g.youMate.z;
   };
   const zNet = lobRally('net');
