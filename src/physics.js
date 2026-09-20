@@ -143,7 +143,7 @@
   }
 
   /**
-   * 落下地点の予測。CPU の追跡と着地マーカーが使う。
+   * 落下地点の予測。CPU の追跡（ai.chaseTarget）と縮地の「間に合うか」の判定が使う。
    * @returns {{x:number, z:number, t:number, net:boolean}} net=true ならネットまで届かない
    */
   function predictLanding(b, maxT) {
@@ -153,7 +153,7 @@
       px: b.x, py: b.y, pz: b.z,
       vx: b.vx, vy: b.vy, vz: b.vz,
       spin: b.spin, // スピンで実効重力が変わるので、予測にも同じ重力を使わないと着地点がずれる
-      // 風で流されるぶんも予測に織り込まないと、CPUの追跡・着地マーカーが実際とずれる
+      // 風で流されるぶんも予測に織り込まないと、CPU の追跡が実際の着地点とずれる
       wind: b.wind,
       curve: b.curve, // 打球の曲がり（バギーホイップ）。同じ理由で予測にも織り込む
     };

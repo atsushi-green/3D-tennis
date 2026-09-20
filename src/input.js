@@ -69,7 +69,8 @@
     }
 
     /**
-     * @param {{onStart:Function, onStartDoubles:Function, onChargeStart:Function,
+     * @param {{onStart:Function, onStartSingles:Function, onStartDoubles:Function,
+     *   onChargeStart:Function,
      *   onChargeRelease:Function, onFormationNet:Function, onFormationBack:Function,
      *   onSelectDifficulty:Function, onSelectSurface:Function, onSelectStyle:Function,
      *   onToggleGuide:Function, onCycleSpecials:Function,
@@ -87,7 +88,10 @@
             if (TOSS_KEYS[e.code]) handlers.onSelectToss(TOSS_KEYS[e.code]);
             return; // トスの結果待ちの間は、他の開始キーには反応しない
           }
-          if (e.code === 'KeyD') handlers.onStartDoubles();
+          // S / D は「その形式を選んでそのまま開始」。Space など他のキーは
+          // 「いま選ばれている形式で開始」なので、形式を指定したいときはこの2つを使う。
+          if (e.code === 'KeyS') handlers.onStartSingles();
+          else if (e.code === 'KeyD') handlers.onStartDoubles();
           else if (DIFFICULTY_KEYS[e.code]) handlers.onSelectDifficulty(DIFFICULTY_KEYS[e.code]);
           else if (SURFACE_KEYS[e.code]) handlers.onSelectSurface(SURFACE_KEYS[e.code]);
           else if (STYLE_KEYS[e.code]) handlers.onSelectStyle(STYLE_KEYS[e.code]);

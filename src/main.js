@@ -161,7 +161,12 @@
     isStarted: () => game.started,
     isAwaitingToss: () => awaitingToss,
     onStart: () => beginToss(doubles), // 何かキーを押したら、選んである形式で開始
-    // D は「ダブルスを選んでそのまま開始」。ボタンで選んでから開始するのと同じ結果になる。
+    // S / D は「その形式を選んでそのまま開始」。ボタンで選んでから開始するのと同じ結果になる
+    // （Space など他のキーは「いま選ばれている形式で開始」なので、形式の指定にはならない）。
+    onStartSingles: () => {
+      menu.onSelectMode(false);
+      beginToss(false);
+    },
     onStartDoubles: () => {
       menu.onSelectMode(true);
       beginToss(true);

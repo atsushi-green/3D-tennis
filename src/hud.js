@@ -36,7 +36,8 @@
     { label: 'ミス', value: (t) => ({ text: `${t.unforced}`, cmp: null }) },
     {
       label: '必殺技',
-      // 必殺技を使わない試合では行ごと出さない（CPU/AI は使わないので常に0）。
+      // どちらも0（＝誰も技を使わなかった試合／技を1つも選んでいない試合）なら行ごと出さない。
+      // Hard では CPU/AI 側も技を使うので、ここは人間ぶんだけを見るのでは足りない（SPECIAL.AI）。
       skipIfZero: true,
       value: (t) => ({ text: `${t.specials}`, cmp: t.specials }),
     },
