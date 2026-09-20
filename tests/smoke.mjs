@@ -3647,6 +3647,52 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(g.ball.wind === -0.4, `a groundstroke picks up the current point wind, got ${g.ball.wind}`);
 }
 
+// --- 予測の着地点が、実際に弾む座標とぴったり一致する ---
+// game.js の bounce() は reflectBounce() 経由で「本当の接地点」（groundCrossing で
+// 補間した座標）を使う。予測側がこれとずれると、CPU の追跡目標も縮地の「間に合うか」の
+// 判定も実際の打点から外れる。ずれの原因は2つあって向きが逆なので、片方だけ直すと
+// 打ち消しが消えてかえって悪化する（詳しくは physics.js の landedAt() のコメント）：
+//   ・コマ送り後の座標をそのまま返す（＝進行方向へ行き過ぎる）
+//   ・予測の刻みが実際の物理より粗い（＝準陰的オイラーの誤差 g·dt·t/2 で手前に落ちる）
+{
+  const { predictLanding, integrate, reflectBounce, hitsNet } = R.physics;
+  const { PHYSICS } = R.config;
+  const BALL_R = PHYSICS.BALL_R;
+  // 乱数を使わず、決まった弾道を並べて回す（毎回同じ結果になるように）
+  const realBounce = (b) => {
+    const s = { ...b };
+    for (let t = 0; t < 5; t += PHYSICS.STEP) {
+      integrate(s, PHYSICS.STEP);
+      if (hitsNet(s)) return null;
+      if (s.y <= BALL_R && s.vy < 0) { reflectBounce(s); return { x: s.x, z: s.z }; }
+    }
+    return null;
+  };
+  let worst = 0;
+  let checked = 0;
+  for (const speed of [18, 28, 38, 48, 58]) {
+    for (const ang of [-0.04, 0.05, 0.14, 0.25, 0.4]) {
+      for (const spin of ['flat', 'top', 'slice']) {
+        const b = {
+          x: 1.2, y: 1.4, z: -10.5, px: 1.2, py: 1.4, pz: -10.5,
+          vx: 2.1, vy: speed * Math.sin(ang), vz: speed * Math.cos(ang),
+          spin, wind: 0.3, curve: 0, bounces: 0,
+        };
+        const real = realBounce({ ...b });
+        const predicted = predictLanding({ ...b });
+        if (!real || predicted.net) continue;
+        checked++;
+        worst = Math.max(worst, Math.hypot(predicted.x - real.x, predicted.z - real.z));
+      }
+    }
+  }
+  ok(checked > 50, `precondition: enough trajectories land in bounds, got ${checked}`);
+  ok(worst < 0.005,
+    `predictLanding() lands where the ball really bounces, worst gap ${(worst * 1000).toFixed(1)}mm`);
+  ok(R.config.PHYSICS.STEP === 1 / 240,
+    'and the predictions are stepped at the same rate as the real physics');
+}
+
 // --- 軌跡：誰か（you）が打つと Game#trail がその打点1点から描き直される ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });

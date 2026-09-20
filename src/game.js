@@ -49,7 +49,10 @@
   // physics.predictWindow()／predictAtZ() が軌道を刻む幅(秒)。predictWindow は
   // 「上限を越えた次の1コマ」までサンプルを返しうるので、上限を渡す側がこのぶん
   // 手前で打ち切る必要がある（predictContact() 参照）。
-  const PREDICT_STEP = 1 / 120;
+  // 予測の刻みは実際の物理と同じ（physics.js 側で PHYSICS.STEP を使う）。別の値に
+  // しておくと、予測と実物理でボールの落ち方そのものがずれる（physics.js の
+  // landedAt() のコメント参照）ので、ここもそこから引く。
+  const PREDICT_STEP = PHYSICS.STEP;
 
   function reaches(ball, player, reach) {
     return Math.hypot(ball.x - player.x, ball.z - player.z) < reach;

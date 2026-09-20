@@ -17,8 +17,6 @@
 
 ### バグ（実測で再現を確認したもの）
 
-- [ ] S `predictLanding()` の着地点が実際の着地点より常に進行方向へ行き過ぎる — `reflectBounce()` は `groundCrossing()` で本当の接地点へ補間するのに、`predictLanding()`／`predictApex()`／`predictBounceApex()` は**1コマ進めた後の座標をそのまま返す**。刻みが 1/120 秒なので速い球ほど進行方向へ行き過ぎ、実測で平均 8cm・最大 34cm、しかも常に外側へ偏る。`ai.chaseTarget()` の追跡目標と `dashUnreachable()`（縮地を出すかの判定）がこのぶんずれている。受け入れ条件：着地として返す座標を `groundCrossing()` 相当で補間し、`PHYSICS.STEP` 刻みの実物理と数 cm 以内で一致する（テストで差を測る）。
-
 ### 表示・ドキュメントのズレ
 
 - [ ] S 存在しない「着地マーカー」への参照を消す — `README.md` の構成表（`ball.js ボール・影・着地マーカー`）と `physics.js` の `predictLanding()` のコメント2箇所が、実際には実装されていない着地マーカーを指している（`scene/` に該当コードなし）。消すか、本当に作るかを決める。
