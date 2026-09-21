@@ -313,6 +313,41 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `full-power serve reads clearly faster than a tap serve: full=${full[0].toFixed(0)} soft=${soft[0].toFixed(0)}`);
 }
 
+// --- エース（サーブだけで決まった1点）は、中央のコールに球種だけでなく球速も出す ---
+{
+  const aceCall = (finish) => {
+    const shots = [];
+    let kmh = null;
+    const g = new R.Game({
+      input: fakeInput,
+      hooks: {
+        ...noHooks,
+        call: (big, sub, shot) => shots.push(shot),
+        serveSpeed: (v) => { if (v != null) kmh = v; },
+      },
+    });
+    g.started = true;
+    g.newPoint();
+    tossAndHit(g, Math.round(SERVE.CHARGE_SWEET_T * 60));
+    finish(g);
+    return { shot: shots[shots.length - 1], kmh };
+  };
+
+  // 一度も触れられずに2バウンド＝エース。球種名のうしろに整数の km/h が付く。
+  const ace = aceCall((g) => g.endPoint('you', 'ツーバウンド'));
+  ok(/サービス|キックサーブ/.test(ace.shot), `an ace is credited to the serve, got ${ace.shot}`);
+  ok(ace.shot.endsWith(`${Math.round(ace.kmh)}km/h`),
+    `and carries the same speed the HUD showed: shot=${ace.shot} serveSpeed=${ace.kmh}`);
+
+  // 返球された後に決まった1点は従来どおり球種だけ（速さはもうその1本のものではない）。
+  const rally = aceCall((g) => { g.serveInFlight = false; g.endPoint('you', 'ツーバウンド'); });
+  ok(!/km\/h/.test(rally.shot), `a rally winner keeps the plain shot name, got ${rally.shot}`);
+
+  // 相手のミスで取った1点も同じ（エースではない）。
+  const miss = aceCall((g) => { g.serveInFlight = false; g.endPoint('you', 'アウト'); });
+  ok(!/km\/h/.test(miss.shot), `an opponent error keeps the plain shot name, got ${miss.shot}`);
+}
+
 // --- ワイド×フル溜めのサーブは、フォールトにならずサイドラインまで十分な余白を残す ---
 // (外方向に強いサーブを打つとフォールトになりやすい問題の調整。物理ステップの粒度上、
 // 着地判定はステップ後の位置をそのまま使うため速い球ほど着地点が数cm外側にずれうる。

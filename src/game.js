@@ -558,6 +558,11 @@
        */
       this.lastShotBy = { you: null, cpu: null };
       /**
+       * 直近に打たれたサーブの初速(km/h)。サーブだけで決まった1点（エース）のとき、球種名に
+       * 添えて「何km/h のサーブだったか」を出すのに使う。serve() で入れ、newPoint() で消す。
+       */
+      this.lastServeKmh = null;
+      /**
        * 次の1点に何がかかっているか（scoring.pointStakes() の結果。かかっていなければ null）。
        * beginServe() で毎ポイント決め直し、ポイントが決まった時点（endPoint）で消す。
        * 表示（スコアボードの見出し）とスタッツ（ブレークポイントの本数）の両方がここを読む。
@@ -1357,6 +1362,7 @@
     newPoint() {
       this.serveNumber = 1;
       this.lastShotBy = { you: null, cpu: null };
+      this.lastServeKmh = null;
       // 風は毎ポイント、前のポイントの風から WIND.DRIFT_ACCEL の範囲だけ変える（無関係な
       // 値へ決め直すと点ごとに向きが唐突に入れ替わって見えるため）。フォールトによる
       // セカンドサーブ（beginServe の再実行）をまたいでも同じポイント中は吹き続ける
@@ -1649,6 +1655,7 @@
       // 打った瞬間の初速をそのままスコアボード脇に出す（次のポイントが始まるまで残す）
       const serveKmh = mpsToKmh(Math.hypot(ball.vx, ball.vy, ball.vz));
       this.hooks.serveSpeed(serveKmh);
+      this.lastServeKmh = serveKmh; // エースで決まったとき、球種名に球速を添えるのに使う
       // スタッツ用。1本目の本数はここで数え、「入った本数」は bounce() が数える
       // （入るか入らないかは着地するまで決まらないため）。
       this.stats[team].maxServeKmh = Math.max(this.stats[team].maxServeKmh, serveKmh);
@@ -2461,7 +2468,13 @@
         : reason === 'ツーバウンド' ? twoBounceCall : reason;
       // 取った側がこのポイントで最後に放ったショット（決め球、または相手のミスを誘った球）。
       // 相手のネット／アウトで決まった場合は「その1本前に自分が打った球」になる。
-      this.hooks.call(mine ? 'ポイント' : '失点', sub, this.lastShotBy[winner]);
+      // サーブに一度も触れられずに決まった1点（エース）だけは球速も添える：そのときの
+      // 決め手は球種とコースより速さそのものなので、スコアボード脇の表示（serveSpeed）を
+      // 見に行かなくても中央のコールだけで分かるようにする。
+      const shot = isAce && this.lastServeKmh != null
+        ? `${this.lastShotBy[winner]} ${Math.round(this.lastServeKmh)}km/h`
+        : this.lastShotBy[winner];
+      this.hooks.call(mine ? 'ポイント' : '失点', sub, shot);
       this.hooks.score();
       this.after(TIMING.NEXT_POINT, () => this.newPoint());
     }
