@@ -313,6 +313,10 @@
     // ツイーナーが発動する」）を防ぐ。専用モーション（体ごと反転して股下へ）に切り替わる
     // 技なので、場面が変わったまま乗せ続けると普通のボレーが股抜きの形で飛ぶ。
     tweener: (g, ball) => ball.bounces > 0 && passedBehind('you', g.you, ball),
+    // 溜めている間はワンバウンドの球だったのに、前へ詰めてノーバウンドで触った
+    // ／跳ね上がってスマッシュの高さになった、という取り違えを防ぐ。
+    hawkEye: (g, ball) => ball.bounces > 0
+      && !naturalStroke(g, 'you', ball, g.you, g.you.swingCharge).smash,
   };
 
   /**
@@ -395,8 +399,20 @@
         && g.you.runX * side >= BUGGY.MIN_RUN_X
         && g.you.x * side >= BUGGY.MIN_X;
     },
-    hawkEye: (g, c) => !c.serving && !!c.contact('hawkEye')
-      && c.charge >= SPECIAL.HAWK.MIN_CHARGE,
+    // 「足を止めて狙い澄ますグラウンドストローク」だけ。**ノーバウンドを触る1打（ボレー）
+    // と、頭上から叩く1打（スマッシュ）では出さない。** hit() は技が乗った1打の打ち方を
+    // 技に決めさせる（isSmash / isVolley）ので、場面を見ずに乗せるとボレーが
+    // グラウンドストロークとして飛んでいた（実測：ネット前の同じ1打が 45.7→71.6km/h、
+    // 着地が z=4.3→9.9 まで伸び、フォームもボレーではなくフォアハンドになる）。
+    // AI 側（AI_SPECIAL_MATCH.hawkEye）は最初からこの条件で除いてあり、人間側だけが
+    // 抜けていた。バウンド済み（bounces > 0）ならボレーの場面ではないので、あとは
+    // スマッシュになる高さ・溜めだけを外せばよい。
+    hawkEye: (g, c) => {
+      if (c.serving || c.charge < SPECIAL.HAWK.MIN_CHARGE) return false;
+      const at = c.contact('hawkEye');
+      return !!at && at.bounces > 0
+        && !naturalStroke(g, 'you', at, g.you, c.charge).smash;
+    },
   };
 
   /**

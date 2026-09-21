@@ -5517,12 +5517,23 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   }
 
   // --- 装備していない技は出ない（同じ場面でも次の優先度へ落ちる） ---
+  // 場面は「振り回されたフォアのトップスピン」＝バギーホイップ（優先度が上）と
+  // 鷹の目の両方が条件を満たすところ。鷹の目はグラウンドストローク限定なので、
+  // 2つが重なる場面をここで作る必要がある。
   {
-    const g = rally(['hawkEye', 'buggyWhip']);
-    g.you.z = -3;
-    ballAt(g, 2.6, 0.3, 0); // ダンクスマッシュの場面だが装備していない
-    g.you.speed = 0;
-    chargeUp(g);
+    const scene = (g) => {
+      g.you.z = -9;
+      ballAt(g, 1.0);
+      chargeUp(g);      // 溜め（鷹の目の条件）
+      draggedWide(g);   // 振り回されたフォアのトップスピン（バギーホイップの条件）
+    };
+    const both = rally(['hawkEye', 'buggyWhip']);
+    scene(both);
+    ok(both.pickSpecial() === 'buggyWhip',
+      `precondition: with both equipped the higher-priority move wins, got ${both.pickSpecial()}`);
+
+    const g = rally(['hawkEye']); // バギーホイップは装備していない
+    scene(g);
     ok(g.pickSpecial() === 'hawkEye',
       `an unequipped move is skipped for the next matching one, got ${g.pickSpecial()}`);
   }
@@ -5609,14 +5620,14 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 
   // --- 回数は技ごとに独立。使い切った技は飛ばして、次の候補がその場面を拾う ---
   {
-    const g = rally(['dunkSmash', 'hawkEye']);
-    g.you.z = -3; g.you.speed = 0;
-    rushingIn(g);
-    ballAt(g, 2.6, 0.3, 0); // 前に詰めながらの高い球＝ダンクの場面（鷹の目も条件は満たす）
-    chargeUp(g);
-    ok(g.pickSpecial() === 'dunkSmash', `precondition: the dunk is picked first, got ${g.pickSpecial()}`);
-    g.spendSpecial('dunkSmash');
-    ok(g.usesLeft('dunkSmash') === 0 && g.usesLeft('hawkEye') === SPECIAL.USES_PER_GAME,
+    const g = rally(['buggyWhip', 'hawkEye']);
+    g.you.z = -9;
+    ballAt(g, 1.0);
+    chargeUp(g);    // 振り回されたフォアのトップスピンを溜めて打つ場面＝
+    draggedWide(g); // バギーホイップ（優先度が上）と鷹の目の両方が条件を満たす
+    ok(g.pickSpecial() === 'buggyWhip', `precondition: the buggy whip is picked first, got ${g.pickSpecial()}`);
+    g.spendSpecial('buggyWhip');
+    ok(g.usesLeft('buggyWhip') === 0 && g.usesLeft('hawkEye') === SPECIAL.USES_PER_GAME,
       'spending one move does not touch the others');
     ok(g.pickSpecial() === 'hawkEye',
       `a spent move is skipped for the next matching one, got ${g.pickSpecial()}`);
@@ -6025,6 +6036,52 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       ok(both.pickSpecial() === 'tweener',
         `a ball that got past you picks the tweener over shukuchi, got ${both.pickSpecial()}`);
     }
+  }
+
+  // --- 鷹の目は「足を止めて狙い澄ますグラウンドストローク」の技（ボレー／スマッシュでは出ない） ---
+  // ユーザー報告「ノーバウンド返球（ボレー）でも鷹の目が発動する」。人間側だけ場面を
+  // 見ていなかったため、ボレーがグラウンドストロークとして飛んでいた（hit() は技が
+  // 乗った1打の打ち方を技に決めさせるため）。AI 側は最初から同じ条件で除いてある。
+  {
+    /** ネット前でノーバウンドの球に触る（＝ボレー）場面。しっかり溜めてある */
+    const volleyScene = (g, youZ, y) => {
+      g.you.x = 0; g.you.z = youZ;
+      Object.assign(g.ball, {
+        x: -0.3, y, z: youZ + 0.3, vx: 0, vy: -1, vz: -6, bounces: 0,
+      });
+      chargeUp(g);
+    };
+    [[-2, 0.8], [-3, 1.0], [-5, 1.4]].forEach(([youZ, y]) => {
+      const g = rally(['hawkEye']);
+      volleyScene(g, youZ, y);
+      ok(g.pickSpecial() === null,
+        `a volley at z=${youZ} (y=${y}) is not a hawk eye, got ${g.pickSpecial()}`);
+    });
+    // バウンドしていれば同じ高さ・同じ溜めでも鷹の目の場面
+    const grounder = rally(['hawkEye']);
+    volleyScene(grounder, -3, 1.0);
+    grounder.ball.bounces = 1;
+    ok(grounder.pickSpecial() === 'hawkEye',
+      `the same ball after a bounce is a hawk eye, got ${grounder.pickSpecial()}`);
+    // 頭上から叩く1打（スマッシュ）でも出ない＝そこはダンクスマッシュの領分
+    const overhead = rally(['hawkEye']);
+    volleyScene(overhead, -9, PLAYER.SMASH_MIN_Y + 0.3);
+    overhead.ball.bounces = 1; // 跳ね上がってスマッシュの高さに来た球
+    ok(overhead.pickSpecial() === null,
+      `a ball high enough to smash is not a hawk eye, got ${overhead.pickSpecial()}`);
+
+    // 打ち方が技に乗っ取られていないこと：ボレーはボレーのまま飛ぶ
+    const hit = (specials) => {
+      const g = rally(specials);
+      volleyScene(g, -3, 1.0);
+      g.chargeRelease();
+      g.hit('you');
+      return { stroke: g.you.stroke, special: g.you.special, call: g.lastShotBy.you };
+    };
+    const armed = hit(['hawkEye']);
+    ok(armed.stroke === 'volley-forehand' && armed.special === null,
+      `a volley stays a volley: stroke=${armed.stroke} special=${armed.special}`);
+    ok(armed.call === hit([]).call, `and it is called a volley: ${armed.call}`);
   }
 
   // --- バギーホイップの打球は空中で横に曲がる（それでも狙い通りに落ちる） ---
