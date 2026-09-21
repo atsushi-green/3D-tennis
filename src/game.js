@@ -277,6 +277,25 @@
   }
 
   /**
+   * その打点は「自分の後ろを抜けている」か＝ツイーナー（股抜き）の場面か。
+   * **後ろへの距離と向きの両方**を見る：真後ろから左右 45°（TWEENER.SIDE_RATIO=1.0）の
+   * 扇の中に、TWEENER.BEHIND より深く入っていること。
+   * 以前は z の差だけを見ていたため、**真横 2m ほどを通り過ぎる球がほんの少し後ろに
+   * 入った瞬間**にも成立し、ふつうのストロークが勝手にツイーナーになっていた
+   * （ユーザー報告。SPECIAL.TWEENER のコメント参照）。人間と AI の両方から使う。
+   * @param {string} who 打つ本人（ネット方向 NET_DIR で「後ろ」の向きを揃える）
+   * @param {{x:number, z:number}} player
+   * @param {{x:number, z:number}|null} at 打点（predictContact の結果、または実際のボール）
+   */
+  function passedBehind(who, player, at) {
+    if (!at) return false;
+    const { TWEENER } = SPECIAL;
+    const behind = (player.z - at.z) * NET_DIR[who];
+    return behind >= TWEENER.BEHIND
+      && Math.abs(at.x - player.x) <= behind * TWEENER.SIDE_RATIO;
+  }
+
+  /**
    * 技が乗った1打が、実際に当たった時点でもまだその技の場面かどうか。
    * 技が乗るのは「溜めを離した瞬間」（chargeRelease）で、実際に当たるのはその少し後
    * なので、その間に前へ詰めた・バウンドを待ったなどで場面が変わることがある。
@@ -293,8 +312,7 @@
     // ／もう自分より前にある球、という取り違え（ユーザー報告「ボレーのときに勝手に
     // ツイーナーが発動する」）を防ぐ。専用モーション（体ごと反転して股下へ）に切り替わる
     // 技なので、場面が変わったまま乗せ続けると普通のボレーが股抜きの形で飛ぶ。
-    tweener: (g, ball) => ball.bounces > 0
-      && ball.z < g.you.z - SPECIAL.TWEENER.BEHIND,
+    tweener: (g, ball) => ball.bounces > 0 && passedBehind('you', g.you, ball),
   };
 
   /**
@@ -332,8 +350,8 @@
     //   縮地が先に拾ってしまう。
     tweener: (g, c) => !c.serving && !!c.contact('tweener')
       && c.contact('tweener').bounces > 0
-      && g.ball.z < g.you.z - SPECIAL.TWEENER.BEHIND
-      && g.ball.y >= SPECIAL.TWEENER.MIN_Y,
+      && c.contact('tweener').y >= SPECIAL.TWEENER.MIN_Y
+      && passedBehind('you', g.you, c.contact('tweener')),
     // 「ボールが十分に離れていて、普通に振っても届かず、走っても間に合わない」球だけ。
     // ・ボールとの距離（MIN_DIST）を見ないと、すぐ横を速く通り過ぎる球——手を伸ばせば
     //   届きそうな「ギリギリ届かない」球——にも出てしまう（そういう球でも2バウンド目は
@@ -410,7 +428,8 @@
    * ←→ の入力を要求するところだけ AI 向けの代わり（settleT・runX）に置き換える。
    * キックサーブだけはラリーではなくサーブなので、ここではなく serve() が拾う。
    * @type {{[key:string]: (g: Game, c: object) => boolean}}
-   *   c ＝ {who, ball, player, bounces, contactY, behind, stroke, natural{smash,volley}}
+   *   c ＝ {who, ball, player, bounces, contactY, stroke, natural{smash,volley}}
+   *   （「抜かれた量」は人間と同じ passedBehind() で見るので、ここには持たない）
    */
   const AI_SPECIAL_MATCH = {
     // 頭上の高いノーバウンドを叩き落とす。高さ（SPECIAL.DUNK.MIN_Y）は人間とまったく
@@ -426,8 +445,8 @@
     // 球に抜かれた（自分より後ろを通っている）ときの股抜き。人間と同じく、
     // ノーバウンドの球では出さない（そこはボレー／スマッシュの場面）。
     tweener: (g, c) => c.bounces > 0
-      && c.behind > SPECIAL.TWEENER.BEHIND
-      && c.contactY >= SPECIAL.TWEENER.MIN_Y,
+      && c.contactY >= SPECIAL.TWEENER.MIN_Y
+      && passedBehind(c.who, c.player, c.ball),
     // 腰から頭の高さに浮いたノーバウンドを、待たずに強打する。
     driveVolley: (g, c) => c.bounces === 0
       && c.contactY >= SPECIAL.DRIVE.MIN_Y
@@ -994,8 +1013,6 @@
         player,
         bounces: ball.bounces,
         contactY: ball.y,
-        // 打点が自分より後ろ（自陣側）にどれだけ回り込んでいるか＝抜かれた量。
-        behind: (player.z - ball.z) * NET_DIR[who],
         stroke: stroke || classifyStroke(who, ball, player),
         natural: natural || naturalStroke(this, who, ball, player, 0),
       };
@@ -2772,6 +2789,8 @@
       const ball = this.ball;
       if (!ball.live || ball.last === 'you') return 1;
       if (ball.z >= PLAYER.NET_MARGIN) return 1;          // まだ自陣に入っていない
+      // ここは向き（passedBehind の45°の扇）までは見ない：追いかけている最中は
+      // まだボールの線に乗れていないのが普通で、乗るために走る足を速くするのが目的。
       if (ball.z >= this.you.z - TWEENER.BEHIND) return 1; // まだ抜かれていない
       if (this.input.moveZ >= 0) return 1;                // 後ろへ追っている間だけ
       return TWEENER.CHASE_MULT;

@@ -5506,7 +5506,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     const behind = rally(ALL);
     behind.you.z = -10;
     behind.you.speed = 5;
-    ballAt(behind, 1.0, -0.5);
+    ballAt(behind, 1.0, -1.2); // 真後ろに 1.2m ＝ 抜かれた球
     ok(behind.pickSpecial() === 'tweener', `a ball that got past you picks the tweener, got ${behind.pickSpecial()}`);
 
     // 自分のサーブ → キックサーブ（ラリー用の技は出ない）
@@ -5746,7 +5746,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       ['driveVolley', (g) => { g.you.z = -9; ballAt(g, 1.2, 0.3, 0); }],
       ['buggyWhip', (g) => { g.you.z = -9; ballAt(g, 1.0); }],
       ['hawkEye', (g) => { g.you.z = -9; ballAt(g, 1.0); }],
-      ['tweener', (g) => { g.you.z = -10.5; ballAt(g, 1.0, -0.5); }],
+      ['tweener', (g) => { g.you.z = -10.5; ballAt(g, 1.0, -1.2); }],
     ];
     cases.forEach(([move, place]) => {
       let outs = 0;
@@ -5818,7 +5818,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       const g = rally(['tweener'], { moveX, moveZ: 0, lob: false });
       g.you.x = 0; g.you.z = -12;
       g.cpu.x = foeX; g.cpu.z = foeZ;
-      ballAt(g, 0.9, -0.5);
+      ballAt(g, 0.9, -1.2);
       g.you.special = 'tweener';
       g.hit('you');
       return {
@@ -5855,7 +5855,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     {
       const g = rally(['tweener']);
       g.you.z = -12;
-      ballAt(g, 0.9, -0.5);
+      ballAt(g, 0.9, -1.2);
       g.you.special = 'tweener';
       g.hit('you');
       g.lastBallOwnerSeen = null;
@@ -5919,6 +5919,44 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
         `the top speed itself is multiplied: ${boosted.speed.toFixed(2)} vs ${plain.speed.toFixed(2)} m/s`);
     }
 
+    // 真横を通り過ぎる球では出ない＝ふつうのストロークが勝手にツイーナーにならない
+    // （ユーザー報告）。自動プレイで実際に誤爆していた18件の形をそのまま置いてある：
+    // 横へ 1.8〜2.6m ずれているのに、後ろへは 0.16〜1.28m しか入っていない球。
+    {
+      const wide = [
+        [0.69, 1.91], [0.59, 2.54], [0.20, 2.34], [1.28, 2.25], [0.16, 2.37], [0.90, 1.90],
+      ];
+      wide.forEach(([behind, side]) => {
+        const g = rally(ALL);
+        g.you.x = 0; g.you.z = -9;
+        Object.assign(g.ball, {
+          x: side, y: 1.0, z: -9 - behind, vx: 0, vy: 0, vz: -6, bounces: 1,
+        });
+        const pick = g.pickSpecial();
+        ok(pick !== 'tweener',
+          `a ball ${side}m to the side and only ${behind}m behind is a normal stroke, got ${pick}`);
+      });
+      // 同じ「後ろへの距離」でも、真後ろに回り込んでいればツイーナーの場面
+      const straight = rally(ALL);
+      straight.you.x = 0; straight.you.z = -9;
+      Object.assign(straight.ball, {
+        x: 0.3, y: 1.0, z: -10.2, vx: 0, vy: 0, vz: -6, bounces: 1,
+      });
+      ok(straight.pickSpecial() === 'tweener',
+        `but straight behind you it is: got ${straight.pickSpecial()}`);
+      // 真後ろから45°（SIDE_RATIO=1.0）の外側は出ない＝境界がコースで決まっている
+      const edge = (side) => {
+        const g = rally(ALL);
+        g.you.x = 0; g.you.z = -9;
+        Object.assign(g.ball, {
+          x: side, y: 1.0, z: -10.5, vx: 0, vy: 0, vz: -6, bounces: 1,
+        });
+        return g.pickSpecial();
+      };
+      ok(edge(1.2) === 'tweener' && edge(1.9) !== 'tweener',
+        `the 45-degree cone is the line: inside=${edge(1.2)} outside=${edge(1.9)}`);
+    }
+
     // ノーバウンドの球では出ない＝ふつうのボレーが勝手にツイーナーにならない
     // （ユーザー報告。リーチを広げたぶん、ネット際で体の横を通り過ぎる速い球が
     //  「わずかに後ろ」に入った瞬間に拾われていた）
@@ -5939,7 +5977,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       });
       // 同じ球でも、バウンドしていればツイーナーの場面
       const bounced = rally(ALL);
-      passingVolley(bounced, -6, -0.6, 0.4);
+      passingVolley(bounced, -6, -1.2, 0.4);
       bounced.ball.bounces = 1;
       ok(bounced.pickSpecial() === 'tweener',
         `the same ball after a bounce is a tweener: got ${bounced.pickSpecial()}`);
@@ -5949,7 +5987,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       const onVolley = rally(['tweener']);
       onVolley.you.z = -3;
       onVolley.you.special = 'tweener';
-      passingVolley(onVolley, -3, -0.4, 0.4); // bounces=0 のまま当たった
+      passingVolley(onVolley, -3, -1.2, 0.4); // bounces=0 のまま当たった
       onVolley.hit('you');
       ok(onVolley.you.special === null && onVolley.usesLeft('tweener') === 1,
         `a tweener that lands on a volley is dropped: special=${onVolley.you.special} uses=${onVolley.usesLeft('tweener')}`);
@@ -5967,11 +6005,16 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 
     // 抜かれた球は、縮地を装備していてもツイーナーが先に拾う（SPECIAL_MOVES の並び順）
     {
-      /** 横へ振られたまま抜かれた球＝ツイーナーにも縮地にも当てはまる場面 */
+      /**
+       * 後ろへ抜けたあと、横切るように体の真後ろへ流れてくる球。
+       * いまは 2.6m 離れている（＝縮地の MIN_DIST を超える）が、伸びたリーチ（2.79m）の
+       * 真後ろの扇に入ってくるので、ツイーナーにも縮地にも当てはまる。
+       */
       const passedWide = (g) => {
         g.you.x = 0; g.you.z = -10;
         Object.assign(g.ball, {
-          x: 2.6, y: 1.0, z: -11.5, vx: -12, vy: 0, vz: -6, bounces: 1,
+          x: 2.0, y: 1.0, z: -12.6, vx: -12, vy: 1.5, vz: -1, bounces: 1,
+          spin: 'flat', wind: 0, curve: 0, // 予測（縮地の判定）が風で揺れないように固定
         });
       };
       const t = rally(['tweener']); passedWide(t);
@@ -6477,7 +6520,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       ok(pick((g) => { g.cpu.z = 3; g.cpu.fwd = 0; cpuBallAt(g, SP.DUNK.MIN_Y - 0.2, 0); }) !== 'dunkSmash',
         'and a ball below the dunk line is not one');
       // 抜かれた（自分より後ろ＝自陣側を通っている）球 → ツイーナー
-      ok(pick((g) => { g.cpu.z = 9; cpuBallAt(g, 1.0, 1, 0.6); }).indexOf('tweener') !== -1,
+      ok(pick((g) => { g.cpu.z = 9; cpuBallAt(g, 1.0, 1, 1.2); }).indexOf('tweener') !== -1,
         'a ball behind the AI picks the tweener');
       // フォア側へ大きく振り回されて、まだ止まりきっていない → バギーホイップ
       // cpu は向かい側を向いた右利きなので、フォア側は world +x（game.js の RACKET_SIDE.cpu）。
