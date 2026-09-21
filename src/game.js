@@ -398,9 +398,11 @@
     //   ときはバギーホイップ、止まって叩けるときはこちら、と場面が分かれる。
     jackknife: (g, c) => {
       if (c.serving || c.spin !== 'flat' || g.currentStroke() !== 'backhand') return false;
-      const at = c.contact('jackknife');
       const { JACK } = SPECIAL;
-      return !!at && at.bounces > 0 && at.y >= JACK.MIN_Y
+      return !!c.contact('jackknife')
+        // 見るのは「最初に届く点」ではなく「この1振りでいちばん高く捉えられる点」
+        // （Game#contactPeakY のコメント参照）。バウンド後の打点だけを数える。
+        && c.peakY() >= JACK.MIN_Y
         && c.charge >= JACK.MIN_CHARGE
         && g.you.speed <= JACK.MAX_SPEED;
     },
@@ -1130,6 +1132,7 @@
       const contacts = {};
       let dash;
       let unreachable;
+      let peak;
       return {
         serving: this.phase === 'serve' && this.servingPlayer() === 'you',
         // いまの溜め量(0〜1)。自動発動なので「どれくらい本気の1打か」を条件に使える技がある。
@@ -1142,6 +1145,12 @@
           const key = `${r.mult}:${r.y}`;
           if (!(key in contacts)) contacts[key] = this.predictContact(r.mult, r.y);
           return contacts[key];
+        },
+        // バウンド後の球を、この1振りでいちばん高く捉えられる高さ(m)。
+        // 「高い球を叩く」技（ジャックナイフ）の判定に使う。
+        peakY: () => {
+          if (peak === undefined) peak = this.contactPeakY();
+          return peak;
         },
         dashSpot: () => {
           if (dash === undefined) dash = this.dashSpot();
@@ -2121,6 +2130,39 @@
         ball, (at) => canHit(at, at.bounces), this.swingWindow() - 2 * PREDICT_STEP, 1,
       );
       return window ? window.enter : null;
+    }
+
+    /**
+     * いま溜めを離してから振り終わるまでの間に、**バウンド後の球をいちばん高く捉えられる
+     * 高さ**(m)。届く範囲にバウンド後の球が来ないなら 0。
+     *
+     * predictContact() が返すのは「最初に届く1点」なので、**弾んで上がってくる球では
+     * ほぼ必ず上がりはじめの低いところ**になる（実測：ラリー中の打点の中央値は 0.16m、
+     * 99パーセンタイルでも 0.9m）。「高い球を叩く」ことが条件の技（ジャックナイフ）が
+     * そこを見ると、条件を満たす球が事実上存在しなくなる——ユーザー報告
+     * 「結構高めでバックフラットを打っているつもりがなかなか発動しない」の原因がこれ。
+     * 発動の判定には区間の中の最高点を使い、**実際にその高さで捉えられたかどうかは
+     * 当たった瞬間に SPECIAL_STILL_VALID が見る**（引きつけて高い打点で打てたときだけ
+     * 技になり、待ちきれずに低く打てば普通の1打に戻る）。
+     * @returns {number}
+     */
+    contactPeakY() {
+      const ball = this.ball;
+      const you = this.you;
+      const reach = PLAYER.REACH * this.reachMult();
+      const canHit = (at, bounces) => at.z < PLAYER.NET_MARGIN && at.y < PLAYER.REACH_Y
+        && !(this.serveInFlight && bounces < 1)
+        && Math.hypot(at.x - you.x, at.z - you.z) < reach;
+      let peak = 0;
+      if (ball.bounces > 0 && canHit(ball, ball.bounces)) peak = ball.y;
+      // predictWindow() は「届く区間」を1つだけ追う。その間のサンプルを覗いて最高点を拾う
+      // （accept は区間の判定と兼用で、副作用で最高点を更新する）。
+      predictWindow(ball, (at) => {
+        const ok = canHit(at, at.bounces);
+        if (ok && at.bounces > 0) peak = Math.max(peak, at.y);
+        return ok;
+      }, this.swingWindow() - 2 * PREDICT_STEP, 1);
+      return peak;
     }
 
     /**

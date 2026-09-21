@@ -6206,6 +6206,56 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
         `a jackknife on a ball that dropped is stood down: ${g.you.special}`);
     }
 
+    // 判定は「最初に届く点」ではなく「この1振りでいちばん高く捉えられる点」を見る
+    // （ユーザー報告「結構高めでバックフラットを打っているつもりが発動しない」）。
+    // 弾んで上がってくる球は、届きはじめの瞬間はまだ低い＝そこを見ると条件を満たす球が
+    // 事実上なくなる（実測：ラリー中の「最初に届く点」の中央値は 0.16m）。
+    {
+      /** 目の前でバウンドして、届く範囲にいる間に胸の高さまで上がってくる球 */
+      const risingBall = (g) => {
+        g.you.x = 0; g.you.z = -10; g.you.speed = 0;
+        Object.assign(g.ball, {
+          x: 0.3, y: 0.35, z: -9.0, vx: 0, vy: 6, vz: -6, bounces: 1,
+          spin: 'flat', wind: 0, curve: 0,
+        });
+        g.chargeStart('flat');
+        g.you.chargeTime = CHARGE.MAX_TIME * 0.6;
+      };
+      const g = rally(['jackknife']);
+      risingBall(g);
+      ok(g.predictContact(1, 0).y < JACK.MIN_Y,
+        `precondition: the first reachable point is still low (${g.predictContact(1, 0).y.toFixed(2)}m)`);
+      ok(g.contactPeakY() >= JACK.MIN_Y,
+        `but it comes up to ${g.contactPeakY().toFixed(2)}m inside the swing window`);
+      ok(g.pickSpecial() === 'jackknife',
+        `so the jackknife is offered, got ${g.pickSpecial()}`);
+
+      // 低いまま通り過ぎる球（上がってこない）では出ない
+      const flat = rally(['jackknife']);
+      risingBall(flat);
+      flat.ball.vy = -1;
+      ok(flat.contactPeakY() < JACK.MIN_Y && flat.pickSpecial() !== 'jackknife',
+        `a ball that never comes up is not offered, got ${flat.pickSpecial()}`);
+
+      // 出せると言われても、**低い打点で当ててしまえば**技にはならない（回数も減らない）
+      const early = rally(['jackknife']);
+      risingBall(early);
+      early.you.special = 'jackknife';
+      early.hit('you'); // まだ y=0.35 のまま振ってしまった
+      ok(early.you.special === null && early.usesLeft('jackknife') === 1
+        && early.you.stroke !== 'jackknife',
+        `hitting it early is just a normal backhand: ${early.you.stroke}/${early.you.special}`);
+
+      // 引きつけて高い打点で捉えれば技になる
+      const waited = rally(['jackknife']);
+      risingBall(waited);
+      waited.you.special = 'jackknife';
+      waited.ball.y = JACK.MIN_Y + 0.2; // 上がってくるのを待ってから当てた
+      waited.hit('you');
+      ok(waited.you.stroke === 'jackknife' && waited.lastShotBy.you === 'ジャックナイフ',
+        `waiting for it to come up gives the jackknife: ${waited.you.stroke}`);
+    }
+
     // バギーホイップとは同じ1打で両立しない（フォア/バック・球種が背中合わせ）
     {
       const jackScene = armed();
