@@ -5930,6 +5930,33 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
         `the top speed itself is multiplied: ${boosted.speed.toFixed(2)} vs ${plain.speed.toFixed(2)} m/s`);
     }
 
+    // 専用モーションぶんの長さ（scene/player.js が体ごと反転させ、跳んで股を割る）
+    {
+      ok(TWEENER.ANIM > PLAYER.SWING_ANIM,
+        `the tweener animation is longer than a normal swing, got ${TWEENER.ANIM}`);
+      const g = rally(['tweener']);
+      g.you.z = -12;
+      ballAt(g, 0.9, -1.2);
+      g.you.special = 'tweener';
+      g.hit('you');
+      ok(g.you.stroke === 'tweener' && g.you.anim === TWEENER.ANIM,
+        `a tweener uses its own animation length, got ${g.you.stroke}/${g.you.anim}`);
+      // 技はモーションが終わるまで残り（フォームの表示に使う）、終われば下りる
+      g.you.swing = 0;
+      g.update(TWEENER.ANIM - PLAYER.SWING_ANIM);
+      ok(g.you.special === 'tweener' && g.you.anim > 0,
+        'the move stays on while its longer motion plays');
+      g.update(TWEENER.ANIM);
+      ok(g.you.special === null && g.you.anim === 0,
+        `and it is dropped once the motion ends, got ${g.you.special}`);
+      // 次の普通の1打は通常の長さに戻る（前の技の長さを持ち越さない）
+      g.ball.last = 'cpu';
+      ballAt(g, 1.0);
+      g.hit('you');
+      ok(g.you.stroke !== 'tweener' && g.you.anim === PLAYER.SWING_ANIM,
+        `a normal groundstroke still uses SWING_ANIM, got ${g.you.stroke}/${g.you.anim}`);
+    }
+
     // 真横を通り過ぎる球では出ない＝ふつうのストロークが勝手にツイーナーにならない
     // （ユーザー報告）。自動プレイで実際に誤爆していた18件の形をそのまま置いてある：
     // 横へ 1.8〜2.6m ずれているのに、後ろへは 0.16〜1.28m しか入っていない球。

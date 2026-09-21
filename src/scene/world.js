@@ -72,10 +72,12 @@
       mesh.position.set(state.x, 0, state.z);
       scene3d.setSwingPose(mesh, state, !!tossing);
       scene3d.setGaitPose(mesh, state.speed, maxSpeed, dt);
-      // スマッシュのジャンプ・飛びつきボレーの倒れ込みは歩行の後（同じ関節を上書きする
-      // ため）。同時に起きることはないので、浮いた高さは足し合わせて影に渡す。
+      // スマッシュのジャンプ・飛びつきボレーの倒れ込み・ツイーナーの跳躍は歩行の後
+      // （同じ関節を上書きするため）。同時に起きることはないので、浮いた高さは
+      // 足し合わせて影に渡す。
       const lift = scene3d.applySmashJump(mesh, state)
-        + scene3d.applyDiveLean(mesh, state);
+        + scene3d.applyDiveLean(mesh, state)
+        + scene3d.applyTweenerHop(mesh, state);
       scene3d.placeGroundShadow(shadow, state, lift);
     }
 

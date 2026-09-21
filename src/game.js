@@ -1995,8 +1995,10 @@
       ball.kick = false; // 前のキックサーブの跳ね上げを持ち越さない
       this.resetTrail();
 
-      // スマッシュだけは跳んで打つぶんモーションが長い（scene/player.js 参照）。
-      player.anim = stroke === 'smash' ? PLAYER.SMASH_ANIM : PLAYER.SWING_ANIM;
+      // スマッシュとツイーナーは跳んで打つぶんモーションが長い（scene/player.js 参照）。
+      player.anim = stroke === 'smash' ? PLAYER.SMASH_ANIM
+        : stroke === 'tweener' ? SPECIAL.TWEENER.ANIM
+          : PLAYER.SWING_ANIM;
       player.stroke = stroke;
       player.spin = spin; // 振っている間のフォーム（scene/player.js）に使う
       // 必殺技で決めたときは球種名ではなく技名を出す（「何で取ったか」がそのまま伝わる）。

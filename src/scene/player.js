@@ -188,6 +188,34 @@
    *     固定される swingCharge を使い続ける。
    * @param {boolean} [tossing] トス中（打つ前）かどうか。サーブの構えを出す
    */
+  /** 0→1 を滑らかに立ち上げる（両端で速度0）。振り向きのカクつきを消すのに使う */
+  function ease(t) {
+    const x = clamp(t, 0, 1);
+    return x * x * (3 - 2 * x);
+  }
+
+  /** ツイーナーのモーションの進行度（0＝打点、1＝振り終わり）。それ以外は null */
+  function tweenerProgress(anim, stroke) {
+    if (stroke !== 'tweener' || anim <= 0) return null;
+    const span = SPECIAL.TWEENER.ANIM;
+    return clamp((span - anim) / span, 0, 1);
+  }
+
+  /**
+   * ツイーナーの「体ごとの振り向き」(rad)。打った瞬間にはもう背を向けているが、
+   * 1フレームで π 回すとカクッと入れ替わって見えるので、ごく短い時間（TURN_IN）で
+   * 回し切り、振り終わりにかけて（TURN_OUT 以降）正面へ戻す。
+   */
+  function tweenerTurn(anim, stroke) {
+    const progress = tweenerProgress(anim, stroke);
+    if (progress === null) return 0;
+    const T = SWING.TWEENER;
+    const frac = progress < T.TURN_IN
+      ? progress / T.TURN_IN
+      : (progress < T.TURN_OUT ? 1 : 1 - (progress - T.TURN_OUT) / (1 - T.TURN_OUT));
+    return Math.PI * ease(frac);
+  }
+
   function poseArm(player, state, tossing) {
     const { anim, stroke, prep, spin, chargeFrac, swingCharge } = state;
     const arm = player.userData.arm;
@@ -195,8 +223,7 @@
     // ツイーナー（股抜き）の間だけ、体ごと相手に背を向ける。ラケット腕はモデルの
     // ローカル +x 側に作られているので、向きを反転させればそのまま「背中側の球を
     // 股の下から打つ」形になる（普段の向きは userData.facing に控えてある）。
-    player.rotation.y = (player.userData.facing || 0)
-      + (stroke === 'tweener' && anim > 0 ? Math.PI : 0);
+    player.rotation.y = (player.userData.facing || 0) + tweenerTurn(anim, stroke);
 
     if (anim <= 0) {
       if (tossing) {
@@ -226,9 +253,12 @@
       return;
     }
 
-    // スマッシュだけはモーションが長い（PLAYER.SMASH_ANIM）ので、進行度もその長さで割る。
-    // 他のストロークは従来どおり ARM_SPAN 基準（＝既存の振り付けを変えない）。
-    const span = stroke === 'smash' ? PLAYER.SMASH_ANIM : ARM_SPAN;
+    // スマッシュとツイーナーはモーションが長い（PLAYER.SMASH_ANIM / SPECIAL.TWEENER.ANIM）
+    // ので、進行度もその長さで割る。他のストロークは従来どおり ARM_SPAN 基準
+    // （＝既存の振り付けを変えない）。
+    const span = stroke === 'smash' ? PLAYER.SMASH_ANIM
+      : stroke === 'tweener' ? SPECIAL.TWEENER.ANIM
+        : ARM_SPAN;
     const progress = clamp((span - anim) / span, 0, 1);
 
     if (stroke === 'serve') {
@@ -400,6 +430,49 @@
       knee.rotation.x = lerp(knee.rotation.x, -SWING.DIVE_KNEE_TUCK, arc);
     });
     gait.torso.rotation.x = lerp(gait.torso.rotation.x, SWING.DIVE_TORSO_X, arc);
+    return lift;
+  };
+
+  /**
+   * ツイーナー（必殺技の股抜き）の跳躍と股割り。applySmashJump() と同じ考え方で、
+   * 歩行ポーズの後に上から重ねる。
+   * - 体を浮かせる（打点の瞬間にはもう跳び上がっていて、振り終わりで着地する）
+   * - 股を**左右**に割る：カメラは選手の真後ろにあるので、前後に開いても奥行き方向に
+   *   しか動かず「股を抜いた」ことが読めない。左右に開いた脚の間をラケットが通る
+   * - 体幹を前へ折って、股の下を覗き込む形にする
+   * 股割りに使う hip の rotation.z は setGaitPose() が触らない軸なので、技が終わった
+   * フレームで自分で0へ戻す（戻さないと開いたまま走り続ける）。
+   * @param {object} state その選手の見た目に関わる状態（setSwingPose と同じもの）
+   * @returns {number} 浮いた高さ(m)。影を小さくするのに使う（world.js 参照）
+   */
+  scene3d.applyTweenerHop = function applyTweenerHop(player, state) {
+    const gait = player.userData.gait;
+    const progress = tweenerProgress(state.anim, state.stroke);
+    if (progress === null) {
+      gait.legs.forEach(({ hip }) => { hip.rotation.z = 0; });
+      return 0;
+    }
+    const T = SWING.TWEENER;
+    // 打点（progress=0）の時点で既に HOP_START の高さまで上がっている → 頂点 → 着地
+    const rise = Math.asin(clamp(T.HOP_START, 0, 1));
+    const phase = progress < T.HOP_PEAK
+      ? lerp(rise, Math.PI / 2, progress / T.HOP_PEAK)
+      : lerp(Math.PI / 2, Math.PI, (progress - T.HOP_PEAK) / (1 - T.HOP_PEAK));
+    const lift = T.HOP_H * Math.sin(phase);
+    player.position.y = lift;
+
+    // 浮いているほど強くポーズを効かせる（着地に向けて自然に歩行ポーズへ戻る）
+    const air = clamp(lift / T.HOP_H, 0, 1);
+    // legs[0] がローカル -x 側、legs[1] が +x 側。hip.rotation.z を正にすると足先が
+    // +x 側へ振れるので、外側へ開くには -x 側の脚を負・+x 側の脚を正にする。
+    gait.legs.forEach(({ hip, knee }, i) => {
+      const outward = i === 0 ? -1 : 1;
+      hip.rotation.z = lerp(0, outward * T.LEG_SPLAY, air);
+      hip.rotation.x = lerp(hip.rotation.x, outward * T.LEG_KICK, air);
+      knee.rotation.x = lerp(knee.rotation.x, -T.KNEE_TUCK, air);
+    });
+    gait.offArm.rotation.x = lerp(gait.offArm.rotation.x, T.OFF_ARM_X, air);
+    gait.torso.rotation.x = lerp(gait.torso.rotation.x, T.TORSO_X, air);
     return lift;
   };
 
