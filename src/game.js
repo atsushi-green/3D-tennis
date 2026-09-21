@@ -289,6 +289,12 @@
   const SPECIAL_STILL_VALID = {
     buggyWhip: (g, ball) => !isVolleyContact(g, ball),
     dunkSmash: (g, ball) => ball.bounces === 0,
+    // 離した瞬間は「バウンドした球に抜かれていた」のに、当たったのはノーバウンドの球
+    // ／もう自分より前にある球、という取り違え（ユーザー報告「ボレーのときに勝手に
+    // ツイーナーが発動する」）を防ぐ。専用モーション（体ごと反転して股下へ）に切り替わる
+    // 技なので、場面が変わったまま乗せ続けると普通のボレーが股抜きの形で飛ぶ。
+    tweener: (g, ball) => ball.bounces > 0
+      && ball.z < g.you.z - SPECIAL.TWEENER.BEHIND,
   };
 
   /**
@@ -313,11 +319,19 @@
       && c.contact('dunkSmash').bounces === 0
       && c.contact('dunkSmash').y >= SPECIAL.DUNK.MIN_Y
       && g.you.fwd >= SPECIAL.DUNK.MIN_FWD,
-    // 「もう自分より後ろを通っている（抜かれた）球」だけ。リーチが伸びる（TWEENER.REACH_MULT）
-    // ので、普通なら触れない距離の球も拾える＝これが技の本体。**縮地より先に判定する**
-    // （SPECIAL_MOVES の並び順）：抜かれた球は「離れていて走っても間に合わない球」にも
-    // 当てはまることが多く、逆順だと両方を装備したときに縮地が先に拾ってしまう。
+    // 「もう自分より後ろを通っている（抜かれた）、**バウンド済みの**球」だけ。
+    // リーチが伸びる（TWEENER.REACH_MULT）ので、普通なら触れない距離の球も拾える＝
+    // これが技の本体。
+    // ・**ノーバウンドの球では出さない**（contact.bounces > 0）。股抜きはバウンドした球を
+    //   拾う打ち方で、ノーバウンドのままなら普通のボレー／スマッシュの場面。リーチを
+    //   1.35→1.8 に広げたあと、ネット際で体の横を通り過ぎる速い球が「わずかに後ろ」に
+    //   入った瞬間に拾われ、**普通のボレーが勝手にツイーナーになる**というユーザー報告が
+    //   出た。ボレーは飛びつき／ドライブボレーの担当なので、ここで線を引く。
+    // ・**縮地より先に判定する**（SPECIAL_MOVES の並び順）：抜かれた球は「離れていて
+    //   走っても間に合わない球」にも当てはまることが多く、逆順だと両方を装備したときに
+    //   縮地が先に拾ってしまう。
     tweener: (g, c) => !c.serving && !!c.contact('tweener')
+      && c.contact('tweener').bounces > 0
       && g.ball.z < g.you.z - SPECIAL.TWEENER.BEHIND
       && g.ball.y >= SPECIAL.TWEENER.MIN_Y,
     // 「ボールが十分に離れていて、普通に振っても届かず、走っても間に合わない」球だけ。
@@ -409,8 +423,10 @@
     dunkSmash: (g, c) => c.bounces === 0
       && c.contactY >= SPECIAL.DUNK.MIN_Y
       && Math.abs(c.player.z) <= SPECIAL.AI.DUNK_MAX_Z,
-    // 球に抜かれた（自分より後ろを通っている）ときの股抜きロブ。
-    tweener: (g, c) => c.behind > SPECIAL.TWEENER.BEHIND
+    // 球に抜かれた（自分より後ろを通っている）ときの股抜き。人間と同じく、
+    // ノーバウンドの球では出さない（そこはボレー／スマッシュの場面）。
+    tweener: (g, c) => c.bounces > 0
+      && c.behind > SPECIAL.TWEENER.BEHIND
       && c.contactY >= SPECIAL.TWEENER.MIN_Y,
     // 腰から頭の高さに浮いたノーバウンドを、待たずに強打する。
     driveVolley: (g, c) => c.bounces === 0

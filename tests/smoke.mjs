@@ -5919,6 +5919,52 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
         `the top speed itself is multiplied: ${boosted.speed.toFixed(2)} vs ${plain.speed.toFixed(2)} m/s`);
     }
 
+    // ノーバウンドの球では出ない＝ふつうのボレーが勝手にツイーナーにならない
+    // （ユーザー報告。リーチを広げたぶん、ネット際で体の横を通り過ぎる速い球が
+    //  「わずかに後ろ」に入った瞬間に拾われていた）
+    {
+      /** ネット際で、体の横をノーバウンドで通り過ぎていく速い球 */
+      const passingVolley = (g, youZ, dz, dx) => {
+        g.you.x = 0; g.you.z = youZ;
+        Object.assign(g.ball, {
+          x: dx, y: 1.1, z: youZ + dz, vx: 0, vy: -1, vz: -20, bounces: 0,
+        });
+      };
+      [[-2, -0.2, 0.4], [-2, -0.6, 1.2], [-4, -0.6, 0.4], [-6, -1.5, 1.2]].forEach(([z, dz, dx]) => {
+        const g = rally(ALL);
+        passingVolley(g, z, dz, dx);
+        const pick = g.pickSpecial();
+        ok(pick !== 'tweener',
+          `a no-bounce ball past you at z=${z} is a volley, not a tweener: got ${pick}`);
+      });
+      // 同じ球でも、バウンドしていればツイーナーの場面
+      const bounced = rally(ALL);
+      passingVolley(bounced, -6, -0.6, 0.4);
+      bounced.ball.bounces = 1;
+      ok(bounced.pickSpecial() === 'tweener',
+        `the same ball after a bounce is a tweener: got ${bounced.pickSpecial()}`);
+
+      // 離した後に場面が変わった（ノーバウンドの球に当たった／もう自分より前にある）
+      // ときは、当たる瞬間に技を下ろして普通の1打として打つ（回数も減らない）
+      const onVolley = rally(['tweener']);
+      onVolley.you.z = -3;
+      onVolley.you.special = 'tweener';
+      passingVolley(onVolley, -3, -0.4, 0.4); // bounces=0 のまま当たった
+      onVolley.hit('you');
+      ok(onVolley.you.special === null && onVolley.usesLeft('tweener') === 1,
+        `a tweener that lands on a volley is dropped: special=${onVolley.you.special} uses=${onVolley.usesLeft('tweener')}`);
+      ok(onVolley.lastShotBy.you !== SPECIAL_MOVES.find((m) => m.key === 'tweener').label,
+        `and it is called as a normal shot: ${onVolley.lastShotBy.you}`);
+
+      const inFront = rally(['tweener']);
+      inFront.you.z = -10;
+      inFront.you.special = 'tweener';
+      ballAt(inFront, 1.0, 0.5); // 自分より前（ネット側）にある球
+      inFront.hit('you');
+      ok(inFront.you.special === null && inFront.usesLeft('tweener') === 1,
+        'a tweener on a ball that is no longer behind you is dropped too');
+    }
+
     // 抜かれた球は、縮地を装備していてもツイーナーが先に拾う（SPECIAL_MOVES の並び順）
     {
       /** 横へ振られたまま抜かれた球＝ツイーナーにも縮地にも当てはまる場面 */
