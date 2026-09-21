@@ -77,7 +77,8 @@
       // 足し合わせて影に渡す。
       const lift = scene3d.applySmashJump(mesh, state)
         + scene3d.applyDiveLean(mesh, state)
-        + scene3d.applyTweenerHop(mesh, state);
+        + scene3d.applyTweenerHop(mesh, state)
+        + scene3d.applyJackknifeLeap(mesh, state);
       scene3d.placeGroundShadow(shadow, state, lift);
     }
 

@@ -258,7 +258,8 @@
     // （＝既存の振り付けを変えない）。
     const span = stroke === 'smash' ? PLAYER.SMASH_ANIM
       : stroke === 'tweener' ? SPECIAL.TWEENER.ANIM
-        : ARM_SPAN;
+        : stroke === 'jackknife' ? SPECIAL.JACK.ANIM
+          : ARM_SPAN;
     const progress = clamp((span - anim) / span, 0, 1);
 
     if (stroke === 'serve') {
@@ -290,6 +291,21 @@
       arm.rotation.z = lerp(S.Z_START, S.Z_END, progress);
       arm.rotation.x = S.X;
       torso.rotation.y = 0;
+      return;
+    }
+
+    if (stroke === 'jackknife') {
+      // ジャックナイフ。高い打点をフラットのバックハンドで叩くので、横振り(rotation.y)は
+      // グラウンドストロークと同じ系統のまま、仰角(rotation.z)を肩の高さ（Z_START）から
+      // 体の前（Z_END）へ下ろす＝上から叩き込む弧になる。必ずバックハンド側に振る。
+      const J = SWING.JACK;
+      const start = SWING.GROUND_START + (swingCharge || 0) * SWING.CHARGE_PULL;
+      const sweep = (SWING.GROUND_SWEEP - (swingCharge || 0) * SWING.CHARGE_PULL) * J.SWEEP_MULT;
+      arm.rotation.y = mirrorGroundAngle(start + progress * sweep, true);
+      arm.rotation.z = lerp(J.Z_START, J.Z_END, progress);
+      arm.rotation.x = 0;
+      // 跳びながら体をひねって振り抜く（通常のバックハンドより深くひねる）
+      torso.rotation.y = -J.TORSO_TWIST * Math.sin(progress * Math.PI);
       return;
     }
 
@@ -473,6 +489,41 @@
     });
     gait.offArm.rotation.x = lerp(gait.offArm.rotation.x, T.OFF_ARM_X, air);
     gait.torso.rotation.x = lerp(gait.torso.rotation.x, T.TORSO_X, air);
+    return lift;
+  };
+
+  /**
+   * ジャックナイフ（必殺技）の跳躍。applySmashJump() と同じ考え方で、歩行ポーズの後に
+   * 上から重ねる。高い打点へ跳び上がり、**両脚をそろえて後ろへ折りたたむ**（＝体が
+   * 折りたたみナイフのように「くの字」になる、技の名前そのものの形）。
+   * 打点の瞬間にはもう跳び上がっていて（JUMP_START の高さ）、振り終わりで着地する。
+   * @param {object} state その選手の見た目に関わる状態（setSwingPose と同じもの）
+   * @returns {number} 浮いた高さ(m)。影を小さくするのに使う（world.js 参照）
+   */
+  scene3d.applyJackknifeLeap = function applyJackknifeLeap(player, state) {
+    const { anim, stroke } = state;
+    if (stroke !== 'jackknife' || anim <= 0) return 0;
+    const J = SWING.JACK;
+    const span = SPECIAL.JACK.ANIM;
+    const progress = clamp((span - anim) / span, 0, 1);
+    const rise = Math.asin(clamp(J.JUMP_START, 0, 1)); // 打点の瞬間の位相
+    const phase = progress < J.JUMP_PEAK
+      ? lerp(rise, Math.PI / 2, progress / J.JUMP_PEAK)
+      : lerp(Math.PI / 2, Math.PI, (progress - J.JUMP_PEAK) / (1 - J.JUMP_PEAK));
+    const lift = J.JUMP_H * Math.sin(phase);
+    player.position.y = lift;
+
+    const gait = player.userData.gait;
+    const air = clamp(lift / J.JUMP_H, 0, 1);
+    // 両脚そろえて後ろへ折る（はさみ跳びのスマッシュと違い、左右で開かない）。
+    // 膝は**カメラ側（選手の後ろ）へ**折りたたむ：カメラは選手の真後ろにあるので、
+    // 逆へ折ると体に隠れて「折りたたんだ」ことが見えない。靴の裏が見えるのが正解。
+    gait.legs.forEach(({ hip, knee }) => {
+      hip.rotation.x = lerp(hip.rotation.x, J.LEG_FOLD, air);
+      knee.rotation.x = lerp(knee.rotation.x, J.KNEE_TUCK, air);
+    });
+    gait.offArm.rotation.x = lerp(gait.offArm.rotation.x, -J.LEG_FOLD * 0.4, air);
+    gait.torso.rotation.x = lerp(gait.torso.rotation.x, J.TORSO_X, air);
     return lift;
   };
 

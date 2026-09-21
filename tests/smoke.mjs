@@ -5380,6 +5380,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 // 1ゲームにつき SPECIAL.USES_PER_GAME 回まで（全技で共有、ゲームが替わると回復）。
 {
   const { SPECIAL, SPECIAL_MOVES, CHARGE, PLAYER, COURT, HALF_W: HW, HALF_L: HL } = R.config;
+  /** 人間のラケット側（game.js の RACKET_SIDE.you）。フォア側が world -x、バック側が +x */
+  const RACKET_SIDE_YOU = -1;
   const ALL = SPECIAL_MOVES.map((m) => m.key);
   /** 必殺技は自動発動なので、専用の入力はない（いつもの無入力でよい） */
   const idle = { moveX: 0, moveZ: 0, lob: false };
@@ -5755,6 +5757,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       ['dunkSmash', (g) => { g.you.z = -3; ballAt(g, 2.6, 0.3, 0); }],
       ['divingVolley', (g) => { g.you.z = -3; ballAt(g, 1.0, 0.3, 0); }],
       ['driveVolley', (g) => { g.you.z = -9; ballAt(g, 1.2, 0.3, 0); }],
+      ['jackknife', (g) => { g.you.x = 2; g.you.z = -9.5; ballAt(g, 1.8, 0.2, 1, 1); }],
       ['buggyWhip', (g) => { g.you.z = -9; ballAt(g, 1.0); }],
       ['hawkEye', (g) => { g.you.z = -9; ballAt(g, 1.0); }],
       ['tweener', (g) => { g.you.z = -10.5; ballAt(g, 1.0, -1.2); }],
@@ -6109,6 +6112,110 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     ok(armed.stroke === 'volley-forehand' && armed.special === null,
       `a volley stays a volley: stroke=${armed.stroke} special=${armed.special}`);
     ok(armed.call === hit([]).call, `and it is called a volley: ${armed.call}`);
+  }
+
+  // --- ジャックナイフ：高く弾んだ球を、足を止めてフラットのバックで叩く ---
+  // バギーホイップ（フォア／トップスピン／走らされている）と背中合わせの条件。
+  // 打点が高いほど速く・深くなるのがこの技の肝。
+  {
+    const { JACK } = SPECIAL;
+    /** 高く弾んだ球をバックハンド側（world +x＝ラケット側の逆）に置く */
+    const highBall = (g, y = 1.8, speed = 0) => {
+      g.you.x = 2.0; g.you.z = -9.5; g.you.speed = speed;
+      Object.assign(g.ball, {
+        x: g.you.x - RACKET_SIDE_YOU * 0.5, y, z: g.you.z + 0.2, vx: 0, vy: -1, vz: -4, bounces: 1,
+      });
+    };
+    const armed = (opt = {}) => {
+      const g = rally(['jackknife', 'buggyWhip', 'hawkEye'],
+        { moveX: opt.moveX || 0, moveZ: 0, lob: false });
+      highBall(g, opt.y === undefined ? 1.8 : opt.y, opt.speed || 0);
+      if (opt.fore) g.ball.x = g.you.x + RACKET_SIDE_YOU * 0.5; // フォアハンド側へ置き直す
+      g.chargeStart(opt.spin || 'flat');
+      g.you.chargeTime = CHARGE.MAX_TIME * (opt.charge === undefined ? 0.6 : opt.charge);
+      return g;
+    };
+
+    ok(armed().pickSpecial() === 'jackknife',
+      `a high bounced ball with a flat backhand picks the jackknife, got ${armed().pickSpecial()}`);
+    ok(armed({ y: JACK.MIN_Y - 0.2 }).pickSpecial() !== 'jackknife',
+      'but not on a ball below shoulder height');
+    ok(armed({ spin: 'top' }).pickSpecial() !== 'jackknife'
+      && armed({ spin: 'slice' }).pickSpecial() !== 'jackknife',
+      'nor with topspin (V) or slice (C) — it is the flat (B) shot');
+    ok(armed({ fore: true }).pickSpecial() !== 'jackknife',
+      'nor on the forehand side');
+    ok(armed({ speed: JACK.MAX_SPEED + 2 }).pickSpecial() !== 'jackknife',
+      'nor while still running (that is the buggy whip situation)');
+    ok(armed({ charge: JACK.MIN_CHARGE - 0.1 }).pickSpecial() !== 'jackknife',
+      'nor on a barely-charged block return');
+    // ノーバウンドの高い球はドライブボレー／ダンクスマッシュの領分
+    {
+      const g = armed();
+      g.ball.bounces = 0;
+      ok(g.pickSpecial() !== 'jackknife', `a no-bounce high ball is not a jackknife, got ${g.pickSpecial()}`);
+    }
+
+    /** 技を乗せて1本打ち、打球を調べる */
+    const hitJack = (y, moveX = 0, youX = 2.0) => {
+      const g = armed({ y, moveX });
+      g.you.x = youX;
+      g.ball.x = youX - RACKET_SIDE_YOU * 0.5;
+      g.you.special = 'jackknife';
+      g.you.swingCharge = 0.6;
+      g.hit('you');
+      return {
+        land: R.physics.predictLanding(g.ball),
+        kmh: R.math.mpsToKmh(Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz)),
+        stroke: g.you.stroke,
+        anim: g.you.anim,
+      };
+    };
+
+    // 打点が高いほど速く、深くなる（MAX_Y より上は頭打ち）
+    const low = hitJack(JACK.MIN_Y + 0.05);
+    const high = hitJack(JACK.MAX_Y);
+    const over = hitJack(JACK.MAX_Y + 0.3);
+    ok(high.kmh > low.kmh * 1.4,
+      `taking it high makes it much faster: ${low.kmh.toFixed(0)} → ${high.kmh.toFixed(0)}km/h`);
+    ok(high.land.z > low.land.z + 1.0,
+      `and deeper: z ${low.land.z.toFixed(2)} → ${high.land.z.toFixed(2)}`);
+    ok(Math.abs(over.kmh - high.kmh) < 3,
+      `above MAX_Y it is capped: ${over.kmh.toFixed(0)} vs ${high.kmh.toFixed(0)}km/h`);
+    ok(inOpponentCourt(low.land) && inOpponentCourt(high.land),
+      `both land in: ${JSON.stringify(low.land)} / ${JSON.stringify(high.land)}`);
+
+    // 既定はダウン・ザ・ライン（自分が立っている側）、←→ で逆へ振れる
+    ok(hitJack(1.8, 0, 2.0).land.x > 0 && hitJack(1.8, 0, -2.0).land.x < 0,
+      'with no input it goes down the line, on the side you are standing');
+    ok(hitJack(1.8, 1, 2.0).land.x < 0,
+      'and the arrow keys swing it across court');
+
+    // 専用モーション（跳んで叩く）
+    ok(low.stroke === 'jackknife' && low.anim === JACK.ANIM,
+      `it uses its own motion, got ${low.stroke}/${low.anim}`);
+    ok(JACK.ANIM > PLAYER.SWING_ANIM, `which is longer than a normal swing, got ${JACK.ANIM}`);
+
+    // 離した後に打点が落ちた／ノーバウンドで触った1打では技を下ろす
+    {
+      const g = armed();
+      g.you.special = 'jackknife';
+      g.ball.y = JACK.MIN_Y - 0.3; // 落ちてくるのを待ってしまった
+      g.hit('you');
+      ok(g.you.special === null && g.usesLeft('jackknife') === 1,
+        `a jackknife on a ball that dropped is stood down: ${g.you.special}`);
+    }
+
+    // バギーホイップとは同じ1打で両立しない（フォア/バック・球種が背中合わせ）
+    {
+      const jackScene = armed();
+      const whipScene = rally(['jackknife', 'buggyWhip']);
+      whipScene.you.z = -9;
+      draggedWide(whipScene);
+      ballAt(whipScene, 1.0);
+      ok(jackScene.pickSpecial() === 'jackknife' && whipScene.pickSpecial() === 'buggyWhip',
+        `the two never overlap: ${jackScene.pickSpecial()} / ${whipScene.pickSpecial()}`);
+    }
   }
 
   // --- バギーホイップの打球は空中で横に曲がる（それでも狙い通りに落ちる） ---

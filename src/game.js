@@ -317,6 +317,9 @@
     // ／跳ね上がってスマッシュの高さになった、という取り違えを防ぐ。
     hawkEye: (g, ball) => ball.bounces > 0
       && !naturalStroke(g, 'you', ball, g.you, g.you.swingCharge).smash,
+    // 弾んだ高い球を叩く技なので、ノーバウンドで触ってしまった／落ちてくるのを待って
+    // しまった（打点が下がった）1打では下ろす。跳んで叩く専用モーションに切り替わるため。
+    jackknife: (g, ball) => ball.bounces > 0 && ball.y >= SPECIAL.JACK.MIN_Y,
   };
 
   /**
@@ -384,6 +387,23 @@
       && c.contact('driveVolley').bounces === 0
       && c.contact('driveVolley').y >= SPECIAL.DRIVE.MIN_Y
       && c.contact('driveVolley').y < SPECIAL.DRIVE.MAX_Y,
+    // 「高く弾んだ球を、足を止めてフラットのバックハンドで叩く」場面だけ。
+    // バギーホイップ（フォア／トップスピン／走らされている）とちょうど背中合わせの条件で、
+    // 同じ1打で両方が成立することはない。
+    // ・バウンド済みの高い球（MIN_Y＝肩の高さ）に限る。ノーバウンドの高い球はダンク
+    //   スマッシュ／ドライブボレーの領分で、そちらのほうが優先度も上にある。
+    // ・押したキーが B（フラット）であること。高い打点から下向きに叩き込む打ち方なので、
+    //   擦り上げるトップスピンやスライスでは成立しない（バギーホイップの逆）。
+    // ・足が止まっていること（MAX_SPEED）。跳び上がる踏み切りが要る＝走らされている
+    //   ときはバギーホイップ、止まって叩けるときはこちら、と場面が分かれる。
+    jackknife: (g, c) => {
+      if (c.serving || c.spin !== 'flat' || g.currentStroke() !== 'backhand') return false;
+      const at = c.contact('jackknife');
+      const { JACK } = SPECIAL;
+      return !!at && at.bounces > 0 && at.y >= JACK.MIN_Y
+        && c.charge >= JACK.MIN_CHARGE
+        && g.you.speed <= JACK.MAX_SPEED;
+    },
     // 「フォア側へ大きく振り回されて、追いつきざまにトップスピンで振り抜く」場面だけ：
     // V（トップスピン）で溜めたフォアハンドで、まだ止まりきっておらず、ラケット側の
     // サイドへ大きく走って（runX）、実際にそちらへ寄って立っている（you.x）。
@@ -467,6 +487,15 @@
     driveVolley: (g, c) => c.bounces === 0
       && c.contactY >= SPECIAL.DRIVE.MIN_Y
       && c.contactY < SPECIAL.DRIVE.MAX_Y,
+    // 高く弾んだ球を、足を止めて跳びながらバックハンドで叩き込む。人間の
+    // 「B（フラット）で溜めた」に当たる条件は AI には無いので、残りの3条件
+    // （バウンド済みの高い打点・バックハンド・足が止まっている）で見る。
+    jackknife: (g, c) => {
+      const { JACK } = SPECIAL;
+      return c.bounces > 0 && c.contactY >= JACK.MIN_Y
+        && c.stroke === 'backhand'
+        && c.player.speed <= JACK.MAX_SPEED;
+    },
     // フォア側へ大きく振り回されて、追いつきざまに振り抜くグラウンドストローク。
     // 人間の「V（トップスピン）で溜めた」に当たる条件は AI には無いので、残りの
     // 3条件（フォアハンド・まだ止まりきっていない・ラケット側へ大きく走って寄った）で見る。
@@ -1861,9 +1890,11 @@
       // CPU/AI がノーバウンドで返せるのは元々ネット際（PLAYER.VOLLEY_Z 以内。
       // checkSwings() のゲート）だけなので、その1本がそのままボレーになる。
       const isVolley = special ? special === 'divingVolley' : natural.volley;
-      // ツイーナー（股抜き）は他のどれでもない専用のモーション。
+      // ツイーナー（股抜き）とジャックナイフ（跳んで高い打点を叩く）は、
+      // 他のどれでもない専用のモーション。
       const stroke = special === 'tweener' ? 'tweener'
-        : isSmash ? 'smash' : isVolley ? `volley-${baseStroke}` : baseStroke;
+        : special === 'jackknife' ? 'jackknife'
+          : isSmash ? 'smash' : isVolley ? `volley-${baseStroke}` : baseStroke;
 
       // AI（cpu/cpuMate は人間の逆をつきつつ you 陣地(z<0)へ、youMate はダブルスで唯一の
       // AI仲間なので相手チームの主力 cpu の逆をつきつつ cpu 陣地(z>0)へ）。
@@ -1998,7 +2029,8 @@
       // スマッシュとツイーナーは跳んで打つぶんモーションが長い（scene/player.js 参照）。
       player.anim = stroke === 'smash' ? PLAYER.SMASH_ANIM
         : stroke === 'tweener' ? SPECIAL.TWEENER.ANIM
-          : PLAYER.SWING_ANIM;
+          : stroke === 'jackknife' ? SPECIAL.JACK.ANIM
+            : PLAYER.SWING_ANIM;
       player.stroke = stroke;
       player.spin = spin; // 振っている間のフォーム（scene/player.js）に使う
       // 必殺技で決めたときは球種名ではなく技名を出す（「何で取ったか」がそのまま伝わる）。
@@ -2105,6 +2137,7 @@
       if (special === 'dunkSmash') return 'smash';
       if (special === 'divingVolley') return `volley-${base}`;
       if (special === 'tweener') return 'tweener';
+      if (special === 'jackknife') return 'jackknife';
       if (at.y >= PLAYER.SMASH_MIN_Y && charge >= PLAYER.SMASH_MIN_CHARGE) return 'smash';
       if (at.bounces === 0 && this.you.z > -COURT.SERVICE) return `volley-${base}`;
       return base;
@@ -2362,6 +2395,31 @@
           spin: 'top',
           risk: 0,
           reactBonus: TWEENER.REACT_BONUS,
+        };
+      }
+
+      if (move === 'jackknife') {
+        const { JACK } = SPECIAL;
+        // **打点が高いほど速く・深くなる。** 弾んだ球を落ちるまで待つと苦しいまま、
+        // 頂点を叩けてはじめて攻撃になる——という実際のテニスの理屈をそのまま値にした。
+        // 高さは打点そのもの（this.ball.y）で見る。MAX_Y を超えても頭打ち。
+        const high = clamp((this.ball.y - JACK.MIN_Y) / (JACK.MAX_Y - JACK.MIN_Y), 0, 1);
+        // 既定はダウン・ザ・ライン＝**自分が立っている側**のサイドライン際（他の技が
+        // 既定にしているクロスの逆）。コート中央にいるときだけバックハンド側へ倒す。
+        // ←→ を入れればそちらへ振れる＝クロスにも打てる。
+        const line = signOr(actor.x, -RACKET_SIDE[who]);
+        return {
+          target: {
+            x: (aim !== 0 ? Math.sign(aim) : line) * JACK.X,
+            y: BALL_R,
+            z: zDir * lerp(JACK.Z_MIN, JACK.Z_MAX, high),
+          },
+          // バックハンドの技なので能力も「バックハンド」を見る（stroke は専用の
+          // 'jackknife' に変わっているので、上の ground（フォア/バックの引き当て）は使わない）。
+          flight: lerp(JACK.T_LOW, JACK.T_HIGH, high) * attr.backhand,
+          clearance: JACK.CLEARANCE,
+          spin: 'flat',
+          risk: 0,
         };
       }
 
