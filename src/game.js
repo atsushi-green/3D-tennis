@@ -295,7 +295,7 @@
    * 各必殺技が「今この場面で出せるか」。装備している技を SPECIAL_MOVES の並び順
    * （＝優先度）に上から当てていき、最初に true になったひとつだけが**自動で**発動する
    * （Game#pickSpecial）。条件が重ならないよう、技ごとに担当する場面を分けてある：
-   * サーブ／前に詰めながらの高いノーバウンド／届かない球／抜かれた球／
+   * サーブ／前に詰めながらの高いノーバウンド／抜かれた球／届かない球／
    * 届かないノーバウンド／浮いたノーバウンド／
    * 走らされているフォアハンド／足を止めて溜めたグラウンドストローク。
    * @type {{[key:string]: (g: Game, c: object) => boolean}}
@@ -313,6 +313,13 @@
       && c.contact('dunkSmash').bounces === 0
       && c.contact('dunkSmash').y >= SPECIAL.DUNK.MIN_Y
       && g.you.fwd >= SPECIAL.DUNK.MIN_FWD,
+    // 「もう自分より後ろを通っている（抜かれた）球」だけ。リーチが伸びる（TWEENER.REACH_MULT）
+    // ので、普通なら触れない距離の球も拾える＝これが技の本体。**縮地より先に判定する**
+    // （SPECIAL_MOVES の並び順）：抜かれた球は「離れていて走っても間に合わない球」にも
+    // 当てはまることが多く、逆順だと両方を装備したときに縮地が先に拾ってしまう。
+    tweener: (g, c) => !c.serving && !!c.contact('tweener')
+      && g.ball.z < g.you.z - SPECIAL.TWEENER.BEHIND
+      && g.ball.y >= SPECIAL.TWEENER.MIN_Y,
     // 「ボールが十分に離れていて、普通に振っても届かず、走っても間に合わない」球だけ。
     // ・ボールとの距離（MIN_DIST）を見ないと、すぐ横を速く通り過ぎる球——手を伸ばせば
     //   届きそうな「ギリギリ届かない」球——にも出てしまう（そういう球でも2バウンド目は
@@ -324,9 +331,6 @@
       if (g.ballDistance() < SPECIAL.DASH.MIN_DIST) return false;
       return !!c.dashSpot() && c.dashUnreachable();
     },
-    tweener: (g, c) => !c.serving && !!c.contact('tweener')
-      && g.ball.z < g.you.z - SPECIAL.TWEENER.BEHIND
-      && g.ball.y >= SPECIAL.TWEENER.MIN_Y,
     // 「ノーバウンドだが、普通に振ったのでは届かない」球だけ。伸びたリーチ（DIVE.REACH_MULT）
     // でなら捉えられて、通常のリーチでは同じノーバウンドを捉えられない、という差が発動条件。
     // これを見ないと、正面に来たふつうのボレー——手を伸ばさなくても届く球——にまで飛び込んで
@@ -1650,6 +1654,7 @@
       Object.assign(ball, solveShot(from, target, flightT, clearance, spin));
       ball.spin = spin;
       ball.curve = 0;   // サーブは曲がらない（バギーホイップ専用の効果）
+      ball.reactBonus = 0; // 前のツイーナーの「読みにくさ」も持ち越さない
       ball.kick = kick; // 1バウンド目だけ大きく跳ね上げる目印（bounce() が読んで消す）
       if (kick) this.spendSpecial('kickServe', undefined, who); // サーブは必ず「起きる」ので打った時点で消費
       // 打った瞬間の初速をそのままスコアボード脇に出す（次のポイントが始まるまで残す）
@@ -1925,6 +1930,9 @@
       Object.assign(ball, solveShot(from, shot.target, shot.flight, shot.clearance, spin, curve));
       ball.spin = spin;
       ball.curve = curve;
+      // 背を向けたまま打つツイーナーだけ、相手の反応がこの秒数ぶん余計に遅れる
+      // （updateReactTimers）。他の1打では 0 に戻す＝前の技を持ち越さない。
+      ball.reactBonus = shot.reactBonus || 0;
       // サーブの返球も含め、ここで打たれた球は以降このポイントの風(this.wind)にさらされる
       // （サーブ自体の飛翔だけは beginServe() が ball.wind=0 にしているので無風のまま）。
       ball.wind = this.wind;
@@ -2275,13 +2283,34 @@
 
       if (move === 'tweener') {
         const { TWEENER } = SPECIAL;
+        // 抜かれた体勢から打つ1本なので、**相手がどこにいるか**で打ち分ける。
+        // 詰めてきている相手に低い球を打てば触られるだけ、下がっている相手にロブを
+        // 上げればただのつなぎ球——以前は場面を問わず後者（ロブ）しか出なかった。
+        const foe = this.doubles
+          ? this.doublesFoes(who).near
+          : this.actor(TEAM_OF[who] === 'you' ? 'cpu' : 'you');
+        const rushing = Math.abs(foe.z) <= TWEENER.NET_Z;
+        // 狙う左右は ←→ の入力が最優先。無入力なら相手のいない側へ逃がす
+        // （背中を向けて打つので、自分の立ち位置ではなく相手の位置で決めるほうが自然）。
+        const away = aim !== 0 ? Math.sign(aim) : -signOr(foe.x, 1);
+        if (rushing) {
+          return {
+            target: { x: away * TWEENER.LOB_X, y: BALL_R, z: zDir * TWEENER.LOB_Z },
+            flight: TWEENER.LOB_T,
+            clearance: TWEENER.LOB_CLEARANCE,
+            spin: 'top',
+            lob: true,
+            risk: 0,
+            reactBonus: TWEENER.REACT_BONUS,
+          };
+        }
         return {
-          target: { x: dir * TWEENER.X, y: BALL_R, z: zDir * TWEENER.Z },
-          flight: TWEENER.T,
-          clearance: TWEENER.CLEARANCE,
+          target: { x: away * TWEENER.PASS_X, y: BALL_R, z: zDir * TWEENER.PASS_Z },
+          flight: TWEENER.PASS_T * ground,
+          clearance: TWEENER.PASS_CLEARANCE,
           spin: 'top',
-          lob: true,
           risk: 0,
+          reactBonus: TWEENER.REACT_BONUS,
         };
       }
 
@@ -2707,6 +2736,31 @@
       };
     }
 
+    /**
+     * ツイーナーを狙って背走している間だけ掛かる足の速さの倍率（それ以外は常に1）。
+     * ロブで抜かれた球はバウンド後 12m/s 前後で後ろへ抜けていくので、通常の足
+     * （PLAYER.SPEED=7.2m/s）では「ボールに追い越される一瞬」にしか手が届かない
+     * ＝ツイーナーが事実上出せない技になっていた（SPECIAL.TWEENER のコメント参照）。
+     * 「抜かれた球を追う背走ダッシュ」そのものを技の一部として扱い、この間だけ速くする。
+     * 掛かる条件は狭く、ふだんの走りの感触は変えない：
+     *   ・ツイーナーを装備していて、このゲームの回数がまだ残っている
+     *   ・ラリー中で、相手の打った球が生きている
+     *   ・その球が自陣にあって、すでに自分より後ろ（＝抜かれている）
+     *   ・後ろへ入力している（前や横へ走るぶんには速くならない）
+     * @returns {number}
+     */
+    tweenerChaseMult() {
+      const { TWEENER } = SPECIAL;
+      if (this.specials.indexOf('tweener') === -1 || this.usesLeft('tweener') <= 0) return 1;
+      if (this.phase !== 'rally') return 1;
+      const ball = this.ball;
+      if (!ball.live || ball.last === 'you') return 1;
+      if (ball.z >= PLAYER.NET_MARGIN) return 1;          // まだ自陣に入っていない
+      if (ball.z >= this.you.z - TWEENER.BEHIND) return 1; // まだ抜かれていない
+      if (this.input.moveZ >= 0) return 1;                // 後ろへ追っている間だけ
+      return TWEENER.CHASE_MULT;
+    }
+
     movePlayers(dt) {
       this.updateReactTimers(dt);
 
@@ -2726,7 +2780,8 @@
         // 目標速度（入力なしなら0）へ、加速度で少しずつ近づける。
         // 急停止・瞬間方向転換にならないので、コート上で滑るような自然さが出る。
         const hasInput = mx !== 0 || mz !== 0;
-        const maxSpeed = PLAYER.SPEED * this.you.attr.speed * this.staminaSpeedMult(this.you.stamina);
+        const maxSpeed = PLAYER.SPEED * this.you.attr.speed
+          * this.staminaSpeedMult(this.you.stamina) * this.tweenerChaseMult();
         const desiredVx = hasInput ? (mx / len) * maxSpeed : 0;
         const desiredVz = hasInput ? (mz / len) * maxSpeed : 0;
         const rate = (hasInput ? PLAYER.ACCEL : PLAYER.DECEL) * dt;
@@ -2784,12 +2839,14 @@
       const owner = this.ball.last;
       if (owner !== this.lastBallOwnerSeen) {
         // 能力値「リーチ・読み」が高い選手ほど反応遅延が短い（attr.react）。
+        // コースが読みにくい1打（ツイーナー）は、その分だけ反応の出足を遅らせる。
+        const bonus = this.ball.reactBonus || 0;
         if (owner === 'you') {
-          this.reactTimers.cpu = PLAYER.CPU_REACT * this.cpu.attr.react;
-          this.reactTimers.cpuMate = PLAYER.CPU_REACT * this.cpuMate.attr.react;
+          this.reactTimers.cpu = PLAYER.CPU_REACT * this.cpu.attr.react + bonus;
+          this.reactTimers.cpuMate = PLAYER.CPU_REACT * this.cpuMate.attr.react + bonus;
           this.rollPoach('cpuMate', 'cpu');
         } else if (owner === 'cpu') {
-          this.reactTimers.youMate = PLAYER.CPU_REACT * this.youMate.attr.react;
+          this.reactTimers.youMate = PLAYER.CPU_REACT * this.youMate.attr.react + bonus;
           this.rollPoach('youMate', 'you');
         }
       }

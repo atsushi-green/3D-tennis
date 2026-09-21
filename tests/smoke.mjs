@@ -5379,7 +5379,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 // Space（input.special）を押しながら溜めキーを離すと、その場面に合う技が1つだけ出る。
 // 1ゲームにつき SPECIAL.USES_PER_GAME 回まで（全技で共有、ゲームが替わると回復）。
 {
-  const { SPECIAL, SPECIAL_MOVES, CHARGE, HALF_W: HW, HALF_L: HL } = R.config;
+  const { SPECIAL, SPECIAL_MOVES, CHARGE, PLAYER, COURT, HALF_W: HW, HALF_L: HL } = R.config;
   const ALL = SPECIAL_MOVES.map((m) => m.key);
   /** 必殺技は自動発動なので、専用の入力はない（いつもの無入力でよい） */
   const idle = { moveX: 0, moveZ: 0, lob: false };
@@ -5796,6 +5796,145 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       ok(deep < cap * 1.05, `a dunk smash from deep is capped near MAX_SPEED: ${deep.toFixed(0)}km/h (cap ${cap.toFixed(0)})`);
       ok(deep <= near * 1.05,
         `and the extra distance does not make it faster: deep ${deep.toFixed(0)} vs near ${near.toFixed(0)}km/h`);
+    }
+  }
+
+  // --- ツイーナー：相手の位置で打ち分け、背走で追いつけるようにする ---
+  {
+    const { TWEENER } = SPECIAL;
+    /** 打球が飛翔中にいちばん高く上がる高さ(m)（predictApex は高さを返さないので自前で追う） */
+    const apexY = (ball) => {
+      const s = Object.assign({}, ball);
+      let top = s.y;
+      for (let i = 0; i < 240 * 5; i++) {
+        R.physics.integrate(s, 1 / 240);
+        top = Math.max(top, s.y);
+        if (s.y <= R.config.PHYSICS.BALL_R && s.vy < 0) break;
+      }
+      return top;
+    };
+    /** 抜かれた球（自分のすぐ後ろ）をツイーナーで1本打ち、その打球を調べる */
+    const tweener = (foeZ, foeX = 0, moveX = 0) => {
+      const g = rally(['tweener'], { moveX, moveZ: 0, lob: false });
+      g.you.x = 0; g.you.z = -12;
+      g.cpu.x = foeX; g.cpu.z = foeZ;
+      ballAt(g, 0.9, -0.5);
+      g.you.special = 'tweener';
+      g.hit('you');
+      return {
+        land: R.physics.predictLanding(g.ball),
+        apex: apexY(g.ball),
+        kmh: R.math.mpsToKmh(Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz)),
+        reactBonus: g.ball.reactBonus,
+        label: g.lastShotBy.you,
+      };
+    };
+
+    // 詰めてきた相手には頭上を越すロブ、下がっている相手には低く速い抜き球
+    const vsNet = tweener(2.0);
+    const vsBack = tweener(10.5);
+    ok(inOpponentCourt(vsNet.land) && inOpponentCourt(vsBack.land),
+      `both tweener shots land in: net ${JSON.stringify(vsNet.land)} back ${JSON.stringify(vsBack.land)}`);
+    ok(vsNet.apex > vsBack.apex + 1.5,
+      `vs a net rusher the tweener goes up and over: apex ${vsNet.apex.toFixed(2)}m vs ${vsBack.apex.toFixed(2)}m`);
+    ok(vsBack.kmh > vsNet.kmh * 1.3,
+      `vs a deep opponent it is a fast passing shot instead: ${vsBack.kmh.toFixed(0)}km/h vs ${vsNet.kmh.toFixed(0)}km/h`);
+    ok(vsNet.land.z > COURT.SERVICE && vsBack.land.z > COURT.SERVICE,
+      `both land deep, past the service line: ${vsNet.land.z.toFixed(2)} / ${vsBack.land.z.toFixed(2)}`);
+
+    // 無入力なら相手のいない側へ逃がす（←→ を入れればそちらが優先）
+    ok(tweener(2.0, 2.5).land.x < 0 && tweener(2.0, -2.5).land.x > 0,
+      'with no input the tweener goes away from the opponent');
+    // ←→ の入力（画面基準。world へは INPUT_X_TO_WORLD で反転）を入れればそちらが優先
+    ok(tweener(2.0, 2.5, -1).land.x > 0 && tweener(2.0, -2.5, 1).land.x < 0,
+      'and the arrow keys override that choice');
+
+    // 背を向けて打つので相手の出足が遅れる（この1打だけ）
+    ok(vsNet.reactBonus === TWEENER.REACT_BONUS && vsBack.reactBonus === TWEENER.REACT_BONUS,
+      `the tweener delays the opponent's reaction by ${TWEENER.REACT_BONUS}s, got ${vsNet.reactBonus}`);
+    {
+      const g = rally(['tweener']);
+      g.you.z = -12;
+      ballAt(g, 0.9, -0.5);
+      g.you.special = 'tweener';
+      g.hit('you');
+      g.lastBallOwnerSeen = null;
+      g.updateReactTimers(0);
+      const withTweener = g.reactTimers.cpu;
+      // 次の普通の1打では戻る（技の「読みにくさ」を持ち越さない）
+      g.ball.last = 'cpu';
+      ballAt(g, 1.0);
+      g.you.special = null;
+      g.hit('you');
+      g.lastBallOwnerSeen = null;
+      g.updateReactTimers(0);
+      ok(withTweener > g.reactTimers.cpu + TWEENER.REACT_BONUS * 0.9,
+        `the delay is on the tweener only: ${withTweener.toFixed(3)}s vs ${g.reactTimers.cpu.toFixed(3)}s`);
+    }
+
+    // 抜かれた球を背走で追っている間だけ足が速くなる
+    {
+      const back = { moveX: 0, moveZ: -1, lob: false };
+      const fwd = { moveX: 0, moveZ: 1, lob: false };
+      /** 「ロブで抜かれて、自分より後ろを転がっていく球」の状態を作る */
+      const passedMe = (g) => {
+        g.you.x = 0; g.you.z = -11;
+        g.ball.x = 0; g.ball.y = 1.2; g.ball.z = -12.5;
+        g.ball.vx = 0; g.ball.vy = 0; g.ball.vz = -12;
+        g.ball.bounces = 1;
+      };
+      const chasing = rally(['tweener'], back); passedMe(chasing);
+      const running = rally(['tweener'], fwd); passedMe(running);
+      const noGear = rally([], back); passedMe(noGear);
+      // 走り比べ用（下がり切る壁 PLAYER.Z_FAR_MARGIN に当たらないよう、ネット寄りから）
+      const runA = rally(['tweener'], back); passedMe(runA); runA.you.z = -4;
+      const runB = rally([], back); passedMe(runB); runB.you.z = -4;
+      const notYet = rally(['tweener'], back);
+      notYet.you.z = -11; ballAt(notYet, 1.0); // まだ自分より前にある球
+      const usedUp = rally(['tweener'], back); passedMe(usedUp);
+      usedUp.specialUses.tweener = 0;
+
+      ok(chasing.tweenerChaseMult() === TWEENER.CHASE_MULT,
+        `chasing down a ball that passed you is faster, got ${chasing.tweenerChaseMult()}`);
+      ok(running.tweenerChaseMult() === 1, 'but only while running backwards');
+      ok(noGear.tweenerChaseMult() === 1, 'and only with the tweener equipped');
+      ok(notYet.tweenerChaseMult() === 1, 'a ball still in front of you does not speed you up');
+      ok(usedUp.tweenerChaseMult() === 1, 'nor does one when the tweener is already used up');
+
+      // 実際に移動が速くなる（0.8秒下がり続けたときの距離と最高速で見る）
+      const ranBack = (g) => {
+        const from = g.you.z;
+        for (let i = 0; i < 48; i++) {
+          g.ball.z = g.you.z - 1.5; // 追っている間ずっと「自分より後ろ」に居続ける球
+          g.movePlayers(1 / 60);
+        }
+        return { dist: from - g.you.z, speed: g.you.speed };
+      };
+      const boosted = ranBack(runA);
+      const plain = ranBack(runB);
+      ok(boosted.dist > plain.dist * 1.25,
+        `and it shows up in the actual run: ${boosted.dist.toFixed(2)}m vs ${plain.dist.toFixed(2)}m in 0.8s`);
+      ok(Math.abs(boosted.speed - PLAYER.SPEED * TWEENER.CHASE_MULT) < 0.3
+        && Math.abs(plain.speed - PLAYER.SPEED) < 0.3,
+        `the top speed itself is multiplied: ${boosted.speed.toFixed(2)} vs ${plain.speed.toFixed(2)} m/s`);
+    }
+
+    // 抜かれた球は、縮地を装備していてもツイーナーが先に拾う（SPECIAL_MOVES の並び順）
+    {
+      /** 横へ振られたまま抜かれた球＝ツイーナーにも縮地にも当てはまる場面 */
+      const passedWide = (g) => {
+        g.you.x = 0; g.you.z = -10;
+        Object.assign(g.ball, {
+          x: 2.6, y: 1.0, z: -11.5, vx: -12, vy: 0, vz: -6, bounces: 1,
+        });
+      };
+      const t = rally(['tweener']); passedWide(t);
+      const s = rally(['shukuchi']); passedWide(s);
+      const both = rally(['tweener', 'shukuchi']); passedWide(both);
+      ok(t.pickSpecial() === 'tweener' && s.pickSpecial() === 'shukuchi',
+        `precondition: this ball matches both moves, got ${t.pickSpecial()} / ${s.pickSpecial()}`);
+      ok(both.pickSpecial() === 'tweener',
+        `a ball that got past you picks the tweener over shukuchi, got ${both.pickSpecial()}`);
     }
   }
 

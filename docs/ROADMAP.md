@@ -17,6 +17,8 @@
 
 ### バグ（実測で再現を確認したもの）
 
+- [ ] S `tests/smoke.mjs` の「full charge should land clearly deeper」が約1%の確率で落ちる — 溜めなし／フル溜めの着地点を1本ずつ引いて `full > tap + 4.5` を見ているが、深さのばらつき（`SHOT.DRIVE_Z_SPREAD`）で差が最小 4.36m まで詰まる（実測：20000回で 0.9%）。ツイーナーの調整とは無関係な既存の不安定さ。何本か打った中央値で比べるか、この1件だけ `Math.random` を固定する。
+
 ### 表示の不足
 
 - [ ] S Hard の AI の必殺技の残り回数が画面に出ない — `hud.setSpecialUses()` は人間の `game.specialUses` しか見ておらず、AI が技ごとに独立した回数を持っている（`actor.specialUses`）ことが分からない。相手が鷹の目を使い切ったかどうかは駆け引きの材料になるので、スコアボード側に相手ぶんも小さく出す。
