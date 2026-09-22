@@ -298,10 +298,10 @@
       // ジャックナイフ。高い打点をフラットのバックハンドで叩くので、横振り(rotation.y)は
       // グラウンドストロークと同じ系統のまま、仰角(rotation.z)を肩の高さ（Z_START）から
       // 体の前（Z_END）へ下ろす＝上から叩き込む弧になる。必ずバックハンド側に振る。
+      // **進行度0がそのまま打点**（Y_START/Z_START）で、そこから振り抜く：跳躍も
+      // 打点が頂点なので、1コマ目が「跳んだ一番高いところで球を捉えた絵」になる。
       const J = SWING.JACK;
-      const start = SWING.GROUND_START + (swingCharge || 0) * SWING.CHARGE_PULL;
-      const sweep = (SWING.GROUND_SWEEP - (swingCharge || 0) * SWING.CHARGE_PULL) * J.SWEEP_MULT;
-      arm.rotation.y = mirrorGroundAngle(start + progress * sweep, true);
+      arm.rotation.y = mirrorGroundAngle(lerp(J.Y_START, J.Y_END, progress), true);
       arm.rotation.z = lerp(J.Z_START, J.Z_END, progress);
       arm.rotation.x = 0;
       // 跳びながら体をひねって振り抜く（通常のバックハンドより深くひねる）
@@ -493,10 +493,15 @@
   };
 
   /**
-   * ジャックナイフ（必殺技）の跳躍。applySmashJump() と同じ考え方で、歩行ポーズの後に
-   * 上から重ねる。高い打点へ跳び上がり、**両脚をそろえて後ろへ折りたたむ**（＝体が
-   * 折りたたみナイフのように「くの字」になる、技の名前そのものの形）。
-   * 打点の瞬間にはもう跳び上がっていて（JUMP_START の高さ）、振り終わりで着地する。
+   * ジャックナイフ（必殺技）の跳躍。applySmashJump() と同じく歩行ポーズの後に上から
+   * 重ねる。高い打点へ跳び上がり、**両脚をそろえて後ろへ折りたたむ**（＝体が折りたたみ
+   * ナイフのように「くの字」になる、技の名前そのものの形）。
+   *
+   * **打点（progress=0）がそのまま跳躍の頂点**で、そこから着地（progress=1）まで
+   * 落ちてくるだけ。アニメーションは打った瞬間から始まるので、スマッシュのように
+   * 「打点のあとまだ少し上がって頂点に来る」形にすると**打ってから跳んだように見える**
+   * （ユーザー報告）。跳んで高い打点を叩く技なので、打った瞬間がいちばん高い、が正しい。
+   * sin の π/2〜π を使うので、頂点付近はふわりと粘り、着地はなめらかに0へ収束する。
    * @param {object} state その選手の見た目に関わる状態（setSwingPose と同じもの）
    * @returns {number} 浮いた高さ(m)。影を小さくするのに使う（world.js 参照）
    */
@@ -506,11 +511,7 @@
     const J = SWING.JACK;
     const span = SPECIAL.JACK.ANIM;
     const progress = clamp((span - anim) / span, 0, 1);
-    const rise = Math.asin(clamp(J.JUMP_START, 0, 1)); // 打点の瞬間の位相
-    const phase = progress < J.JUMP_PEAK
-      ? lerp(rise, Math.PI / 2, progress / J.JUMP_PEAK)
-      : lerp(Math.PI / 2, Math.PI, (progress - J.JUMP_PEAK) / (1 - J.JUMP_PEAK));
-    const lift = J.JUMP_H * Math.sin(phase);
+    const lift = J.JUMP_H * Math.sin(lerp(Math.PI / 2, Math.PI, progress));
     player.position.y = lift;
 
     const gait = player.userData.gait;
