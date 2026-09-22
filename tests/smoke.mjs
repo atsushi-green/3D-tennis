@@ -6206,6 +6206,39 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
         `a jackknife on a ball that dropped is stood down: ${g.you.special}`);
     }
 
+    // 跳躍は「溜めを離した瞬間」から始まる＝跳んでから振る（打球のモーションは
+    // hit() が当たった瞬間から始めるので、同じ時計に乗せると跳ぶのと振るのが同時になる）
+    {
+      const g = armed();
+      ok(g.you.leap === 0, 'precondition: not leaping while still charging');
+      ok(g.pickSpecial() === 'jackknife', 'precondition: the jackknife is armed');
+      g.chargeRelease();
+      ok(g.you.leap === JACK.LEAP_T,
+        `releasing starts the leap before the ball is struck, got ${g.you.leap}`);
+      ok(g.you.anim === 0 && g.you.stroke !== 'jackknife',
+        `and the swing motion has not started yet: anim=${g.you.anim} stroke=${g.you.stroke}`);
+      // 跳んでいる途中で当たる（届く位置に球があるので次のフレームで当たる）
+      // → 跳躍はそのまま続き、振り抜きだけがそこから始まる
+      g.update(1 / 60);
+      ok(g.you.stroke === 'jackknife' && g.you.anim === JACK.ANIM,
+        `the swing starts at contact: ${g.you.stroke}/${g.you.anim}`);
+      ok(g.you.leap > 0 && g.you.leap < JACK.LEAP_T,
+        `while the leap that began at release keeps running, got ${g.you.leap.toFixed(3)}`);
+      ok(JACK.LEAP_T > JACK.ANIM * 0.5,
+        'the leap outlasts enough of the swing to land after it');
+
+      // 技が乗らない普通の1打では跳ばない
+      const plain = rally(['jackknife']);
+      plain.you.z = -9; ballAt(plain, 1.0);
+      chargeUp(plain);
+      plain.chargeRelease();
+      ok(plain.you.leap === 0, `a normal swing does not leap, got ${plain.you.leap}`);
+
+      // ポイントをまたいで持ち越さない
+      g.newPoint();
+      ok(g.you.leap === 0, `a new point clears the leap, got ${g.you.leap}`);
+    }
+
     // 判定は「最初に届く点」ではなく「この1振りでいちばん高く捉えられる点」を見る
     // （ユーザー報告「結構高めでバックフラットを打っているつもりが発動しない」）。
     // 弾んで上がってくる球は、届きはじめの瞬間はまだ低い＝そこを見ると条件を満たす球が

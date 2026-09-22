@@ -590,6 +590,9 @@
         specialLabel: null,
         // 縮地の残像（表示専用）。{x, z, t}＝瞬間移動する前に立っていた位置と、消えるまでの残り時間。
         dash: null,
+        // ジャックナイフの跳躍の残り時間(秒、表示専用)。**溜めを離した瞬間**から数えるので、
+        // 打球のモーション（anim＝当たった瞬間から）より先に始まる＝跳んでから振るように見える。
+        leap: 0,
         // 相手が打ってからこのフレームまでに左右へ動いた量（符号つき、m）。CPU/AI の
         // chaseDist の人間版で、resetChase() が新しい球のたびに0へ戻す。必殺技
         // バギーホイップの「フォア側へ大きく振り回されたか」の判定に使う。
@@ -612,7 +615,7 @@
       // （scene/player.js は player.special を見る）も人間とまったく同じ道を通る。
       const aiActor = (x, z, who) => ({
         x, z, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, spin: 'flat', stamina: 1,
-        runX: 0, fwd: 0, special: null, specialLabel: null, specialUses: {},
+        runX: 0, fwd: 0, special: null, specialLabel: null, specialUses: {}, leap: 0,
         attr: ATTRS[who], netDir: NET_DIR[who],
       });
       this.cpu = aiActor(0, CPU.HOME_Z, 'cpu');
@@ -960,6 +963,11 @@
         // （通常の SWING_WINDOW のままでは、跳んだ先で待っている間に振り終わってしまう）。
         this.you.swing = move === 'shukuchi' ? this.dashToBall() : this.swingWindow();
         this.you.swingSpan = this.you.swing; // 引っ張り／流しの換算（swingWaited()）に使う
+        // ジャックナイフだけは**ここで跳び始める**（当たるのを待たない）。打球のモーションは
+        // hit() が当たった瞬間に始めるので、跳躍まで同じ時計に乗せると「跳ぶ」と「振る」が
+        // 同時になってしまう。離した瞬間から跳べば、跳ぶ→ボールが来る→振り抜く、の順に
+        // 見える（SPECIAL.JACK.LEAP_T 参照）。空振りしてもそのまま着地するだけ。
+        if (move === 'jackknife') this.you.leap = SPECIAL.JACK.LEAP_T;
       }
     }
 
@@ -1524,6 +1532,7 @@
       this.you.serveMiss = false; // 前のサーブの「溜めすぎ」の抽選結果も持ち越さない
       this.you.special = null;    // 前の1打に乗っていた必殺技も持ち越さない
       this.you.dash = null;
+      ACTORS.forEach((w) => { this.actor(w).leap = 0; }); // ジャックナイフの跳躍も持ち越さない
       // AI（Hard）ぶんも同じく持ち越さない
       ACTORS.forEach((w) => { if (w !== 'you') this.actor(w).special = null; });
       this.specialArmed = null;
@@ -2041,6 +2050,9 @@
           : stroke === 'jackknife' ? SPECIAL.JACK.ANIM
             : PLAYER.SWING_ANIM;
       player.stroke = stroke;
+      // AI には「溜めを離す瞬間」が無いので、跳躍はここ（当たった瞬間）から始める。
+      // 人間は chargeRelease() で既に跳んでいるので、そのまま続きを使う。
+      if (stroke === 'jackknife' && player.leap <= 0) player.leap = SPECIAL.JACK.LEAP_T;
       player.spin = spin; // 振っている間のフォーム（scene/player.js）に使う
       // 必殺技で決めたときは球種名ではなく技名を出す（「何で取ったか」がそのまま伝わる）。
       // 技名は打った本人（who）の specialLabel を見る。以前はここで常に this.you を見て
@@ -2739,6 +2751,10 @@
         you.dash.t -= dt;
         if (you.dash.t <= 0) you.dash = null;
       }
+      ACTORS.forEach((w) => {
+        const actor = this.actor(w);
+        if (actor.leap > 0) actor.leap = Math.max(0, actor.leap - dt);
+      });
     }
 
     /** 空振り。当たり判定はせず、振る方向だけボールの位置から見繕う。 */

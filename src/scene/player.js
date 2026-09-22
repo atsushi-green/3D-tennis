@@ -497,21 +497,26 @@
    * 重ねる。高い打点へ跳び上がり、**両脚をそろえて後ろへ折りたたむ**（＝体が折りたたみ
    * ナイフのように「くの字」になる、技の名前そのものの形）。
    *
-   * **打点（progress=0）がそのまま跳躍の頂点**で、そこから着地（progress=1）まで
-   * 落ちてくるだけ。アニメーションは打った瞬間から始まるので、スマッシュのように
-   * 「打点のあとまだ少し上がって頂点に来る」形にすると**打ってから跳んだように見える**
-   * （ユーザー報告）。跳んで高い打点を叩く技なので、打った瞬間がいちばん高い、が正しい。
-   * sin の π/2〜π を使うので、頂点付近はふわりと粘り、着地はなめらかに0へ収束する。
+   * **跳躍だけは打球のモーション（anim）ではなく専用の時計（state.leap）で動く。**
+   * anim は「当たった瞬間」からしか始められないので、そこに跳躍も乗せると跳ぶのと
+   * 振るのが同時になり、「打ってから跳んだ」ように見えてしまう（ユーザー報告）。
+   * leap は**溜めを離した瞬間**（game.js#chargeRelease）から数え始めるので、
+   * 跳ぶ → ボールが来る → 振り抜く → 着地、の順に読める。
+   * 踏み切り（LEAP_RISE）で上がり、頂点でふわりと粘ってから着地する。
    * @param {object} state その選手の見た目に関わる状態（setSwingPose と同じもの）
    * @returns {number} 浮いた高さ(m)。影を小さくするのに使う（world.js 参照）
    */
   scene3d.applyJackknifeLeap = function applyJackknifeLeap(player, state) {
-    const { anim, stroke } = state;
-    if (stroke !== 'jackknife' || anim <= 0) return 0;
+    const leap = state.leap || 0;
+    if (leap <= 0) return 0;
     const J = SWING.JACK;
-    const span = SPECIAL.JACK.ANIM;
-    const progress = clamp((span - anim) / span, 0, 1);
-    const lift = J.JUMP_H * Math.sin(lerp(Math.PI / 2, Math.PI, progress));
+    const { LEAP_T, LEAP_RISE } = SPECIAL.JACK;
+    const u = clamp((LEAP_T - leap) / LEAP_T, 0, 1); // 0＝踏み切り、1＝着地
+    // 上昇（0〜π/2）→ 下降（π/2〜π）。頂点付近は sin が寝るので滞空感が出る。
+    const phase = u < LEAP_RISE
+      ? (u / LEAP_RISE) * (Math.PI / 2)
+      : Math.PI / 2 + ((u - LEAP_RISE) / (1 - LEAP_RISE)) * (Math.PI / 2);
+    const lift = J.JUMP_H * Math.sin(phase);
     player.position.y = lift;
 
     const gait = player.userData.gait;
