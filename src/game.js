@@ -402,7 +402,7 @@
       return !!c.contact('jackknife')
         // 見るのは「最初に届く点」ではなく「この1振りでいちばん高く捉えられる点」
         // （Game#contactPeakY のコメント参照）。バウンド後の打点だけを数える。
-        && c.peakY() >= JACK.MIN_Y
+        && c.peak().y >= JACK.MIN_Y
         && c.charge >= JACK.MIN_CHARGE
         && g.you.speed <= JACK.MAX_SPEED;
     },
@@ -590,9 +590,11 @@
         specialLabel: null,
         // 縮地の残像（表示専用）。{x, z, t}＝瞬間移動する前に立っていた位置と、消えるまでの残り時間。
         dash: null,
-        // ジャックナイフの跳躍の残り時間(秒、表示専用)。**溜めを離した瞬間**から数えるので、
-        // 打球のモーション（anim＝当たった瞬間から）より先に始まる＝跳んでから振るように見える。
-        leap: 0,
+        // 跳んで打つ1打（スマッシュ／ダンクスマッシュ／ジャックナイフ）の跳躍（表示専用）。
+        // {t: 着地までの残り秒, kind: 'smash'|'jackknife'}。**打球のモーション（anim）とは
+        // 別の時計**で、tickLeap() が「もうすぐ球が届く」ところで離す前から始める
+        // ＝跳んでから空中で振り始める絵になる。
+        leap: null,
         // 相手が打ってからこのフレームまでに左右へ動いた量（符号つき、m）。CPU/AI の
         // chaseDist の人間版で、resetChase() が新しい球のたびに0へ戻す。必殺技
         // バギーホイップの「フォア側へ大きく振り回されたか」の判定に使う。
@@ -615,7 +617,7 @@
       // （scene/player.js は player.special を見る）も人間とまったく同じ道を通る。
       const aiActor = (x, z, who) => ({
         x, z, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, spin: 'flat', stamina: 1,
-        runX: 0, fwd: 0, special: null, specialLabel: null, specialUses: {}, leap: 0,
+        runX: 0, fwd: 0, special: null, specialLabel: null, specialUses: {}, leap: null,
         attr: ATTRS[who], netDir: NET_DIR[who],
       });
       this.cpu = aiActor(0, CPU.HOME_Z, 'cpu');
@@ -963,11 +965,10 @@
         // （通常の SWING_WINDOW のままでは、跳んだ先で待っている間に振り終わってしまう）。
         this.you.swing = move === 'shukuchi' ? this.dashToBall() : this.swingWindow();
         this.you.swingSpan = this.you.swing; // 引っ張り／流しの換算（swingWaited()）に使う
-        // ジャックナイフだけは**ここで跳び始める**（当たるのを待たない）。打球のモーションは
-        // hit() が当たった瞬間に始めるので、跳躍まで同じ時計に乗せると「跳ぶ」と「振る」が
-        // 同時になってしまう。離した瞬間から跳べば、跳ぶ→ボールが来る→振り抜く、の順に
-        // 見える（SPECIAL.JACK.LEAP_T 参照）。空振りしてもそのまま着地するだけ。
-        if (move === 'jackknife') this.you.leap = SPECIAL.JACK.LEAP_T;
+        // 跳んで打つ1打なら、まだ跳んでいなければここで跳ぶ。ふつうは tickLeap() が
+        // 溜めている間に（球が届く少し前に）跳ばせているので、ここに来るのは
+        // 「球がまだ遠いのに離した」ような場合だけの保険。
+        this.startLeap(this.leapKind(move, this.you.swingCharge));
       }
     }
 
@@ -1156,8 +1157,9 @@
         },
         // バウンド後の球を、この1振りでいちばん高く捉えられる高さ(m)。
         // 「高い球を叩く」技（ジャックナイフ）の判定に使う。
-        peakY: () => {
-          if (peak === undefined) peak = this.contactPeakY();
+        // 高さの線はジャックナイフのもの（この先読みを使う技がそれだけなので）。
+        peak: () => {
+          if (peak === undefined) peak = this.contactPeak(SPECIAL.JACK.MIN_Y);
           return peak;
         },
         dashSpot: () => {
@@ -1532,7 +1534,7 @@
       this.you.serveMiss = false; // 前のサーブの「溜めすぎ」の抽選結果も持ち越さない
       this.you.special = null;    // 前の1打に乗っていた必殺技も持ち越さない
       this.you.dash = null;
-      ACTORS.forEach((w) => { this.actor(w).leap = 0; }); // ジャックナイフの跳躍も持ち越さない
+      ACTORS.forEach((w) => { this.actor(w).leap = null; }); // 跳躍も持ち越さない
       // AI（Hard）ぶんも同じく持ち越さない
       ACTORS.forEach((w) => { if (w !== 'you') this.actor(w).special = null; });
       this.specialArmed = null;
@@ -2050,9 +2052,9 @@
           : stroke === 'jackknife' ? SPECIAL.JACK.ANIM
             : PLAYER.SWING_ANIM;
       player.stroke = stroke;
-      // AI には「溜めを離す瞬間」が無いので、跳躍はここ（当たった瞬間）から始める。
-      // 人間は chargeRelease() で既に跳んでいるので、そのまま続きを使う。
-      if (stroke === 'jackknife' && player.leap <= 0) player.leap = SPECIAL.JACK.LEAP_T;
+      // AI には「溜めを離す瞬間」も先読みも無いので、跳躍はここ（当たった瞬間）から。
+      // 人間は tickLeap()／chargeRelease() で既に跳んでいるので、その続きをそのまま使う。
+      if (who !== 'you') this.startLeap(stroke === 'smash' || stroke === 'jackknife' ? stroke : null, who);
       player.spin = spin; // 振っている間のフォーム（scene/player.js）に使う
       // 必殺技で決めたときは球種名ではなく技名を出す（「何で取ったか」がそのまま伝わる）。
       // 技名は打った本人（who）の specialLabel を見る。以前はここで常に this.you を見て
@@ -2156,25 +2158,39 @@
      * 発動の判定には区間の中の最高点を使い、**実際にその高さで捉えられたかどうかは
      * 当たった瞬間に SPECIAL_STILL_VALID が見る**（引きつけて高い打点で打てたときだけ
      * 技になり、待ちきれずに低く打てば普通の1打に戻る）。
-     * @returns {number}
+     * @param {number} [minY] 「この高さを最初に超えるのはいつか」を一緒に測りたいときの線(m)。
+     *   跳躍の踏み切り（tickLeap）が使う：技が成立する**最初の瞬間**から逆算して跳ぶので、
+     *   いちばん高い点（＝引きつけきったとき）ではなくこちらが基準になる。
+     * @returns {{y:number, t:number, tAbove:number|null}}
+     *   y＝いちばん高い打点(m)、t＝そこまでの時間(秒)、tAbove＝minY を最初に超える時間(秒)。
+     *   届く範囲にバウンド後の球が来ないなら y=0, t=0, tAbove=null。
      */
-    contactPeakY() {
+    contactPeak(minY) {
       const ball = this.ball;
       const you = this.you;
       const reach = PLAYER.REACH * this.reachMult();
+      const line = minY === undefined ? Infinity : minY;
       const canHit = (at, bounces) => at.z < PLAYER.NET_MARGIN && at.y < PLAYER.REACH_Y
         && !(this.serveInFlight && bounces < 1)
         && Math.hypot(at.x - you.x, at.z - you.z) < reach;
       let peak = 0;
-      if (ball.bounces > 0 && canHit(ball, ball.bounces)) peak = ball.y;
-      // predictWindow() は「届く区間」を1つだけ追う。その間のサンプルを覗いて最高点を拾う
-      // （accept は区間の判定と兼用で、副作用で最高点を更新する）。
+      let peakT = 0;
+      let tAbove = null;
+      if (ball.bounces > 0 && canHit(ball, ball.bounces)) {
+        peak = ball.y;
+        if (ball.y >= line) tAbove = 0;
+      }
+      // predictWindow() は「届く区間」を1つだけ追う。その間のサンプルを覗いて最高点と、
+      // 高さの線を最初に超える時刻を拾う（accept は区間の判定と兼用で、副作用で更新する）。
       predictWindow(ball, (at) => {
         const ok = canHit(at, at.bounces);
-        if (ok && at.bounces > 0) peak = Math.max(peak, at.y);
+        if (ok && at.bounces > 0) {
+          if (at.y > peak) { peak = at.y; peakT = at.t; }
+          if (tAbove === null && at.y >= line) tAbove = at.t;
+        }
         return ok;
       }, this.swingWindow() - 2 * PREDICT_STEP, 1);
-      return peak;
+      return { y: peak, t: peakT, tAbove };
     }
 
     /**
@@ -2723,11 +2739,83 @@
       this.specialArmed = this.specialAim();
       this.swingGuide = this.swingGuidePreview();
       this.updatePrep();
+      this.tickLeap(); // 跳んで打つ1打は、離す前（球が届く少し前）から跳び始める
       this.tickSpecial(dt);
 
       // トスの自動リセットなど、このフレームの stepBall() の結果を見てから
       // 溜めを継続してよいか判定する（先に判定すると1フレーム遅れてしまう）。
       this.tickCharge(dt);
+    }
+
+    /**
+     * 跳躍の長さ(秒)と、そのうち踏み切りに使う割合。打ち方ごとの定数を1か所に引き当てる。
+     * @param {'smash'|'jackknife'} kind
+     */
+    leapTiming(kind) {
+      return kind === 'jackknife'
+        ? { span: SPECIAL.JACK.LEAP_T, rise: SPECIAL.JACK.LEAP_RISE }
+        : { span: PLAYER.SMASH_LEAP_T, rise: PLAYER.SMASH_LEAP_RISE };
+    }
+
+    /**
+     * この1振りが「跳んで打つ打ち方」になるなら、その種類。ならなければ null。
+     * 判定はガイドと同じ previewStroke() を通す＝画面に出ている予告と必ず一致する。
+     * @param {string|null} move この1振りに乗る必殺技
+     * @param {number} charge 溜め量(0〜1)
+     */
+    leapKind(move, charge) {
+      const extra = specialReach(move);
+      const stroke = this.previewStroke(this.predictContact(extra.mult, extra.y), charge, move);
+      return stroke === 'smash' || stroke === 'jackknife' ? stroke : null;
+    }
+
+    /**
+     * 跳び始める（表示専用）。既に跳んでいる最中なら何もしない＝1回の振りで一度だけ跳ぶ。
+     * @param {'smash'|'jackknife'|null} kind
+     */
+    startLeap(kind, who = 'you') {
+      if (!kind) return;
+      const actor = this.actor(who);
+      if (actor.leap) return;
+      actor.leap = { t: this.leapTiming(kind).span, kind };
+    }
+
+    /**
+     * **溜めている間に、球が届く少し前から跳び始める。**
+     *
+     * 打球のモーション（anim）は hit() が「当たった瞬間」に入れるので、跳躍をそこから
+     * 始めると跳ぶのと振るのが同時になる。かといって「溜めを離した瞬間」から跳ばせても、
+     * **人はボールが来たところで離す**ので離してから当たるまでがほぼ0秒で、やはり同時に
+     * 見えた（ユーザー報告：スマッシュもジャックナイフも「飛びはじめるのと打つのが同時」）。
+     *
+     * そこで、まだ離していなくても「あと踏み切りぶんの時間で球が届く」ところまで来たら
+     * 跳び始める。こうすると当たるころには頂点にいて、**空中でラケットを振り始める**絵に
+     * なる。予測（predictContact）はガイドが使っているのと同じものなので、画面に出ている
+     * 予告と跳ぶタイミングがずれない。
+     * 跳んだあと振らなかった（空振りした／離さなかった）ときは、そのまま着地するだけ。
+     */
+    tickLeap() {
+      const you = this.you;
+      if (you.leap || !you.charging || this.phase !== 'rally') return;
+      const move = (this.specialArmed && this.specialArmed.move) || null;
+      const charge = clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1);
+      const kind = this.leapKind(move, charge);
+      if (!kind) return;
+      // 「あと何秒で打てるようになるか」から逆算して踏み切る。
+      // ・スマッシュ … 落ちてくる球を上で叩くので、最初に届く点がそのまま打点。
+      // ・ジャックナイフ … 弾んで上がってくる球なので、最初に届く瞬間はまだ低い。
+      //   **高さの条件（JACK.MIN_Y）を最初に満たす時刻**を基準にする。いちばん高い点
+      //   （引きつけきったとき）を基準にすると、「出せる」と言われてすぐ離した人が
+      //   跳ぶ前に打ってしまう＝跳ぶのと打つのが同時に見える（ユーザー報告）。
+      const extra = specialReach(move);
+      const contact = this.predictContact(extra.mult, extra.y);
+      if (!contact) return;
+      const until = kind === 'jackknife'
+        ? this.contactPeak(SPECIAL.JACK.MIN_Y).tAbove
+        : contact.t;
+      if (until === null) return;
+      const { span, rise } = this.leapTiming(kind);
+      if (until <= span * rise) this.startLeap(kind);
     }
 
     /**
@@ -2753,7 +2841,9 @@
       }
       ACTORS.forEach((w) => {
         const actor = this.actor(w);
-        if (actor.leap > 0) actor.leap = Math.max(0, actor.leap - dt);
+        if (!actor.leap) return;
+        actor.leap.t -= dt;
+        if (actor.leap.t <= 0) actor.leap = null;
       });
     }
 

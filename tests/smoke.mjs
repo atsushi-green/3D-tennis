@@ -4355,6 +4355,68 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       `a normal groundstroke still uses SWING_ANIM, got ${g.you.stroke}/${g.you.anim}`);
   }
 
+  // --- 跳躍は「打つ前」から始まる（スマッシュ／ダンクスマッシュ） ---
+  // 打球のモーション（anim）は hit() が当たった瞬間に入れるので、跳躍を同じ時計に
+  // 乗せると跳ぶのと打つのが同時に見える（ユーザー報告）。tickLeap() が「あと踏み切り
+  // ぶんの時間で球が届く」ところで、まだ溜めキーを離していなくても跳び始める。
+  {
+    const mk = () => {
+      const g = new R.Game({ input: fakeInput, hooks: noHooks });
+      g.start();
+      g.phase = 'rally';
+      g.ball.live = true; g.ball.last = 'cpu'; g.wind = 0;
+      g.you.x = 0; g.you.z = -3;
+      Object.assign(g.ball, {
+        x: 0.3, y: PLAYER.SMASH_MIN_Y + 0.5, z: -2.8, vx: 0, vy: -2, vz: -3, bounces: 0,
+        spin: 'flat', wind: 0, curve: 0,
+      });
+      g.chargeStart('flat');
+      g.you.chargeTime = R.config.CHARGE.MAX_TIME * (PLAYER.SMASH_MIN_CHARGE + 0.2);
+      return g;
+    };
+
+    const g = mk();
+    ok(!g.you.leap, 'precondition: not leaping yet');
+    ok(g.leapKind(null, PLAYER.SMASH_MIN_CHARGE + 0.2) === 'smash',
+      `precondition: this swing would be a smash, got ${g.leapKind(null, 0.7)}`);
+    g.specialArmed = g.specialAim();
+    g.tickLeap();
+    ok(g.you.leap && g.you.leap.kind === 'smash' && g.you.leap.t === PLAYER.SMASH_LEAP_T,
+      `the leap starts while still charging, got ${JSON.stringify(g.you.leap)}`);
+    ok(g.you.charging && g.you.anim === 0 && g.you.stroke !== 'smash',
+      `and the swing motion has not started: ${g.you.stroke}/${g.you.anim}`);
+    ok(PLAYER.SMASH_LEAP_T * PLAYER.SMASH_LEAP_RISE > 0.1,
+      `the take-off is long enough to read, got ${(PLAYER.SMASH_LEAP_T * PLAYER.SMASH_LEAP_RISE).toFixed(3)}s`);
+
+    // 溜めが足りなければ（スマッシュにならないので）跳ばない
+    const weak = mk();
+    weak.you.chargeTime = R.config.CHARGE.MAX_TIME * (PLAYER.SMASH_MIN_CHARGE - 0.2);
+    weak.specialArmed = weak.specialAim();
+    weak.tickLeap();
+    ok(!weak.you.leap, `a swing that will not be a smash does not leap, got ${JSON.stringify(weak.you.leap)}`);
+
+    // 低い球（ふつうのストローク）でも跳ばない
+    const low = mk();
+    low.ball.y = 1.0;
+    low.specialArmed = low.specialAim();
+    low.tickLeap();
+    ok(!low.you.leap, `a normal groundstroke does not leap, got ${JSON.stringify(low.you.leap)}`);
+
+    // 当たったときには、離す前に始めた跳躍がまだ続いている
+    const rise = PLAYER.SMASH_LEAP_T * PLAYER.SMASH_LEAP_RISE;
+    for (let i = 0; i < Math.round(rise * 60); i++) g.update(1 / 60);
+    g.chargeRelease();
+    g.update(1 / 60);
+    ok(g.you.leap && g.you.leap.kind === 'smash',
+      `the leap is still running at contact, got ${JSON.stringify(g.you.leap)}`);
+    ok(g.you.leap.t < PLAYER.SMASH_LEAP_T - rise + 1 / 60,
+      `and it is past the take-off by then, got ${g.you.leap.t.toFixed(3)}`);
+
+    // ポイントをまたいで持ち越さない
+    g.newPoint();
+    ok(!g.you.leap, `a new point clears the leap, got ${JSON.stringify(g.you.leap)}`);
+  }
+
   // スマッシュで打てる位置に立って溜めている間は、構えが 'smash'（頭の後ろへ担ぐ振りかぶり）になる
   {
     const g = new R.Game({ input: fakeInput, hooks: noHooks });
@@ -6206,37 +6268,41 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
         `a jackknife on a ball that dropped is stood down: ${g.you.special}`);
     }
 
-    // 跳躍は「溜めを離した瞬間」から始まる＝跳んでから振る（打球のモーションは
-    // hit() が当たった瞬間から始めるので、同じ時計に乗せると跳ぶのと振るのが同時になる）
+    // 跳躍は「溜めている間」に始まる＝跳んでから空中で振り始める。
+    // 打球のモーション（anim）は hit() が当たった瞬間に入れるので、同じ時計に乗せると
+    // 跳ぶのと振るのが同時になる。離した瞬間から跳ばせても、人はボールが来たところで
+    // 離すので結局ほぼ同時になる（ユーザー報告）。tickLeap() が離す前から跳ばせる。
     {
       const g = armed();
-      ok(g.you.leap === 0, 'precondition: not leaping while still charging');
+      ok(!g.you.leap, 'precondition: not leaping yet');
       ok(g.pickSpecial() === 'jackknife', 'precondition: the jackknife is armed');
-      g.chargeRelease();
-      ok(g.you.leap === JACK.LEAP_T,
-        `releasing starts the leap before the ball is struck, got ${g.you.leap}`);
-      ok(g.you.anim === 0 && g.you.stroke !== 'jackknife',
-        `and the swing motion has not started yet: anim=${g.you.anim} stroke=${g.you.stroke}`);
-      // 跳んでいる途中で当たる（届く位置に球があるので次のフレームで当たる）
-      // → 跳躍はそのまま続き、振り抜きだけがそこから始まる
-      g.update(1 / 60);
-      ok(g.you.stroke === 'jackknife' && g.you.anim === JACK.ANIM,
-        `the swing starts at contact: ${g.you.stroke}/${g.you.anim}`);
-      ok(g.you.leap > 0 && g.you.leap < JACK.LEAP_T,
-        `while the leap that began at release keeps running, got ${g.you.leap.toFixed(3)}`);
-      ok(JACK.LEAP_T > JACK.ANIM * 0.5,
-        'the leap outlasts enough of the swing to land after it');
+      // 球はもう届く位置にある＝「あと踏み切りぶんの時間で当たる」ので、
+      // 溜めキーを離す前に跳び始める
+      g.specialArmed = g.specialAim();
+      g.tickLeap();
+      ok(g.you.leap && g.you.leap.kind === 'jackknife' && g.you.leap.t === JACK.LEAP_T,
+        `the leap starts while still charging, got ${JSON.stringify(g.you.leap)}`);
+      ok(g.you.charging && g.you.anim === 0 && g.you.stroke !== 'jackknife',
+        `before releasing: still charging, no swing yet (${g.you.stroke}/${g.you.anim})`);
+      // 踏み切りぶん進めてから離すと、当たるころにはもう跳び上がっている
+      const rise = JACK.LEAP_T * JACK.LEAP_RISE;
+      for (let i = 0; i < Math.round(rise * 60); i++) g.update(1 / 60);
+      // 1コマ(1/60秒)ぶんのスラック：跳躍は毎フレーム dt ずつ減るので端数が出る
+      ok(g.you.leap && g.you.leap.t <= JACK.LEAP_T - rise + 1 / 60,
+        `the leap keeps running on its own clock, got ${g.you.leap && g.you.leap.t.toFixed(3)}`);
 
       // 技が乗らない普通の1打では跳ばない
       const plain = rally(['jackknife']);
       plain.you.z = -9; ballAt(plain, 1.0);
       chargeUp(plain);
+      plain.specialArmed = plain.specialAim();
+      plain.tickLeap();
       plain.chargeRelease();
-      ok(plain.you.leap === 0, `a normal swing does not leap, got ${plain.you.leap}`);
+      ok(!plain.you.leap, `a normal swing does not leap, got ${JSON.stringify(plain.you.leap)}`);
 
       // ポイントをまたいで持ち越さない
       g.newPoint();
-      ok(g.you.leap === 0, `a new point clears the leap, got ${g.you.leap}`);
+      ok(!g.you.leap, `a new point clears the leap, got ${JSON.stringify(g.you.leap)}`);
     }
 
     // 判定は「最初に届く点」ではなく「この1振りでいちばん高く捉えられる点」を見る
@@ -6258,8 +6324,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       risingBall(g);
       ok(g.predictContact(1, 0).y < JACK.MIN_Y,
         `precondition: the first reachable point is still low (${g.predictContact(1, 0).y.toFixed(2)}m)`);
-      ok(g.contactPeakY() >= JACK.MIN_Y,
-        `but it comes up to ${g.contactPeakY().toFixed(2)}m inside the swing window`);
+      ok(g.contactPeak(JACK.MIN_Y).y >= JACK.MIN_Y,
+        `but it comes up to ${g.contactPeak(JACK.MIN_Y).y.toFixed(2)}m inside the swing window`);
       ok(g.pickSpecial() === 'jackknife',
         `so the jackknife is offered, got ${g.pickSpecial()}`);
 
@@ -6267,7 +6333,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       const flat = rally(['jackknife']);
       risingBall(flat);
       flat.ball.vy = -1;
-      ok(flat.contactPeakY() < JACK.MIN_Y && flat.pickSpecial() !== 'jackknife',
+      ok(flat.contactPeak(JACK.MIN_Y).y < JACK.MIN_Y && flat.pickSpecial() !== 'jackknife',
         `a ball that never comes up is not offered, got ${flat.pickSpecial()}`);
 
       // 出せると言われても、**低い打点で当ててしまえば**技にはならない（回数も減らない）

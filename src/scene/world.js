@@ -132,7 +132,8 @@
         chargeFrac: p.chargeFrac, swingCharge: p.swingCharge, speed: p.speed,
         // 必殺技（フォーム・ジャンプの高さ・倒れ込みに効く）と、縮地の残像。
         special: p.special || null,
-        leap: p.leap || 0, // ジャックナイフの跳躍（打球のモーションとは別の時計）
+        // 跳躍（打球のモーションとは別の時計。スマッシュ／ジャックナイフ）
+        leap: p.leap ? { t: p.leap.t, kind: p.leap.kind } : null,
         dash: p.dash ? { x: p.dash.x, z: p.dash.z, t: p.dash.t } : null,
       };
     }

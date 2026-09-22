@@ -365,22 +365,43 @@
   };
 
   /**
-   * スマッシュのジャンプの高さ(m)。打点の瞬間には既に跳び上がっていて
-   * （SMASH_JUMP_START の高さ）、SMASH_JUMP_PEAK の進行度で頂点、振り終わりで着地する。
-   * sin カーブに乗せているので、頂点付近でふわりと粘り、着地は滑らかに0へ収束する。
-   * 見た目だけの値で、当たり判定（PLAYER.REACH_Y）には一切影響しない。
+   * 跳躍の進み具合(0〜1)。0＝踏み切り、1＝着地。跳んでいなければ null。
+   * **打球のモーション（anim）とは別の時計**（state.leap）で動く：anim は「当たった
+   * 瞬間」からしか始められないので、そこに跳躍を乗せると跳ぶのと打つのが同時に見える。
+   * leap は game.js#tickLeap が「もうすぐ球が届く」ところで、まだ離していなくても
+   * 始める＝当たるころには頂点にいて、空中で振り始める絵になる。
+   * @param {object} state その選手の見た目に関わる状態
+   * @param {'smash'|'jackknife'} kind この関数が受け持つ跳び方
    */
-  function smashLift(anim, stroke, special) {
-    if (stroke !== 'smash' || anim <= 0) return 0;
-    const progress = clamp((PLAYER.SMASH_ANIM - anim) / PLAYER.SMASH_ANIM, 0, 1);
-    const rise = Math.asin(clamp(SWING.SMASH_JUMP_START, 0, 1)); // 打点の瞬間の位相
-    const peak = SWING.SMASH_JUMP_PEAK;
-    const phase = progress < peak
-      ? lerp(rise, Math.PI / 2, progress / peak)               // 打点 → 頂点
-      : lerp(Math.PI / 2, Math.PI, (progress - peak) / (1 - peak)); // 頂点 → 着地
-    // ダンクスマッシュ（必殺技）だけは、同じ振り付けのままもっと高く跳ぶ。
-    const height = SWING.SMASH_JUMP_H * (special === 'dunkSmash' ? SPECIAL.DUNK.JUMP_MULT : 1);
-    return height * Math.sin(phase);
+  function leapProgress(state, kind) {
+    const leap = state.leap;
+    if (!leap || leap.kind !== kind || leap.t <= 0) return null;
+    const span = kind === 'jackknife' ? SPECIAL.JACK.LEAP_T : PLAYER.SMASH_LEAP_T;
+    return clamp((span - leap.t) / span, 0, 1);
+  }
+
+  /**
+   * 上昇（0〜π/2）→ 下降（π/2〜π）の sin カーブ。頂点付近は sin が寝るので滞空感が出る。
+   * @param {number} u 跳躍の進み具合(0〜1)
+   * @param {number} riseFrac そのうち上昇に使う割合
+   */
+  function leapArc(u, riseFrac) {
+    const phase = u < riseFrac
+      ? (u / riseFrac) * (Math.PI / 2)
+      : Math.PI / 2 + ((u - riseFrac) / (1 - riseFrac)) * (Math.PI / 2);
+    return Math.sin(phase);
+  }
+
+  /**
+   * スマッシュのジャンプの高さ(m)。見た目だけの値で、当たり判定（PLAYER.REACH_Y）には
+   * 一切影響しない。ダンクスマッシュ（必殺技）だけは同じ振り付けのままもっと高く跳ぶ。
+   */
+  function smashLift(state) {
+    const u = leapProgress(state, 'smash');
+    if (u === null) return 0;
+    const height = SWING.SMASH_JUMP_H
+      * (state.special === 'dunkSmash' ? SPECIAL.DUNK.JUMP_MULT : 1);
+    return height * leapArc(u, PLAYER.SMASH_LEAP_RISE);
   }
 
   /**
@@ -394,7 +415,7 @@
    */
   scene3d.applySmashJump = function applySmashJump(player, state) {
     const { anim, stroke, special } = state;
-    const lift = smashLift(anim, stroke, special);
+    const lift = smashLift(state);
     player.position.y = lift;
     if (lift <= 0) return 0;
 
@@ -403,7 +424,11 @@
     // 分母にもジャンプの倍率を掛けて正規化する）。
     const peak = SWING.SMASH_JUMP_H * (special === 'dunkSmash' ? SPECIAL.DUNK.JUMP_MULT : 1);
     const air = clamp(lift / peak, 0, 1);
-    const progress = clamp((PLAYER.SMASH_ANIM - anim) / PLAYER.SMASH_ANIM, 0, 1);
+    // 体幹は打球のモーション側の進み具合で折る：当たる前（anim=0）は反ったまま跳び上がり、
+    // 当たってから振り下ろしに合わせて前へ折れる。
+    const progress = stroke === 'smash' && anim > 0
+      ? clamp((PLAYER.SMASH_ANIM - anim) / PLAYER.SMASH_ANIM, 0, 1)
+      : 0;
     // はさみ跳びは「ラケット側の脚を後ろへ蹴り上げる」。legs[0] がローカル -x 側、
     // legs[1] が +x 側なので、利き手（HAND）でどちらがラケット側かを選ぶ。
     const back = gait.legs[HAND < 0 ? 0 : 1];
@@ -507,16 +532,10 @@
    * @returns {number} 浮いた高さ(m)。影を小さくするのに使う（world.js 参照）
    */
   scene3d.applyJackknifeLeap = function applyJackknifeLeap(player, state) {
-    const leap = state.leap || 0;
-    if (leap <= 0) return 0;
+    const u = leapProgress(state, 'jackknife');
+    if (u === null) return 0;
     const J = SWING.JACK;
-    const { LEAP_T, LEAP_RISE } = SPECIAL.JACK;
-    const u = clamp((LEAP_T - leap) / LEAP_T, 0, 1); // 0＝踏み切り、1＝着地
-    // 上昇（0〜π/2）→ 下降（π/2〜π）。頂点付近は sin が寝るので滞空感が出る。
-    const phase = u < LEAP_RISE
-      ? (u / LEAP_RISE) * (Math.PI / 2)
-      : Math.PI / 2 + ((u - LEAP_RISE) / (1 - LEAP_RISE)) * (Math.PI / 2);
-    const lift = J.JUMP_H * Math.sin(phase);
+    const lift = J.JUMP_H * leapArc(u, SPECIAL.JACK.LEAP_RISE);
     player.position.y = lift;
 
     const gait = player.userData.gait;
