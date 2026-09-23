@@ -2575,6 +2575,57 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(g.server === 'you', `server stays the same after the 4th point, got ${g.server}`);
 }
 
+// --- ダブルスのタイブレーク：4人がセットと同じ順番で回り、必殺技はサーブ権が移るたびに戻る ---
+// (退行テスト: タイブレーク中はチーム内の担当（serverPartner）を回していなかったため、
+//  主力の you/cpu だけが交互にサーブし、パートナーは一度もサーブしなかった。必殺技の回復も
+//  「6ポイントごと」で、サーブ権が移るのは奇数本目の後なので、必ず同じ人の2本の途中に来ていた)
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.setSpecials(['hawkEye']);
+  g.start(true, 'you');
+  // 全ゲームをサーブ側が取って 6-6 まで進める（通常のゲームのローテーションを通してタイブレークに入る）
+  for (let game = 0; game < 12; game++) {
+    const team = g.server;
+    for (let p = 0; p < 4; p++) { g.phase = 'rally'; g.endPoint(team, 'test'); }
+  }
+  ok(g.match.tiebreak && g.match.games.you === 6 && g.match.games.cpu === 6,
+    `precondition: doubles reaches a 6-6 tiebreak, got ${g.match.games.you}-${g.match.games.cpu} tb=${g.match.tiebreak}`);
+
+  const servers = [];
+  const receivers = [];
+  const refreshed = [];
+  for (let p = 0; p < 14; p++) {
+    servers.push(g.servingPlayer());
+    receivers.push(g.receivingPlayer(g.server === 'you' ? 'cpu' : 'you', g.match.serveSide));
+    g.specialUses.hawkEye = 0; // 毎ポイント使い切った状態にして、戻ったかどうかだけを見る
+    g.phase = 'rally';
+    g.endPoint(p % 2 ? 'you' : 'cpu', 'test'); // 交互に取らせて 7-7 まで続ける
+    refreshed.push(g.usesLeft('hawkEye') > 0);
+  }
+  // ITF ルール 5(b)：1本目は順番の人、以降は相手チームの順番の人から2本ずつ、チーム内はセットと同じ順番
+  const wantServers = ['you', 'cpu', 'cpu', 'youMate', 'youMate', 'cpuMate', 'cpuMate',
+    'you', 'you', 'cpu', 'cpu', 'youMate', 'youMate', 'cpuMate'];
+  ok(servers.join() === wantServers.join(),
+    `doubles tiebreak serve order rotates through all four players, got ${servers.join()}`);
+  // レシーブするコートはセットを通して各選手で固定（パートナーは -1 側、主力は +1 側）
+  const wantReceivers = ['cpuMate', 'you', 'youMate', 'cpu'];
+  ok(receivers.every((r, i) => r === wantReceivers[i % 4]),
+    `doubles tiebreak receivers keep their courts from the set, got ${receivers.join()}`);
+  // 必殺技はサーブ権が移った直後（奇数本目の後）だけ戻り、同じ人の2本の途中では戻らない
+  ok(refreshed.every((r, i) => r === (i % 2 === 0)),
+    `specials refresh exactly when the serve changes hands in a tiebreak, got ${refreshed.join()}`);
+
+  // タイブレークで決まったセットの次は、タイブレークの1本目をサーブした側（you）の相手から。
+  // 7-7 から 7-8 → 8-8 → 9-8 → 10-8 と進めると、最後の1本を打つのは cpu（cpu チーム）なので、
+  // 「最後にサーブした側の相手」では you になってしまう。
+  for (const w of ['cpu', 'you', 'you']) { g.phase = 'rally'; g.endPoint(w, 'test'); }
+  ok(g.servingPlayer() === 'cpu', `precondition: cpu serves the last point, got ${g.servingPlayer()}`);
+  g.phase = 'rally'; g.endPoint('you', 'test');
+  ok(g.match.games.you === 7 && g.match.games.cpu === 6, `you win the tiebreak 7-6, got ${g.match.games.you}-${g.match.games.cpu}`);
+  ok(g.server === 'cpu', `the team that received first in the tiebreak serves the next set, got ${g.server}`);
+  ok(g.tiebreakOpener === null, 'the tiebreak opener is forgotten once the set is decided');
+}
+
 // --- タイブレーク：Game#endPoint() を通しても、取った側がそのままセットを取る ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });

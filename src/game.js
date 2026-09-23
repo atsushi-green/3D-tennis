@@ -675,9 +675,15 @@
       /**
        * ダブルスで、各チームの2人のうちどちらが現在の担当サーバーか。
        * 1ゲームごとに、そのチームの番が来るたびに交代する（実際のダブルスのルール）。
+       * タイブレーク中も同じ順番のまま、サーブ権が移るたびに回る（passServe()）。
        * シングルスでは参照されない。
        */
       this.serverPartner = { you: 'you', cpu: 'cpu' };
+      /**
+       * タイブレークの1本目をサーブしたチーム（タイブレーク中でなければ null）。
+       * タイブレークで決まったセットの次は、このチームの相手からサーブする（ITF ルール 5(b)）。
+       */
+      this.tiebreakOpener = null;
       this.started = false;
       /** true ならダブルス（you+youMate vs cpu+cpuMate）。既定はシングルス。 */
       this.doubles = false;
@@ -1234,7 +1240,7 @@
     }
 
     /**
-     * ゲームが替わった（またはタイブレークが一巡した）ときに、全技の使用回数を戻す。
+     * ゲームが替わった（またはタイブレークでサーブ権が移った）ときに、全技の使用回数を戻す。
      * 人間だけでなく AI（Hard で技を使う）の持ち分も同じタイミングで回復させる。
      */
     refreshSpecials() {
@@ -2735,6 +2741,22 @@
       };
     }
 
+    /**
+     * サーブ権を相手チームへ渡す（ゲームの終わりと、タイブレークの2ポイントごとの交代）。
+     * ダブルスは、今サーブし終えたチームの中で次に回ってくるまで担当者も交代する
+     * （実際のルール通り。タイブレーク中もセットと同じ順番のまま回る＝A1→C1→A2→C2→A1…）。
+     */
+    passServe() {
+      if (this.doubles) {
+        const finishedTeam = this.server;
+        const mate = finishedTeam === 'you' ? 'youMate' : 'cpuMate';
+        this.serverPartner[finishedTeam] = this.serverPartner[finishedTeam] === finishedTeam
+          ? mate
+          : finishedTeam;
+      }
+      this.server = opponent(this.server);
+    }
+
     endPoint(winner, reason) {
       if (this.phase === 'over') return;
       // ダブルフォルト＝サーバー側の失点。エース＝サーブがリターンに一度も触れられずに
@@ -2782,23 +2804,22 @@
       const mine = winner === 'you';
       if (result.tiebreak && result.type === 'point') {
         // タイブレーク中は1本目だけ今のサーバーのまま、以降は2ポイントごとに交代
-        // （ダブルスのチーム内の個人ローテーションはここでは変えない簡略化。詳細は roadmap-done.md）。
+        // （＝奇数本目が終わった直後）。ダブルスは通常のゲームと同じ順番で4人が回る。
         const total = this.match.tiebreakPoints.you + this.match.tiebreakPoints.cpu;
-        if (total % 2 === 1) this.server = opponent(this.server);
-        // タイブレーク中は「ゲーム」が進まないので、必殺技の回数もこのままでは戻らない。
-        // 一定本数ごとに回復させる（6-6 からの長いタイブレークで一度も使えなくなるのを防ぐ）。
-        if (total % SPECIAL.TIEBREAK_REFRESH_POINTS === 0) this.refreshSpecials();
-      } else if (result.type !== 'point') {
-        // ダブルスは、今サーブし終えたチームの中で次に回ってくるまで担当者を交代する
-        // （実際のルール通り。次にそのチームの番が来るのは2ゲーム後）
-        if (this.doubles) {
-          const finishedTeam = this.server;
-          const mate = finishedTeam === 'you' ? 'youMate' : 'cpuMate';
-          this.serverPartner[finishedTeam] = this.serverPartner[finishedTeam] === finishedTeam
-            ? mate
-            : finishedTeam;
+        if (total % 2 === 1) {
+          this.passServe();
+          // タイブレーク中は「ゲーム」が進まないので、必殺技はサーブ権が移る節目で回復させる
+          // （通常のゲームで「ゲームが替わる＝サーブが替わる」瞬間に回復するのと揃える）。
+          const turns = (total + 1) / 2;
+          if (turns % SPECIAL.TIEBREAK_REFRESH_TURNS === 0) this.refreshSpecials();
         }
-        this.server = opponent(this.server); // ゲームごとにサーブ交代
+      } else if (result.type !== 'point') {
+        // タイブレークで決まったセットは、タイブレークの1本目をサーブしたチームが最後の
+        // ゲームをサーブした扱い＝次のセットはその相手から（最後の1本を打った側ではない）。
+        if (this.tiebreakOpener) this.server = this.tiebreakOpener;
+        this.tiebreakOpener = null;
+        this.passServe(); // ゲームごとにサーブ交代
+        if (result.tiebreak) this.tiebreakOpener = this.server; // 6-6：ここからタイブレーク
         this.refreshSpecials(); // 必殺技はゲームが替わるたびに回復する
       }
 
