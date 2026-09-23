@@ -21,7 +21,7 @@
 
 ### 表示の不足
 
-- [ ] S Hard の AI の必殺技の残り回数が画面に出ない — `hud.setSpecialUses()` は人間の `game.specialUses` しか見ておらず、AI が技ごとに独立した回数を持っている（`actor.specialUses`）ことが分からない。相手が鷹の目を使い切ったかどうかは駆け引きの材料になるので、スコアボード側に相手ぶんも小さく出す。
+- [ ] S Hard / Extreme の AI の必殺技の残り回数が画面に出ない — `hud.setSpecialUses()` は人間の `game.specialUses` しか見ておらず、AI が技ごとに独立した回数を持っている（`actor.specialUses`）ことが分からない。相手が鷹の目を使い切ったかどうかは駆け引きの材料になるので、スコアボード側に相手ぶんも小さく出す。**Extreme では技ごとに複数回（`CPU.SPECIAL_USES`）持つので、残り本数の表示価値はさらに上がった**（人間側の表示は `SPECIAL.USES_PER_GAME > 1` のときだけ `×N` を出す作りなので、同じ考え方で足せる）。
 
 ### 追加したい機能
 

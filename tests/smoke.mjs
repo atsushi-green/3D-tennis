@@ -3339,7 +3339,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 // --- CPU/AIの強さプリセット（Easy/Normal/Hard）：スタート画面の難易度選択が実際にCPUの値へ反映される ---
 {
   const { CPU_LEVELS, applyCpuLevel } = R.config;
-  ok(!!CPU_LEVELS.easy && !!CPU_LEVELS.normal && !!CPU_LEVELS.hard, 'three presets exist');
+  ok(!!CPU_LEVELS.easy && !!CPU_LEVELS.normal && !!CPU_LEVELS.hard && !!CPU_LEVELS.extreme,
+    'four presets exist');
 
   applyCpuLevel('normal'); // 他のテストの実行順に依存しないよう、まずベースラインへ戻す
   const baseline = { ...R.config.CPU };
@@ -3370,6 +3371,38 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(R.config.PLAYER.CPU_REACT < basePlayerCpu.CPU_REACT, 'hard reacts faster than normal');
   ok(R.config.PLAYER.CPU_CHASE > basePlayerCpu.CPU_CHASE, 'hard chases faster than normal');
 
+  // extreme は hard のさらに1段上（要望「hard よりも強い動きをする相手」）。
+  // 比べるのは hard の値そのもので、「hard より強い」が壊れたらここで落ちる。
+  {
+    applyCpuLevel('hard');
+    const hard = { ...R.config.CPU, ...Object.fromEntries(presetPlayerKeys.map((k) => [k, R.config.PLAYER[k]])) };
+    applyCpuLevel('extreme');
+    const ex = { ...R.config.CPU, ...Object.fromEntries(presetPlayerKeys.map((k) => [k, R.config.PLAYER[k]])) };
+    ok(ex.OUT_LONG < hard.OUT_LONG && ex.OUT_WIDE < hard.OUT_WIDE,
+      `extreme misses less often than hard: ${ex.OUT_LONG}/${ex.OUT_WIDE} vs ${hard.OUT_LONG}/${hard.OUT_WIDE}`);
+    ok(ex.STRETCH_OUT_LONG < hard.STRETCH_OUT_LONG && ex.STRETCH_OUT_WIDE < hard.STRETCH_OUT_WIDE,
+      'and barely misses even when it is run off the court');
+    ok(ex.SHOT_T < hard.SHOT_T && ex.SERVE_T < hard.SERVE_T,
+      `extreme hits and serves faster than hard: ${ex.SHOT_T}/${ex.SERVE_T} vs ${hard.SHOT_T}/${hard.SERVE_T}`);
+    ok(ex.SMASH_T < hard.SMASH_T && ex.VOLLEY_ANGLE_T < hard.VOLLEY_ANGLE_T,
+      'its put-aways are sharper too');
+    ok(ex.CPU_CHASE > hard.CPU_CHASE && ex.CPU_RECOVER > hard.CPU_RECOVER,
+      `extreme moves faster than hard: ${ex.CPU_CHASE} vs ${hard.CPU_CHASE}`);
+    ok(ex.CPU_REACT < hard.CPU_REACT && ex.CPU_RECOVER_DELAY < hard.CPU_RECOVER_DELAY,
+      'reacts and recovers quicker');
+    ok(ex.CPU_REACT > 0, 'but still takes a beat to react (a 0 here reads as "sees the future")');
+    ok(ex.CPU_REACH > hard.CPU_REACH && ex.CPU_REFLEX_REACH > hard.CPU_REFLEX_REACH,
+      'and covers more court');
+    ok(ex.CPU_REFLEX_REACH / hard.CPU_REFLEX_REACH <= ex.CPU_REACH / hard.CPU_REACH,
+      'with the reflex range raised no faster than the normal one (hard\'s rule: leave net winners possible)');
+    ok(ex.SPECIALS === true && ex.SPECIAL_ALL_MOVES === true,
+      'extreme turns on the AI specials, all of them');
+    ok(ex.SPECIAL_USES > hard.SPECIAL_USES && ex.SPECIAL_CHANCE > hard.SPECIAL_CHANCE,
+      `and lets the AI use each one several times a game: ${ex.SPECIAL_USES}x at ${ex.SPECIAL_CHANCE}`);
+    ok(hard.SPECIAL_ALL_MOVES === false && hard.SPECIAL_USES === R.config.SPECIAL.USES_PER_GAME,
+      'while hard keeps the seven-move, once-per-game budget it always had');
+  }
+
   applyCpuLevel('normal');
   ok(JSON.stringify(R.config.CPU) === JSON.stringify(baseline), 'switching back to normal restores the baseline CPU values');
   // プリセットが上書きしうる PLAYER のキーが1つ残らず normal の値へ戻ること
@@ -3392,10 +3425,13 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const easyMiss = missRate('easy');
   const normalMiss = missRate('normal');
   const hardMiss = missRate('hard');
-  ok(easyMiss.base > normalMiss.base && normalMiss.base > hardMiss.base,
-    `miss rate falls monotonically easy>normal>hard: ${easyMiss.base} > ${normalMiss.base} > ${hardMiss.base}`);
-  ok(easyMiss.stretch > normalMiss.stretch && normalMiss.stretch > hardMiss.stretch,
-    `stretched-shot miss rate falls monotonically too: ${easyMiss.stretch} > ${normalMiss.stretch} > ${hardMiss.stretch}`);
+  const extremeMiss = missRate('extreme');
+  ok(easyMiss.base > normalMiss.base && normalMiss.base > hardMiss.base
+    && hardMiss.base > extremeMiss.base,
+    `miss rate falls monotonically easy>normal>hard>extreme: ${easyMiss.base} > ${normalMiss.base} > ${hardMiss.base} > ${extremeMiss.base}`);
+  ok(easyMiss.stretch > normalMiss.stretch && normalMiss.stretch > hardMiss.stretch
+    && hardMiss.stretch > extremeMiss.stretch,
+    `stretched-shot miss rate falls monotonically too: ${easyMiss.stretch} > ${normalMiss.stretch} > ${hardMiss.stretch} > ${extremeMiss.stretch}`);
   // 単調なだけでは「Hardを選んでもほとんど変わらない」状態を防げない（変更前もミス率自体は
   // normal より低かった）。ベンチで体感差が出た比率を下限として固定する：
   // hard は normal の 1/3 以下、easy は normal の 2.5 倍以上。
@@ -7020,6 +7056,185 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
         `including the dunk smash on a lob, got ${JSON.stringify(used)}`);
       ok(Number.isFinite(g.ball.x) && Number.isFinite(g.cpuMate.x), 'and the doubles match stays finite');
     });
+
+    // --- Extreme：AI は全9種の技を1ゲームに複数回使う ---
+    // (要望: extreme hard モード。相手は全ての必殺技を1ゲーム中複数使えて、hard より強い動き)
+    {
+      const { PLAYER } = R.config;
+      /** 難易度 extreme の状態でひとつ確かめて、必ず normal へ戻す */
+      const onExtreme = (fn) => {
+        applyCpuLevel('extreme');
+        try { fn(); } finally { applyCpuLevel('normal'); }
+      };
+      /** cpu 側へ向かってくる球のある、ラリー中のゲーム（ball.age は反応済みの値にしておく） */
+      const cpuRally = () => {
+        const g = rally(ALL);
+        g.ball.last = 'you';
+        g.ball.age = 2; // reactReach() が守備範囲をいっぱいまで開く（＝一歩動ける球）
+        g.ball.bounces = 0;
+        return g;
+      };
+
+      // 技の一覧と回数：extreme は全9種、hard は守備範囲を広げない7種
+      onExtreme(() => {
+        const g = rally(ALL);
+        ok(g.aiMoves().length === R.config.SPECIAL_MOVES.length,
+          `extreme gives the AI every move, got ${g.aiMoves().join(',')}`);
+        ok(g.aiMoves().indexOf('shukuchi') !== -1 && g.aiMoves().indexOf('divingVolley') !== -1,
+          'including the two that hard withholds (the dash and the diving volley)');
+        ok(CPU.SPECIAL_USES > SP.USES_PER_GAME,
+          `and more than one use of each per game, got ${CPU.SPECIAL_USES}`);
+        ok(g.aiMoves().every((m) => g.usesLeft(m, 'cpu') === CPU.SPECIAL_USES),
+          `every move starts with that budget, got ${JSON.stringify(g.cpu.specialUses)}`);
+      });
+      // 選び直したら前の難易度の持ち分は残らない（extreme → hard で縮地が使えたままにならない）
+      {
+        applyCpuLevel('extreme');
+        const g = rally(ALL);
+        applyCpuLevel('hard');
+        g.refreshSpecials();
+        ok(g.usesLeft('shukuchi', 'cpu') === 0 && g.usesLeft('divingVolley', 'cpu') === 0,
+          `switching back to hard takes the extra moves away, got ${JSON.stringify(g.cpu.specialUses)}`);
+        ok(g.usesLeft('hawkEye', 'cpu') === SP.USES_PER_GAME,
+          'and puts the remaining ones back on the hard budget');
+        applyCpuLevel('normal');
+      }
+
+      // 飛びつきボレー：普通のリーチでは届かないノーバウンドに手が届く（その代わり硬直が長い）
+      const diveBall = (g) => {
+        g.cpu.x = 0;
+        g.cpu.z = 1.5; // ネット際（PLAYER.VOLLEY_Z 以内）
+        g.ball.y = 1.2;
+        g.ball.z = g.cpu.z - 0.1;
+        g.ball.x = g.cpu.x + PLAYER.CPU_REACH * g.cpu.attr.reach * 1.3; // 届かないが飛びつけば届く
+      };
+      onExtreme(() => {
+        const g = cpuRally();
+        diveBall(g);
+        g.diveCommit.cpu = true;
+        ok(g.swingAiAt('cpu', g.ball) === true, 'extreme: the AI dives at a volley it cannot otherwise reach');
+        ok(g.cpu.special === 'divingVolley', `and the shot carries the move, got ${g.cpu.special}`);
+        ok(g.usesLeft('divingVolley', 'cpu') === CPU.SPECIAL_USES - 1, 'it spends one use');
+        ok(g.recoverTimers.cpu === SP.DIVE.RECOVER,
+          `and pays the same long recovery the human does, got ${g.recoverTimers.cpu}`);
+        ok(g.cpu.diveVolley === false, 'the flag is cleared so the next swing is an ordinary one');
+      });
+      // 出す気でいない球（抽選に外れた球）には飛びつかない
+      onExtreme(() => {
+        const g = cpuRally();
+        diveBall(g);
+        g.diveCommit.cpu = false;
+        ok(g.swingAiAt('cpu', g.ball) === false, 'without the roll it just watches the ball go by');
+      });
+      // hard は飛びつかない（守備範囲を広げる技は持たせていない）
+      onHard(() => {
+        const g = cpuRally();
+        diveBall(g);
+        g.diveCommit.cpu = true;
+        ok(g.swingAiAt('cpu', g.ball) === false, 'hard never dives (the move is not in its list)');
+      });
+
+      // 飛びつきボレーの打球も、他の AI の技と同じく人間コートへ鏡になって飛ぶ
+      onExtreme(() => {
+        let outs = 0;
+        let worst = null;
+        for (let i = 0; i < 30; i++) {
+          const g = cpuRally();
+          diveBall(g);
+          g.diveCommit.cpu = true;
+          g.swingAiAt('cpu', g.ball);
+          const land = R.physics.predictLanding(g.ball);
+          const inHumanCourt = !land.net && land.z < 0 && land.z >= -(L + COURT.LINE_SLACK)
+            && Math.abs(land.x) <= W + COURT.LINE_SLACK;
+          if (!inHumanCourt) { outs++; worst = land; }
+        }
+        ok(outs === 0, `the AI diving volley always lands in the human court: ${outs}/30 out`
+          + (worst ? ` (worst x=${worst.x.toFixed(2)} z=${worst.z.toFixed(2)} net=${worst.net})` : ''));
+      });
+
+      // 縮地：走っても間に合わない球で打点へ瞬間移動する
+      const runaway = (g) => {
+        g.cpu.x = -4; g.cpu.z = 9;
+        g.ball.x = 0; g.ball.y = 1.3; g.ball.z = 0.5;
+        g.ball.vx = 11; g.ball.vy = 1.5; g.ball.vz = 8; // 逆サイドのはるか外へ走る球
+      };
+      onExtreme(() => {
+        const g = cpuRally();
+        runaway(g);
+        g.dashCommit.cpu = true;
+        const from = { x: g.cpu.x, z: g.cpu.z };
+        g.tickAiDash();
+        ok(g.cpu.x !== from.x || g.cpu.z !== from.z, 'extreme: the AI dashes to a ball it cannot run down');
+        ok(g.usesLeft('shukuchi', 'cpu') === CPU.SPECIAL_USES - 1, 'it spends one use');
+        ok(!!g.cpu.dash && g.cpu.dash.x === from.x && g.cpu.dash.z === from.z,
+          'and leaves the afterimage where it stood');
+        ok(g.cpu.chaseDist === 0 && g.cpu.settleT === 0,
+          'landing there counts as being set (not as a stretched run)');
+        ok(g.dashCommit.cpu === false, 'the roll is used up, so it cannot dash twice on one ball');
+        // シングルスでコートに立っていない相方は動かない（見えない選手が回数を使わないこと）
+        ok(g.cpuMate.dash === null && g.youMate.dash === null
+          && g.usesLeft('shukuchi', 'cpuMate') === CPU.SPECIAL_USES,
+          'in singles only the CPU on court dashes');
+      });
+      // 走って間に合う球には出さない（技を無駄にしない）
+      onExtreme(() => {
+        const g = cpuRally();
+        g.cpu.x = 0; g.cpu.z = 9;
+        g.ball.x = 0.2; g.ball.y = 1.3; g.ball.z = 6;
+        g.ball.vx = 0; g.ball.vy = 1; g.ball.vz = 3;
+        g.dashCommit.cpu = true;
+        g.tickAiDash();
+        ok(g.cpu.x === 0 && g.cpu.z === 9 && g.usesLeft('shukuchi', 'cpu') === CPU.SPECIAL_USES,
+          'a ball it can simply run to is not worth a dash');
+      });
+      // hard は縮地を持たない
+      onHard(() => {
+        const g = cpuRally();
+        runaway(g);
+        g.dashCommit.cpu = true;
+        g.tickAiDash();
+        ok(g.cpu.x === -4 && g.cpu.z === 9, 'hard never dashes');
+      });
+      // 残像はポイントをまたがない
+      onExtreme(() => {
+        const g = cpuRally();
+        g.cpu.dash = { x: 1, z: 2, t: SP.DASH.FX_T };
+        g.tickSpecial(SP.DASH.FX_T + 0.01);
+        ok(g.cpu.dash === null, 'the afterimage fades on its own');
+        g.cpu.dash = { x: 1, z: 2, t: SP.DASH.FX_T };
+        g.newPoint();
+        ok(g.cpu.dash === null, 'and never carries into the next point');
+      });
+
+      // extreme のフルマッチ（全9種が混ざり続けてもフリーズ・NaN・回数のマイナスがない）
+      onExtreme(() => {
+        const g = new R.Game({ input: fakeInput, hooks: noHooks });
+        g.setSpecials(ALL);
+        g.start();
+        const used = {};
+        let minUses = Infinity;
+        let maxUses = -Infinity;
+        const spend = g.spendSpecial.bind(g);
+        g.spendSpecial = (move, label, who = 'you') => {
+          if (who !== 'you') used[move] = (used[move] || 0) + 1;
+          return spend(move, label, who);
+        };
+        for (let i = 0; i < 60 * 600; i++) {
+          if (g.phase === 'serve' && g.server === 'you') tap(g);
+          if (g.phase === 'rally' && i % 6 === 0) tap(g);
+          g.update(1 / 60);
+          g.aiMoves().forEach((m) => {
+            minUses = Math.min(minUses, g.usesLeft(m, 'cpu'));
+            maxUses = Math.max(maxUses, g.usesLeft(m, 'cpu'));
+          });
+        }
+        ok(Number.isFinite(g.ball.x) && Number.isFinite(g.cpu.x) && Number.isFinite(g.cpu.z),
+          'ball and AI stay finite on extreme');
+        ok(minUses >= 0 && maxUses <= CPU.SPECIAL_USES,
+          `the AI budget stays inside 0..${CPU.SPECIAL_USES}, got ${minUses}..${maxUses}`);
+        ok(Object.keys(used).length > 0, `and the AI used some over a full match: ${JSON.stringify(used)}`);
+      });
+    }
 
     ok(CPU.SPECIALS === false, 'the difficulty is left back on normal for the tests that follow');
   }

@@ -24,8 +24,15 @@
   /** ダブルスのAIパートナーへの指示。Q＝ネットへ前へ、E＝ベースラインまで下がれ */
   const FORMATION_NET = ['KeyQ'];
   const FORMATION_BACK = ['KeyE'];
-  /** スタート画面でのみ有効。CPU/AIの強さ（Easy/Normal/Hard）を選ぶ */
-  const DIFFICULTY_KEYS = { Digit1: 'easy', Digit2: 'normal', Digit3: 'hard' };
+  /**
+   * スタート画面でのみ有効。CPU/AIの強さ（Easy/Normal/Hard/Extreme）を選ぶ。
+   * Extreme だけ数字キーではなく X なのは、Digit1〜0 が既に難易度3段・サーフェス3種・
+   * プレースタイル4種でちょうど埋まっているため（頭文字の e は KeyE＝ダブルスの
+   * 「下がれ」指示と衝突する）。
+   */
+  const DIFFICULTY_KEYS = {
+    Digit1: 'easy', Digit2: 'normal', Digit3: 'hard', KeyX: 'extreme',
+  };
   /** スタート画面でのみ有効。コートサーフェス（ハード／クレー／芝）を選ぶ */
   const SURFACE_KEYS = { Digit4: 'hard', Digit5: 'clay', Digit6: 'grass' };
   /** スタート画面でのみ有効。CPU/AIのプレースタイルを選ぶ（強さとは直交） */

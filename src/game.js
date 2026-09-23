@@ -618,6 +618,10 @@
       const aiActor = (x, z, who) => ({
         x, z, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, spin: 'flat', stamina: 1,
         runX: 0, fwd: 0, special: null, specialLabel: null, specialUses: {}, leap: null,
+        // dash＝縮地で跳ぶ前の位置（表示専用の残像。人間の you.dash と同じもの）、
+        // diveVolley＝この1打は飛びつきボレーだ、という旗（swingAiAt が立て hit が下ろす）。
+        // どちらも Extreme でだけ立つ（SPECIAL.AI.MOVES_ALL）。
+        dash: null, diveVolley: false,
         attr: ATTRS[who], netDir: NET_DIR[who],
       });
       this.cpu = aiActor(0, CPU.HOME_Z, 'cpu');
@@ -743,6 +747,15 @@
        * true の間だけ、前衛は構え位置ではなく ai.poachRun() の迎撃点へ全力で走る。
        */
       this.poachCommit = { cpuMate: false, youMate: false };
+      /**
+       * AI の「救済技」（縮地・飛びつきボレー。Extreme のみ）を、いま飛んできている1球に
+       * 対して出す気でいるか。ポーチ（poachCommit）と同じく相手が打った瞬間に球ごと1回だけ
+       * 抽選する（updateReactTimers → rollAiRescue）。**毎フレーム引いてはいけない**：
+       * どちらも「条件を満たしたフレームで出す」判定なので、フレームごとに CHANCE を
+       * 引くと条件を満たした最初の数フレームでほぼ必ず当たり＝確率の意味がなくなる。
+       */
+      this.dashCommit = { cpu: false, cpuMate: false, youMate: false };
+      this.diveCommit = { cpu: false, cpuMate: false, youMate: false };
       /** 今のポイントのサーブが1本目(1)か、1本目がフォールトした後のセカンドサーブ(2)か。 */
       this.serveNumber = 1;
       /**
@@ -1075,6 +1088,16 @@
     }
 
     /**
+     * いまの難易度で AI が使える技の一覧（＝回数を配る対象でもある）。
+     * Hard は守備範囲を広げない7種（SPECIAL.AI.MOVES）、Extreme は飛びつきボレー・縮地を
+     * 含む全9種（MOVES_ALL）。どちらを使うかは難易度プリセットの CPU.SPECIAL_ALL_MOVES。
+     * @returns {string[]}
+     */
+    aiMoves() {
+      return CPU.SPECIAL_ALL_MOVES ? SPECIAL.AI.MOVES_ALL : SPECIAL.AI.MOVES;
+    }
+
+    /**
      * Hard の AI がこの1打に乗せる必殺技（無ければ null）。人間の pickSpecial() と
      * 同じ「並び順＝優先度、上から最初に条件の合った1つ」の拾い方をする。
      * 回数が残っていない技は飛ばして次の候補へ落ちる。
@@ -1086,11 +1109,13 @@
      */
     pickAiSpecial(who, ctx) {
       if (!this.aiSpecialsOn()) return null;
-      const found = SPECIAL.AI.MOVES.find((move) => AI_SPECIAL_MATCH[move]
+      // 飛びつきボレー・縮地（Extreme のみ）は AI_SPECIAL_MATCH を持たない＝ここでは拾われない。
+      // どちらも「当たる瞬間」より前に決まる技なので、それぞれ swingAiAt() / tryAiDash() が持つ。
+      const found = this.aiMoves().find((move) => AI_SPECIAL_MATCH[move]
         && this.usesLeft(move, who) > 0
         && AI_SPECIAL_MATCH[move](this, ctx));
       if (!found) return null;
-      return Math.random() < SPECIAL.AI.CHANCE ? found : null;
+      return Math.random() < CPU.SPECIAL_CHANCE ? found : null;
     }
 
     /**
@@ -1101,9 +1126,9 @@
      */
     pickAiServeSpecial(who) {
       if (!this.aiSpecialsOn()) return null;
-      if (SPECIAL.AI.MOVES.indexOf('kickServe') === -1) return null;
+      if (this.aiMoves().indexOf('kickServe') === -1) return null;
       if (this.usesLeft('kickServe', who) <= 0) return null;
-      return Math.random() < SPECIAL.AI.CHANCE ? 'kickServe' : null;
+      return Math.random() < CPU.SPECIAL_CHANCE ? 'kickServe' : null;
     }
 
     /**
@@ -1214,10 +1239,14 @@
      */
     refreshSpecials() {
       SPECIAL_MOVES.forEach((m) => { this.specialUses[m.key] = SPECIAL.USES_PER_GAME; });
+      const moves = this.aiMoves();
       ACTORS.forEach((who) => {
         if (who === 'you') return;
         const uses = this.actor(who).specialUses;
-        SPECIAL.AI.MOVES.forEach((move) => { uses[move] = SPECIAL.USES_PER_GAME; });
+        // 前の難易度で配った持ち分を残さない（Extreme→Hard と選び直したとき、
+        // Hard では使えないはずの技の回数が残ったままになるのを防ぐ）。
+        Object.keys(uses).forEach((key) => { delete uses[key]; });
+        moves.forEach((move) => { uses[move] = CPU.SPECIAL_USES; });
       });
     }
 
@@ -1240,6 +1269,115 @@
       this.you.fwd = 0;
       // 打点に着くまでの時間ぶん（＋わずかな余裕）だけ振り続けられるようにする。
       return clamp(spot.t + SPECIAL.DASH.WINDOW_MARGIN, PLAYER.SWING_WINDOW, SPECIAL.DASH.WINDOW);
+    }
+
+    /**
+     * AI の縮地（Extreme のみ。SPECIAL.AI.MOVES_ALL 参照）を、必要なら全員ぶん出す。
+     * 人間は「溜めを離した瞬間」に跳ぶ（chargeRelease → dashToBall）が、AI には溜めが
+     * 無いので、飛んできた球がネットを越えた瞬間に1回だけ判断する（tryAiDash）。
+     * **movePlayers() のいちばん
+     * 最初に呼ぶこと**：移動量は「このフレームの開始位置からどれだけ動いたか」で測って
+     * いるので（moveTowards）、位置を記録した後に瞬間移動すると、その1フレームだけ
+     * 実速度もスタミナ消費も跳ね上がった扱いになる。
+     */
+    tickAiDash() {
+      if (!this.aiSpecialsOn() || this.aiMoves().indexOf('shukuchi') === -1) return;
+      ACTORS.forEach((who) => {
+        if (who === 'you') return;
+        // シングルスでコートに立っているのは cpu だけ。相方（cpuMate / youMate）は状態としては
+        // 居続けるので、ここで外さないと「見えない選手が縮地を使い、その回数まで減る」ことになる
+        // （実測：1ゲーム3回のはずの縮地が7回出ていた原因）。
+        if (!this.doubles && who !== 'cpu') return;
+        this.tryAiDash(who);
+      });
+    }
+
+    /**
+     * その AI が、いま飛んできている球に対して縮地を出すか。出すなら打点へ瞬間移動する
+     * （跳んだ時点で効果は済んでいる＝人間の dashToBall() と同じ扱い）。
+     * 条件は人間の SPECIAL_MATCH.shukuchi と同じ3つ——跳び先で打てること（dashSpotFor）・
+     * その跳び先が十分遠いこと（DASH.MIN_DIST）・走ったのでは間に合わないこと——で、
+     * 人間の「溜めを離した」に当たるのが球ごと1回の抽選（dashCommit）。
+     * 追う担当でない選手（ダブルスの相方）は出さない：2人とも同じ球へ跳んでしまうため。
+     * @param {string} who cpu / cpuMate / youMate
+     */
+    tryAiDash(who) {
+      if (!this.dashCommit[who]) return;
+      if (this.phase !== 'rally' || !this.ball.live) return;
+      if (TEAM_OF[who] === this.ball.last) return;   // 自陣へ向かってくる球だけ
+      if (this.recoverTimers[who] > 0) return;       // 打った直後は動けない（硬直中）
+      if (this.reactTimers[who] > 0) return;         // まだ反応できていない
+      const actor = this.actor(who);
+      // ボールが自陣に入るまで待つ（ネットの向こうにある間は判断しない）。相手が打った
+      // 瞬間に跳ぶと、まだネットも越えていない球に対して消えて現れることになる。
+      if (this.ball.z * actor.netDir >= PLAYER.NET_MARGIN) return;
+      if (this.doubles && this.doublesResponder(TEAM_OF[who]) !== who) return;
+      // **この球についての判断はこの1回だけ**（ネットを越えてきた最初のフレーム＝すでに
+      // 半分走った地点で「この足では間に合わない」と見たとき）。毎フレーム見てはいけない：
+      // 下で比べる「残り時間に走れる距離」は打点が近づくほど短くなるので、どんな球も
+      // いずれ「間に合わない」側に倒れる＝条件を満たすたび必ず跳ぶことになる
+      // （実測：毎フレーム判定だと1800秒で555回＝1ポイントに2回も跳んでいた）。
+      this.dashCommit[who] = false;
+      if (this.usesLeft('shukuchi', who) <= 0) return;
+      const spot = this.dashSpotFor(who);
+      if (!spot) return;
+      const dist = Math.hypot(spot.x - actor.x, spot.z - actor.z);
+      // 跳ぶ意味がある距離か（人間の「ボールとの距離」＝SPECIAL.DASH.MIN_DIST に当たる線を、
+      // AI では「瞬間移動で詰める距離」で見る。目の前の球に跳んでも技を捨てるだけ）。
+      if (dist < SPECIAL.DASH.MIN_DIST) return;
+      // 走って間に合うなら跳ばない＝人間の dashUnreachable() に当たる線。期限は
+      // 「打点に球が来る時刻」（spot.t）で、人間版が使う「次の着地」より正確：AI が打つのは
+      // バウンド後に上がってきた頂点なので、着地の瞬間を期限にすると実際には間に合う球まで
+      // 「間に合わない」と見てしまう（実測：それだと1800秒で458回＝ほぼ毎ポイント跳んでいた）。
+      const canRun = PLAYER.CPU_CHASE * actor.attr.speed * spot.t * SPECIAL.DASH.RUNNABLE
+        + PLAYER.CPU_REACH * actor.attr.reach;
+      if (dist <= canRun) return;
+      this.spendSpecial('shukuchi', undefined, who);
+      actor.dash = { x: actor.x, z: actor.z, t: SPECIAL.DASH.FX_T };
+      actor.x = spot.x;
+      actor.z = spot.z;
+      actor.speed = 0;
+      actor.fwd = 0;
+      // 跳んだ先では「走らされていない」扱いにする。人間が縮地の後にきちんと溜めて打てる
+      // （dashToBall がスイングの有効時間を打点まで伸ばす）のと同じ意味で、AI 側で
+      // 「余裕のあるなし」を持っているのがこの2つ（hit() の stretch / settleT）。
+      actor.chaseDist = 0;
+      actor.settleT = 0;
+    }
+
+    /**
+     * AI の縮地の跳び先＝**その球を打つために本来そこへ走りたかった場所**（ai.chasePosition）。
+     * 人間の dashSpot() は「軌道のうち打てる区間の真ん中」を選ぶが、AI に同じものを渡しては
+     * いけない：AI は打てる条件がそろった最初のフレームで振るので、軌道の上に立たせると
+     * **足元でバウンドした直後（高さ CPU_REACH_Y_MIN＝0.15m）を打つ**ことになり、そこから
+     * 深く狙った返球はネットを越えられない（実測：Extreme の縮地の後の返球が1800秒で32本
+     * ネットに掛かり、その全部がこの足元の打点だった）。ai.chasePosition() はバウンド後に
+     * 打ちやすい高さまで上がってきた頂点（や、スマッシュ・ポーチの打点）を返すので、
+     * 跳んだ先でそのまま普通の1打が打てる。
+     * 跳び先で本当に打てるか（コートの外へ弾む球ではないか）は、その位置から手が届く瞬間が
+     * この先にあるかで確かめる。無ければ null＝跳ばない（回数を捨てない）。
+     * @returns {{x:number, z:number, t:number}|null} t＝そこに立った場合に球が打てるようになる時刻(秒)
+     */
+    dashSpotFor(who) {
+      const ball = this.ball;
+      const actor = this.actor(who);
+      const dir = actor.netDir;    // +1＝you 陣地(z<0)の選手、-1＝cpu 陣地(z>0)の選手
+      const side = -dir;           // ai.js の側の符号（1＝cpu 陣地 z>0）
+      // 動ける範囲（youBounds() の AI 版）。ネット側の限界と後ろの限界を netDir で鏡にする。
+      const nearZ = dir * PLAYER.Z_NEAR;
+      const farZ = dir * -(HALF_L + PLAYER.Z_FAR_MARGIN);
+      const spot = chasePosition(ball, side, actor);
+      const x = clamp(spot.x, -PLAYER.X_LIMIT, PLAYER.X_LIMIT);
+      const z = clamp(spot.z, Math.min(nearZ, farZ), Math.max(nearZ, farZ));
+      const reach = PLAYER.CPU_REACH * actor.attr.reach;
+      const hittable = (at) => at.z * dir < PLAYER.NET_MARGIN
+        && at.y < PLAYER.CPU_REACH_Y && at.y > PLAYER.CPU_REACH_Y_MIN
+        && !(this.serveInFlight && at.bounces < 1)
+        && Math.hypot(at.x - x, at.z - z) < reach;
+      const window = predictWindow(ball, hittable, SPECIAL.DASH.LEAD_T, 1);
+      if (!window) return null;
+      // t＝その位置に立ったとき球が打てるようになる時刻（＝間に合うかを測る期限）。
+      return { x, z, t: window.enter.t };
     }
 
     /** いまのボールと自分の距離(m)。コート面での距離なので高さは見ない。 */
@@ -1533,10 +1671,14 @@
       this.you.chargeStroke = null;
       this.you.serveMiss = false; // 前のサーブの「溜めすぎ」の抽選結果も持ち越さない
       this.you.special = null;    // 前の1打に乗っていた必殺技も持ち越さない
-      this.you.dash = null;
+      ACTORS.forEach((w) => { this.actor(w).dash = null; }); // 縮地の残像も持ち越さない
       ACTORS.forEach((w) => { this.actor(w).leap = null; }); // 跳躍も持ち越さない
-      // AI（Hard）ぶんも同じく持ち越さない
-      ACTORS.forEach((w) => { if (w !== 'you') this.actor(w).special = null; });
+      // AI（Hard / Extreme）ぶんも同じく持ち越さない
+      ACTORS.forEach((w) => {
+        if (w === 'you') return;
+        this.actor(w).special = null;
+        this.actor(w).diveVolley = false;
+      });
       this.specialArmed = null;
       ball.kick = false;
 
@@ -1552,6 +1694,11 @@
       this.lastBallOwnerSeen = null;
       this.poachCommit.cpuMate = false;
       this.poachCommit.youMate = false;
+      ACTORS.forEach((w) => {
+        if (w === 'you') return;
+        this.dashCommit[w] = false;
+        this.diveCommit[w] = false;
+      });
 
       const side = this.match.serveSide; // クロス(-1)から始まり、ポイントごとに逆クロス(+1)と交互になる
       const serverTeam = this.server;
@@ -1867,6 +2014,11 @@
         special = null;
         this.you.special = null;
       }
+      // AI の飛びつきボレー（Extreme のみ）だけは、他の技と決まる場所が違う：普通のリーチでは
+      // 届かない球へ手を伸ばす瞬間＝ swingAiAt() で決まっている。ここでは旗を受け取るだけ
+      // （実際に乗せるのは下の「AI の必殺技はここで決まる」の分岐）。
+      const dove = who !== 'you' && player.diveVolley === true;
+      if (dove) player.diveVolley = false;
 
       if (who === 'you') this.you.swingConnected = true; // この1振りは当たった（空振りではない）
 
@@ -1875,7 +2027,7 @@
       // 飛びつきボレーだけは飛び込んで倒れ込むぶん、起き上がるまで長く動けない（技の代償）。
       this.recoverTimers[who] = who === 'you'
         ? (special === 'divingVolley' ? SPECIAL.DIVE.RECOVER : PLAYER.HIT_RECOVER_DELAY)
-        : PLAYER.CPU_RECOVER_DELAY;
+        : (dove ? SPECIAL.DIVE.RECOVER : PLAYER.CPU_RECOVER_DELAY);
 
       // ball.x/z はまだ打点のまま（solveShot が書き換えるのは vx/vy/vz だけ）なので、
       // ここで打点とプレイヤー位置からフォア/バックを判定できる。shot の計算より前に
@@ -1899,7 +2051,9 @@
 
       // AI の必殺技はここで決まる（人間の specialAim() に当たる分岐点）。
       if (who !== 'you') {
-        special = this.pickAiSpecial(who, this.aiSpecialContext(who, baseStroke, natural));
+        special = dove
+          ? 'divingVolley'
+          : this.pickAiSpecial(who, this.aiSpecialContext(who, baseStroke, natural));
         player.special = special;
       }
 
@@ -2835,10 +2989,13 @@
         const actor = this.actor(w);
         if (actor.special && actor.anim <= 0) actor.special = null;
       });
-      if (you.dash) {
-        you.dash.t -= dt;
-        if (you.dash.t <= 0) you.dash = null;
-      }
+      // 縮地の残像（表示専用）。人間も AI（Extreme）も同じ持ち方なので、まとめて薄れさせる。
+      ACTORS.forEach((w) => {
+        const actor = this.actor(w);
+        if (!actor.dash) return;
+        actor.dash.t -= dt;
+        if (actor.dash.t <= 0) actor.dash = null;
+      });
       ACTORS.forEach((w) => {
         const actor = this.actor(w);
         if (!actor.leap) return;
@@ -3022,6 +3179,9 @@
 
     movePlayers(dt) {
       this.updateReactTimers(dt);
+      // 縮地（Extreme の AI）は、このフレームの移動を測り始める前に済ませる
+      // （tickAiDash() のコメント参照）。
+      this.tickAiDash();
 
       const cpuBefore = { x: this.cpu.x, z: this.cpu.z };
 
@@ -3104,9 +3264,12 @@
           this.reactTimers.cpu = PLAYER.CPU_REACT * this.cpu.attr.react + bonus;
           this.reactTimers.cpuMate = PLAYER.CPU_REACT * this.cpuMate.attr.react + bonus;
           this.rollPoach('cpuMate', 'cpu');
+          this.rollAiRescue('cpu');
+          this.rollAiRescue('cpuMate');
         } else if (owner === 'cpu') {
           this.reactTimers.youMate = PLAYER.CPU_REACT * this.youMate.attr.react + bonus;
           this.rollPoach('youMate', 'you');
+          this.rollAiRescue('youMate');
         }
       }
       this.lastBallOwnerSeen = owner;
@@ -3125,6 +3288,22 @@
       // 飛び出しても触れず、ネット際を空けるだけになる。
       this.poachCommit[mate] = this.doubles && !this.serveInFlight && this.hasFrontPlayer(team)
         && Math.random() < DOUBLES.POACH_CHANCE * this.actor(mate).attr.net;
+    }
+
+    /**
+     * 飛んできた1球に対して、その AI が「救済技（縮地・飛びつきボレー）を出す気でいるか」を
+     * 1回だけ決める。どちらも条件を満たしたフレームで出る技なので、毎フレーム
+     * CPU.SPECIAL_CHANCE を引くと事実上必ず出てしまう＝確率の意味がなくなる
+     * （他の技は「当たる瞬間」という1回きりの機会なので pickAiSpecial の中で引いている）。
+     * @param {'cpu'|'cpuMate'|'youMate'} who
+     */
+    rollAiRescue(who) {
+      const on = this.aiSpecialsOn();
+      const moves = this.aiMoves();
+      this.dashCommit[who] = on && moves.indexOf('shukuchi') !== -1
+        && Math.random() < CPU.SPECIAL_CHANCE;
+      this.diveCommit[who] = on && moves.indexOf('divingVolley') !== -1
+        && Math.random() < CPU.SPECIAL_CHANCE;
     }
 
     /**
@@ -3550,8 +3729,32 @@
       const actor = this.actor(who);
       if (!aiCanReturnNow(actor, ball)) return false;
       if (ball.y >= PLAYER.CPU_REACH_Y || ball.y <= PLAYER.CPU_REACH_Y_MIN) return false;
-      if (!reaches(ball, actor, reactReach(ball.age, actor.attr.reach))) return false;
+      const reach = reactReach(ball.age, actor.attr.reach);
+      // 普通のリーチでは届かない球でも、飛びつきボレー（Extreme のみ）なら手が届く。
+      if (!reaches(ball, actor, reach) && !this.tryAiDive(who, ball, reach)) return false;
       this.hit(who);
+      return true;
+    }
+
+    /**
+     * AI の飛びつきボレー（Extreme のみ。SPECIAL.AI.MOVES_ALL 参照）。
+     * 人間の条件（SPECIAL_MATCH.divingVolley＝「ノーバウンドだが、普通に振ったのでは
+     * 届かない」）をそのまま AI の当たり判定へ移したもので、伸びたリーチ
+     * （SPECIAL.DIVE.REACH_MULT）でだけ届く球のときに true を返し、この1打に技が乗る旗を
+     * 立てる（hit() が受け取る）。代償——打った後の長い硬直（DIVE.RECOVER）——も人間と同じ。
+     * 出すかどうかの抽選は球ごとに1回（diveCommit）。
+     * @param {number} reach 普通に手を伸ばして届く距離(m)（reactReach の結果）
+     */
+    tryAiDive(who, ball, reach) {
+      if (!this.aiSpecialsOn() || !this.diveCommit[who]) return false;
+      if (this.aiMoves().indexOf('divingVolley') === -1) return false;
+      if (this.usesLeft('divingVolley', who) <= 0) return false;
+      if (ball.bounces !== 0) return false; // ボレーの場面だけ（バウンド後の球は対象外）
+      const actor = this.actor(who);
+      if (Math.abs(actor.z) > PLAYER.VOLLEY_Z) return false; // ネット際にいるときだけ
+      if (!reaches(ball, actor, reach * SPECIAL.DIVE.REACH_MULT)) return false;
+      this.diveCommit[who] = false;
+      actor.diveVolley = true;
       return true;
     }
 

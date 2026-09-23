@@ -38,19 +38,33 @@
     };
     // 縮地（必殺技）の残像。跳ぶ前に立っていた位置へ置いて薄れさせるだけなので、
     // 選手と同じメッシュのマテリアルを半透明の金色1枚に差し替えて使い回す。
-    const dashGhost = scene3d.createPlayer(THEME.YOU);
-    const ghostMaterial = new THREE.MeshBasicMaterial({
-      color: THEME.DASH_GHOST, transparent: true, opacity: 0, depthWrite: false,
-    });
-    dashGhost.traverse((o) => { if (o.isMesh) o.material = ghostMaterial; });
-    dashGhost.visible = false;
+    // 人間だけでなく AI も縮地を使う（難易度 Extreme）ので、4人ぶん用意する。
+    // マテリアルは1人1枚：同じフレームに2人が跳ぶと、共有していると薄れ方が混ざる。
+    function createGhost(facing) {
+      const mesh = scene3d.createPlayer(THEME.YOU);
+      const material = new THREE.MeshBasicMaterial({
+        color: THEME.DASH_GHOST, transparent: true, opacity: 0, depthWrite: false,
+      });
+      mesh.traverse((o) => { if (o.isMesh) o.material = material; });
+      mesh.rotation.y = facing;
+      mesh.visible = false;
+      return { mesh, material };
+    }
+    const dashGhosts = {
+      you: createGhost(0),
+      youMate: createGhost(0),
+      cpu: createGhost(Math.PI),
+      cpuMate: createGhost(Math.PI),
+    };
+    const GHOST_KEYS = Object.keys(dashGhosts);
 
     const impactFlash = scene3d.createImpactFlash();
     const trail = scene3d.createTrail();
     const smashHint = scene3d.createSmashHint();
     const swingGuide = scene3d.createSwingGuide();
     scene.add(
-      you, cpu, youMate, cpuMate, ballMesh, dashGhost,
+      you, cpu, youMate, cpuMate, ballMesh,
+      ...GHOST_KEYS.map((key) => dashGhosts[key].mesh),
       shadows.ball, shadows.you, shadows.cpu, shadows.youMate, shadows.cpuMate,
       impactFlash, trail, smashHint, swingGuide,
     );
@@ -99,13 +113,18 @@
 
       // 縮地の残像（跳ぶ前の位置に一瞬だけ残る分身）。リプレイでも同じように出したいので、
       // 生の state とリプレイのコマの両方が通る applyFrame() の中で面倒を見る。
-      const dash = state.you.dash;
-      dashGhost.visible = !!dash;
-      if (dash) {
-        dashGhost.position.set(dash.x, 0, dash.z);
-        ghostMaterial.opacity = SPECIAL.DASH.FX_OPACITY
+      // ダブルスの2人（youMate/cpuMate）はシングルスでは state にいてもコートに出ていないので、
+      // 本体と同じく doubles のときだけ出す。
+      GHOST_KEYS.forEach((key) => {
+        const ghost = dashGhosts[key];
+        const dash = state[key] && (state.doubles || key === 'you' || key === 'cpu')
+          ? state[key].dash : null;
+        ghost.mesh.visible = !!dash;
+        if (!dash) return;
+        ghost.mesh.position.set(dash.x, 0, dash.z);
+        ghost.material.opacity = SPECIAL.DASH.FX_OPACITY
           * clamp(dash.t / SPECIAL.DASH.FX_T, 0, 1);
-      }
+      });
 
       const ball = state.ball;
       ballMesh.position.set(ball.x, ball.y, ball.z);

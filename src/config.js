@@ -329,6 +329,19 @@
      */
     AI: {
       MOVES: ['kickServe', 'dunkSmash', 'tweener', 'driveVolley', 'jackknife', 'buggyWhip', 'hawkEye'],
+      /**
+       * 難易度 Extreme（`CPU.SPECIAL_ALL_MOVES`）で使う一覧。上の MOVES に、Hard では
+       * 外してあった**飛びつきボレーと縮地**を足した全9種で、並びは人間の SPECIAL_MOVES と
+       * 同じ＝優先度も同じ。この2つは「本来なら届かない球に届く」＝AI の守備範囲そのものを
+       * 広げる技なので、Hard では意図的に持たせていない（上のコメント参照）。Extreme は
+       * まさにその「取られるはずの球まで拾ってくる相手」を出す段階なので、ここで解禁する。
+       * 2つとも発動の判断どころが他の技と違い、当たる瞬間ではなく**その前**で決まる：
+       * - 飛びつきボレー … 普通のリーチでは届かないノーバウンドに手を伸ばす瞬間
+       *   （game.js#swingAiAt。AI_SPECIAL_MATCH には入れない）
+       * - 縮地 … 走っても間に合わないと分かったフレーム（game.js#tryAiDash）
+       */
+      MOVES_ALL: ['kickServe', 'dunkSmash', 'tweener', 'shukuchi', 'divingVolley',
+        'driveVolley', 'jackknife', 'buggyWhip', 'hawkEye'],
       CHANCE: 0.7,
       REQUIRE_PLAYER_SPECIALS: true,
       SETTLE_T: 0.5,
@@ -1110,8 +1123,14 @@
     // その1本をアプローチショットと見なして APPROACH_CHANCE の確率でネットへ詰める。
     APPROACH_CHANCE: 0.43,
     // CPU/AI が必殺技を使うか。難易度プリセット（CPU_LEVELS）が上書きする値で、
-    // 素の値＝normal は false。hard だけ true にしてある（何をどう使うかは SPECIAL.AI）。
+    // 素の値＝normal は false。hard / extreme で true にしてある（何をどう使うかは SPECIAL.AI）。
     SPECIALS: false,
+    // 以下3つは SPECIALS が true のときだけ効く「AI の技の使い方」。素の値は hard のやり方
+    // （守備範囲を広げない7種・技ごとに1ゲーム1回・CHANCE で外す）で、extreme だけが
+    // 全9種・複数回・ほぼ必ず出す、に上書きする（CPU_LEVELS 参照）。
+    SPECIAL_ALL_MOVES: false,            // true＝飛びつきボレー・縮地も含む全9種（SPECIAL.AI.MOVES_ALL）
+    SPECIAL_USES: SPECIAL.USES_PER_GAME, // **技ごとに**1ゲームに使える回数（人間と同じ回数が素の値）
+    SPECIAL_CHANCE: SPECIAL.AI.CHANCE,   // 条件がそろった1打で実際に出す確率
     NET_RUSH_STEPS: 6,      // 迎え撃つ深さの候補数（ネット際〜今いる深さを何分割して探すか）
     NET_RUSH_LEAD_T: 2.0,   // その通過点を何秒先まで探すか
     // 詰めるのをやめる（＝ネットから引き返す）打点の深さ。ロブなどでここより奥まで
@@ -2036,7 +2055,7 @@
   };
 
   /**
-   * CPU/AI の強さのプリセット（Easy/Normal/Hard）。スタート画面で選び、選んだ段階に応じて
+   * CPU/AI の強さのプリセット（Easy/Normal/Hard/Extreme）。スタート画面で選び、選んだ段階に応じて
    * `CPU`（狙いの精度・アウト確率・追う範囲）と `PLAYER` のCPU専用値（反応遅延・追跡/回復速度）
    * を実行時に上書きする。コート寸法やルールに関わる値（COURT・RULES 等）はここでは変えない。
    * `normal` は空オブジェクト＝上書きなし（＝現状のバランス値がそのままベースラインになる）。
@@ -2099,6 +2118,54 @@
         CPU_REACH: 1.6, CPU_REFLEX_REACH: 0.56,
       },
     },
+    /**
+     * Extreme（ユーザー要望「hard よりも強い動きをする、必殺技を1ゲーム中複数使う相手」）。
+     * hard の各値をさらに1段きつくしたうえで、**違いの主役は必殺技の使い方**にしてある：
+     * - 技は全9種（SPECIAL.AI.MOVES_ALL）＝ hard では守備範囲が広がるからと外していた
+     *   飛びつきボレーと縮地まで使ってくる。
+     * - 回数は技ごとに1ゲーム SPECIAL_USES 回（hard は1回）。
+     * - 条件がそろったときに実際に出す確率も上げてある（SPECIAL_CHANCE）。
+     *
+     * 素の値（ミス確率・追いつく力）の詰め方は hard と同じ方針で、いちばん効く
+     * **ミス確率**を主軸にする：OUT_* は hard の約1/3、STRETCH_OUT_* は約1/3＝
+     * 走らされてもほとんどミスしない。狙いの深さ・ワイドさ（AIM_*）は hard から
+     * わずかしか動かしていない——CPU_LEVELS 冒頭のとおり、ここをきつくしても強さは
+     * ほとんど変わらず、自分のミスが増えて逆に弱くなるため。
+     *
+     * 追いつく力は「人間と互角の足」まで上げる：CPU_CHASE 7.0 は人間の天井 7.2 の直下で、
+     * 加速のぶん実効が落ちる人間（PLAYER.SPEED のコメント参照）と実質同じ速さになる。
+     * 反応（CPU_REACT）は 0 にはしない——一拍も止まらない相手は「読まれている」ではなく
+     * 「見えていない」挙動になるので、hard の 0.05 から半分だけ削る。
+     *
+     * 実測（擬似乱数を固定した自動対戦。着地点を予測して追う人間役×600秒×4本、必殺技は
+     * 両者とも全種装備）での CPU のポイント率：
+     *   シングルス normal 63.5% ／ hard 76.4% ／ **extreme 94.2%**
+     *   ダブルス            ——   ／ hard 56.9% ／ **extreme 89.0%**
+     * 内訳で効いているのは「人間のウィナーが通らなくなること」で、人間が決めた
+     * （相手が届かなかった）ポイントは hard の 46/250 に対し extreme は 9/226。
+     */
+    extreme: {
+      cpu: {
+        SHOT_T: 0.72, AIM_X_MIN: 1.8, AIM_X_MAX: 3.95, AIM_Z_MIN: 7.8, AIM_Z_MAX: 10.0,
+        OUT_LONG: 0.004, OUT_WIDE: 0.003, CHASE_X_LIMIT: 8.2,
+        STRETCH_OUT_LONG: 0.018, STRETCH_OUT_WIDE: 0.012,
+        SERVE_T: 0.33, // hard(0.36)よりさらに速い。TOSS_Y=2.6 で solveShot() が収束する範囲内
+        // 決め球はさらに鋭く・速く（hard は 0.30 / 3.7 / 0.29）
+        VOLLEY_ANGLE_T: 0.27, VOLLEY_ANGLE_X: 3.85, SMASH_T: 0.26,
+        APPROACH_CHANCE: 0.62, // hard(0.50)より積極的にネットへ出てくる
+        SPECIALS: true,
+        SPECIAL_ALL_MOVES: true, // 飛びつきボレー・縮地も含む全9種
+        SPECIAL_USES: 3,         // **技ごとに**1ゲーム3回（hard は1回）
+        SPECIAL_CHANCE: 0.9,     // 条件がそろえばほぼ必ず出す（hard は 0.7）
+      },
+      player: {
+        CPU_CHASE: 7.0, CPU_RECOVER: 4.3, CPU_REACT: 0.025, CPU_RECOVER_DELAY: 0.30,
+        // hard のコメントにある「前衛がボレー・スマッシュをほぼ全部拾う」問題があるので、
+        // CPU_REFLEX_REACH は hard からの上げ幅を CPU_REACH より抑えたままにしてある
+        // （1.6→1.72 が +7.5% に対し、0.56→0.60 は +7.1%）。
+        CPU_REACH: 1.72, CPU_REFLEX_REACH: 0.60,
+      },
+    },
   };
 
   // easy/hard から normal へ戻れるよう、初期値（＝normalの実値）を退避しておく。
@@ -2115,7 +2182,7 @@
    * CPU/AI の強さを切り替える。`CPU`/`PLAYER` はモジュール読み込み時に他ファイルへ参照ごと
    * 渡されている（分割代入）ため、新しいオブジェクトに差し替えるのではなく、既存オブジェクトの
    * プロパティを書き換える（Object.assign）。呼び出し側は他のプロパティに触れる必要はない。
-   * @param {'easy'|'normal'|'hard'} level
+   * @param {'easy'|'normal'|'hard'|'extreme'} level
    */
   function applyCpuLevel(level) {
     const preset = CPU_LEVELS[level] || CPU_LEVELS.normal;
