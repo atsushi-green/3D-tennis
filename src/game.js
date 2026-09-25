@@ -19,8 +19,10 @@
   const {
     chasePosition, homePosition, netRushPosition, cpuShot, cpuVolleyShot, cpuSmashShot,
     isResponder, coverPosition, reactReach, aiSpin,
+    pairResponder, poachRun, frontPosition, backPosition,
+    doublesRallyShot, doublesVolleyShot, doublesSmashShot,
   } = RallyOne.ai;
-  const { Match } = RallyOne.scoring;
+  const { Match, pointStakes } = RallyOne.scoring;
 
   const { BALL_R, STEP } = PHYSICS;
 
@@ -44,6 +46,14 @@
    */
   const INPUT_X_TO_WORLD = -1;
 
+  // physics.predictWindow()／predictAtZ() が軌道を刻む幅(秒)。predictWindow は
+  // 「上限を越えた次の1コマ」までサンプルを返しうるので、上限を渡す側がこのぶん
+  // 手前で打ち切る必要がある（predictContact() 参照）。
+  // 予測の刻みは実際の物理と同じ（physics.js 側で PHYSICS.STEP を使う）。別の値に
+  // しておくと、予測と実物理でボールの落ち方そのものがずれる（physics.js の
+  // landedAt() のコメント参照）ので、ここもそこから引く。
+  const PREDICT_STEP = PHYSICS.STEP;
+
   function reaches(ball, player, reach) {
     return Math.hypot(ball.x - player.x, ball.z - player.z) < reach;
   }
@@ -63,6 +73,23 @@
 
   /** 4人ぶんまとめて同じ処理をしたいとき用（スタミナの回復など） */
   const ACTORS = Object.keys(TEAM_OF);
+
+  /**
+   * その選手にとっての「前」＝ネット越しに打ち込む向き（world の z 方向）。
+   * 手前側（you/youMate、z<0）は +z、奥側（cpu/cpuMate、z>0）は -z。
+   * 狙いの向き（hit() の aimDir）と、前進しているかの判定（actor.fwd）が同じ値を通る。
+   */
+  const NET_DIR = { you: 1, youMate: 1, cpu: -1, cpuMate: -1 };
+
+  /**
+   * バギーホイップで打球が曲がる向き（world の x 方向）。曲がる先＝落とす先でもある。
+   * 振り抜く方向は打ち方（フォアハンド）で決まっているので、ラケット側の逆＝
+   * コート中央を横切る側へ常に曲がる。手前の人間（RACKET_SIDE=-1）なら +x
+   * （画面では右から左）、向かい側の AI（+1）ならその鏡で -x。
+   */
+  function buggyCurveSign(who) {
+    return -RACKET_SIDE[who];
+  }
 
   /**
    * 振り出しの早さ（スイングがボールを待った秒数）を -1〜+1 に直したもの。
@@ -250,6 +277,25 @@
   }
 
   /**
+   * その打点は「自分の後ろを抜けている」か＝ツイーナー（股抜き）の場面か。
+   * **後ろへの距離と向きの両方**を見る：真後ろから左右 45°（TWEENER.SIDE_RATIO=1.0）の
+   * 扇の中に、TWEENER.BEHIND より深く入っていること。
+   * 以前は z の差だけを見ていたため、**真横 2m ほどを通り過ぎる球がほんの少し後ろに
+   * 入った瞬間**にも成立し、ふつうのストロークが勝手にツイーナーになっていた
+   * （ユーザー報告。SPECIAL.TWEENER のコメント参照）。人間と AI の両方から使う。
+   * @param {string} who 打つ本人（ネット方向 NET_DIR で「後ろ」の向きを揃える）
+   * @param {{x:number, z:number}} player
+   * @param {{x:number, z:number}|null} at 打点（predictContact の結果、または実際のボール）
+   */
+  function passedBehind(who, player, at) {
+    if (!at) return false;
+    const { TWEENER } = SPECIAL;
+    const behind = (player.z - at.z) * NET_DIR[who];
+    return behind >= TWEENER.BEHIND
+      && Math.abs(at.x - player.x) <= behind * TWEENER.SIDE_RATIO;
+  }
+
+  /**
    * 技が乗った1打が、実際に当たった時点でもまだその技の場面かどうか。
    * 技が乗るのは「溜めを離した瞬間」（chargeRelease）で、実際に当たるのはその少し後
    * なので、その間に前へ詰めた・バウンドを待ったなどで場面が変わることがある。
@@ -262,14 +308,26 @@
   const SPECIAL_STILL_VALID = {
     buggyWhip: (g, ball) => !isVolleyContact(g, ball),
     dunkSmash: (g, ball) => ball.bounces === 0,
+    // 離した瞬間は「バウンドした球に抜かれていた」のに、当たったのはノーバウンドの球
+    // ／もう自分より前にある球、という取り違え（ユーザー報告「ボレーのときに勝手に
+    // ツイーナーが発動する」）を防ぐ。専用モーション（体ごと反転して股下へ）に切り替わる
+    // 技なので、場面が変わったまま乗せ続けると普通のボレーが股抜きの形で飛ぶ。
+    tweener: (g, ball) => ball.bounces > 0 && passedBehind('you', g.you, ball),
+    // 溜めている間はワンバウンドの球だったのに、前へ詰めてノーバウンドで触った
+    // ／跳ね上がってスマッシュの高さになった、という取り違えを防ぐ。
+    hawkEye: (g, ball) => ball.bounces > 0
+      && !naturalStroke(g, 'you', ball, g.you, g.you.swingCharge).smash,
+    // 弾んだ高い球を叩く技なので、ノーバウンドで触ってしまった／落ちてくるのを待って
+    // しまった（打点が下がった）1打では下ろす。跳んで叩く専用モーションに切り替わるため。
+    jackknife: (g, ball) => ball.bounces > 0 && ball.y >= SPECIAL.JACK.MIN_Y,
   };
 
   /**
    * 各必殺技が「今この場面で出せるか」。装備している技を SPECIAL_MOVES の並び順
    * （＝優先度）に上から当てていき、最初に true になったひとつだけが**自動で**発動する
    * （Game#pickSpecial）。条件が重ならないよう、技ごとに担当する場面を分けてある：
-   * サーブ／前に詰めながらの高いノーバウンド／届かない球／抜かれた球／
-   * ネット前のノーバウンド／浮いたノーバウンド／
+   * サーブ／前に詰めながらの高いノーバウンド／抜かれた球／届かない球／
+   * 届かないノーバウンド／浮いたノーバウンド／
    * 走らされているフォアハンド／足を止めて溜めたグラウンドストローク。
    * @type {{[key:string]: (g: Game, c: object) => boolean}}
    */
@@ -286,6 +344,21 @@
       && c.contact('dunkSmash').bounces === 0
       && c.contact('dunkSmash').y >= SPECIAL.DUNK.MIN_Y
       && g.you.fwd >= SPECIAL.DUNK.MIN_FWD,
+    // 「もう自分より後ろを通っている（抜かれた）、**バウンド済みの**球」だけ。
+    // リーチが伸びる（TWEENER.REACH_MULT）ので、普通なら触れない距離の球も拾える＝
+    // これが技の本体。
+    // ・**ノーバウンドの球では出さない**（contact.bounces > 0）。股抜きはバウンドした球を
+    //   拾う打ち方で、ノーバウンドのままなら普通のボレー／スマッシュの場面。リーチを
+    //   1.35→1.8 に広げたあと、ネット際で体の横を通り過ぎる速い球が「わずかに後ろ」に
+    //   入った瞬間に拾われ、**普通のボレーが勝手にツイーナーになる**というユーザー報告が
+    //   出た。ボレーは飛びつき／ドライブボレーの担当なので、ここで線を引く。
+    // ・**縮地より先に判定する**（SPECIAL_MOVES の並び順）：抜かれた球は「離れていて
+    //   走っても間に合わない球」にも当てはまることが多く、逆順だと両方を装備したときに
+    //   縮地が先に拾ってしまう。
+    tweener: (g, c) => !c.serving && !!c.contact('tweener')
+      && c.contact('tweener').bounces > 0
+      && c.contact('tweener').y >= SPECIAL.TWEENER.MIN_Y
+      && passedBehind('you', g.you, c.contact('tweener')),
     // 「ボールが十分に離れていて、普通に振っても届かず、走っても間に合わない」球だけ。
     // ・ボールとの距離（MIN_DIST）を見ないと、すぐ横を速く通り過ぎる球——手を伸ばせば
     //   届きそうな「ギリギリ届かない」球——にも出てしまう（そういう球でも2バウンド目は
@@ -297,10 +370,13 @@
       if (g.ballDistance() < SPECIAL.DASH.MIN_DIST) return false;
       return !!c.dashSpot() && c.dashUnreachable();
     },
-    tweener: (g, c) => !c.serving && !!c.contact('tweener')
-      && g.ball.z < g.you.z - SPECIAL.TWEENER.BEHIND
-      && g.ball.y >= SPECIAL.TWEENER.MIN_Y,
-    divingVolley: (g, c) => !c.serving && isVolleyContact(g, c.contact('divingVolley')),
+    // 「ノーバウンドだが、普通に振ったのでは届かない」球だけ。伸びたリーチ（DIVE.REACH_MULT）
+    // でなら捉えられて、通常のリーチでは同じノーバウンドを捉えられない、という差が発動条件。
+    // これを見ないと、正面に来たふつうのボレー——手を伸ばさなくても届く球——にまで飛び込んで
+    // しまい、硬直（DIVE.RECOVER）だけ背負って次の球が返せなくなる。
+    divingVolley: (g, c) => !c.serving
+      && isVolleyContact(g, c.contact('divingVolley'))
+      && !isVolleyContact(g, c.contact(null)),
     // 「ノーバウンドで、腰から頭までの高さに浮いた球」を横振りで叩く場面だけ。
     // ・ネット前に限らない（ベースライン寄りで浮いたノーバウンドを叩くのもドライブ
     //   ボレー）ので、isVolleyContact ではなく「ノーバウンド＋高さ」で見る。
@@ -311,6 +387,25 @@
       && c.contact('driveVolley').bounces === 0
       && c.contact('driveVolley').y >= SPECIAL.DRIVE.MIN_Y
       && c.contact('driveVolley').y < SPECIAL.DRIVE.MAX_Y,
+    // 「高く弾んだ球を、足を止めてフラットのバックハンドで叩く」場面だけ。
+    // バギーホイップ（フォア／トップスピン／走らされている）とちょうど背中合わせの条件で、
+    // 同じ1打で両方が成立することはない。
+    // ・バウンド済みの高い球（MIN_Y＝肩の高さ）に限る。ノーバウンドの高い球はダンク
+    //   スマッシュ／ドライブボレーの領分で、そちらのほうが優先度も上にある。
+    // ・押したキーが B（フラット）であること。高い打点から下向きに叩き込む打ち方なので、
+    //   擦り上げるトップスピンやスライスでは成立しない（バギーホイップの逆）。
+    // ・足が止まっていること（MAX_SPEED）。跳び上がる踏み切りが要る＝走らされている
+    //   ときはバギーホイップ、止まって叩けるときはこちら、と場面が分かれる。
+    jackknife: (g, c) => {
+      if (c.serving || c.spin !== 'flat' || g.currentStroke() !== 'backhand') return false;
+      const { JACK } = SPECIAL;
+      return !!c.contact('jackknife')
+        // 見るのは「最初に届く点」ではなく「この1振りでいちばん高く捉えられる点」
+        // （Game#contactPeakY のコメント参照）。バウンド後の打点だけを数える。
+        && c.peak().y >= JACK.MIN_Y
+        && c.charge >= JACK.MIN_CHARGE
+        && g.you.speed <= JACK.MAX_SPEED;
+    },
     // 「フォア側へ大きく振り回されて、追いつきざまにトップスピンで振り抜く」場面だけ：
     // V（トップスピン）で溜めたフォアハンドで、まだ止まりきっておらず、ラケット側の
     // サイドへ大きく走って（runX）、実際にそちらへ寄って立っている（you.x）。
@@ -326,8 +421,98 @@
         && g.you.runX * side >= BUGGY.MIN_RUN_X
         && g.you.x * side >= BUGGY.MIN_X;
     },
-    hawkEye: (g, c) => !c.serving && !!c.contact('hawkEye')
-      && c.charge >= SPECIAL.HAWK.MIN_CHARGE,
+    // 「足を止めて狙い澄ますグラウンドストローク」だけ。**ノーバウンドを触る1打（ボレー）
+    // と、頭上から叩く1打（スマッシュ）では出さない。** hit() は技が乗った1打の打ち方を
+    // 技に決めさせる（isSmash / isVolley）ので、場面を見ずに乗せるとボレーが
+    // グラウンドストロークとして飛んでいた（実測：ネット前の同じ1打が 45.7→71.6km/h、
+    // 着地が z=4.3→9.9 まで伸び、フォームもボレーではなくフォアハンドになる）。
+    // AI 側（AI_SPECIAL_MATCH.hawkEye）は最初からこの条件で除いてあり、人間側だけが
+    // 抜けていた。バウンド済み（bounces > 0）ならボレーの場面ではないので、あとは
+    // スマッシュになる高さ・溜めだけを外せばよい。
+    hawkEye: (g, c) => {
+      if (c.serving || c.charge < SPECIAL.HAWK.MIN_CHARGE) return false;
+      const at = c.contact('hawkEye');
+      return !!at && at.bounces > 0
+        && !naturalStroke(g, 'you', at, g.you, c.charge).smash;
+    },
+  };
+
+  /**
+   * 必殺技が乗っていなければ、この打点はどういう1打になるか。hit() の打ち方の判定
+   * （isSmash / isVolley）と、AI が技を選ぶときの材料が同じ式を通るように切り出した。
+   * @param {Game} g
+   * @param {string} who
+   * @param {object} ball 打点（通常は g.ball）
+   * @param {object} player 打つ本人
+   * @param {number} charge 人間の溜め量(0〜1)。AI は 0
+   * @returns {{smash:boolean, volley:boolean}}
+   */
+  function naturalStroke(g, who, ball, player, charge) {
+    const smash = who === 'you'
+      ? ball.y >= PLAYER.SMASH_MIN_Y && charge >= PLAYER.SMASH_MIN_CHARGE
+      : ball.y >= CPU.SMASH_MIN_Y && ball.vy <= CPU.SMASH_FALLING_VY
+        && Math.abs(player.z) <= CPU.SMASH_Z_MAX;
+    const volley = !smash && ball.bounces === 0 && (who === 'you'
+      ? player.z > -COURT.SERVICE
+      : Math.abs(player.z) <= PLAYER.VOLLEY_Z);
+    return { smash, volley };
+  }
+
+  /**
+   * CPU/AI 版の「今この場面でその技が出せるか」。人間の SPECIAL_MATCH と対になるが、
+   * 見るタイミングが違う：AI には溜め（これから打つ、という前置き）が無いので、
+   * **実際に当たる瞬間**の場面だけで決める（hit() から一度だけ呼ばれる）。
+   * 条件そのものは人間と同じ config の値（SPECIAL.DUNK.MIN_Y など）を使い、溜めや
+   * ←→ の入力を要求するところだけ AI 向けの代わり（settleT・runX）に置き換える。
+   * キックサーブだけはラリーではなくサーブなので、ここではなく serve() が拾う。
+   * @type {{[key:string]: (g: Game, c: object) => boolean}}
+   *   c ＝ {who, ball, player, bounces, contactY, stroke, natural{smash,volley}}
+   *   （「抜かれた量」は人間と同じ passedBehind() で見るので、ここには持たない）
+   */
+  const AI_SPECIAL_MATCH = {
+    // 頭上の高いノーバウンドを叩き落とす。高さ（SPECIAL.DUNK.MIN_Y）は人間とまったく
+    // 同じで、人間の「前へ踏み込みながら」（DUNK.MIN_FWD）だけが AI 向けの代わりに
+    // 置き換わる——ai.smashApproach() は頭上の球の打点へ**先回りして止まって待つ**動きを
+    // するので、叩く瞬間はほぼ必ず静止していて踏み込みが出ない（実測：ダブルス Hard
+    // 900秒で AI のスマッシュ59本の fwd は中央値 0.00・最大 0.12 で、MIN_FWD=2.2 を
+    // 満たしたのは0本＝この技だけ事実上 AI に存在しなかった）。代わりに「攻めの位置で
+    // 叩けている」＝打点がサービスライン付近（SPECIAL.AI.DUNK_MAX_Z）より前、で見る。
+    dunkSmash: (g, c) => c.bounces === 0
+      && c.contactY >= SPECIAL.DUNK.MIN_Y
+      && Math.abs(c.player.z) <= SPECIAL.AI.DUNK_MAX_Z,
+    // 球に抜かれた（自分より後ろを通っている）ときの股抜き。人間と同じく、
+    // ノーバウンドの球では出さない（そこはボレー／スマッシュの場面）。
+    tweener: (g, c) => c.bounces > 0
+      && c.contactY >= SPECIAL.TWEENER.MIN_Y
+      && passedBehind(c.who, c.player, c.ball),
+    // 腰から頭の高さに浮いたノーバウンドを、待たずに強打する。
+    driveVolley: (g, c) => c.bounces === 0
+      && c.contactY >= SPECIAL.DRIVE.MIN_Y
+      && c.contactY < SPECIAL.DRIVE.MAX_Y,
+    // 高く弾んだ球を、足を止めて跳びながらバックハンドで叩き込む。人間の
+    // 「B（フラット）で溜めた」に当たる条件は AI には無いので、残りの3条件
+    // （バウンド済みの高い打点・バックハンド・足が止まっている）で見る。
+    jackknife: (g, c) => {
+      const { JACK } = SPECIAL;
+      return c.bounces > 0 && c.contactY >= JACK.MIN_Y
+        && c.stroke === 'backhand'
+        && c.player.speed <= JACK.MAX_SPEED;
+    },
+    // フォア側へ大きく振り回されて、追いつきざまに振り抜くグラウンドストローク。
+    // 人間の「V（トップスピン）で溜めた」に当たる条件は AI には無いので、残りの
+    // 3条件（フォアハンド・まだ止まりきっていない・ラケット側へ大きく走って寄った）で見る。
+    buggyWhip: (g, c) => {
+      if (c.natural.smash || c.natural.volley || c.stroke !== 'forehand') return false;
+      const { BUGGY } = SPECIAL;
+      const side = RACKET_SIDE[c.who]; // ラケット側を正にするための符号
+      return c.player.speed >= BUGGY.MIN_SPEED
+        && c.player.runX * side >= BUGGY.MIN_RUN_X
+        && c.player.x * side >= BUGGY.MIN_X;
+    },
+    // 足を止めて構えられた1打を、狙い澄ましてライン際へ。人間の「溜め5割以上」に
+    // 当たるのが settleT（目標地点に着いてから動かずに待てている秒数）。
+    hawkEye: (g, c) => !c.natural.smash && !c.natural.volley && c.bounces > 0
+      && c.player.settleT >= SPECIAL.AI.SETTLE_T,
   };
 
   /**
@@ -338,12 +523,16 @@
    * - unforced      自分のミス（ネット／アウト／届かず／ダブルフォルト）で落としたポイント
    * - firstServes   打った1本目のサーブの数／firstServeIn はそのうちサービスボックスに入った数
    * - maxServeKmh   そのマッチでいちばん速かったサーブの初速
-   * - specials      決めた必殺技の回数（CPU/AI は使わないので常に0）
+   * - specials      決めた必殺技の回数（難易度 Hard では CPU/AI 側も増える。SPECIAL.AI 参照）
+   * - breakPoints   自分がレシーブ側で「あと1点でそのゲームを取れる」状態だった回数
+   *                 （＝ブレークのチャンス）／breaksWon はそのうち実際に取った回数。
+   *                 タイブレークは数えない（scoring.pointStakes() 参照）
    */
   function teamStats() {
     const blank = () => ({
       aces: 0, doubleFaults: 0, points: 0, winners: 0, unforced: 0,
       firstServes: 0, firstServeIn: 0, maxServeKmh: 0, specials: 0,
+      breakPoints: 0, breaksWon: 0,
     });
     return { you: blank(), cpu: blank() };
   }
@@ -386,6 +575,9 @@
         // 見分けるために使う（hit() は成功した時点で swing を0にするので、残り時間だけでは
         // 空振りと区別できない。詳細は update() の missSwing() の呼び出し箇所を参照）。
         swingConnected: false,
+        // 直前に振ったときのスイング入力の有効時間(秒)。レシーブだけ長い
+        // （RETURN.SWING_WINDOW）ので、引っ張り／流しの換算（swingWaited()）に使う。
+        swingSpan: PLAYER.SWING_WINDOW,
         serveMiss: false, // このサーブは「溜めすぎ」の抽選に当たった＝狙いを外す（chargeRelease()で抽選）
         chargeFrac: 0, // 溜めている間だけ 0〜1 で増える、テイクバックの深さ用（chargeTime のポーズ表示版）
         chargeStroke: null, // chargeStart() の瞬間に固定するフォア/バック。溜めている間は変えない
@@ -398,6 +590,11 @@
         specialLabel: null,
         // 縮地の残像（表示専用）。{x, z, t}＝瞬間移動する前に立っていた位置と、消えるまでの残り時間。
         dash: null,
+        // 跳んで打つ1打（スマッシュ／ダンクスマッシュ／ジャックナイフ）の跳躍（表示専用）。
+        // {t: 着地までの残り秒, kind: 'smash'|'jackknife'}。**打球のモーション（anim）とは
+        // 別の時計**で、tickLeap() が「もうすぐ球が届く」ところで離す前から始める
+        // ＝跳んでから空中で振り始める絵になる。
+        leap: null,
         // 相手が打ってからこのフレームまでに左右へ動いた量（符号つき、m）。CPU/AI の
         // chaseDist の人間版で、resetChase() が新しい球のたびに0へ戻す。必殺技
         // バギーホイップの「フォア側へ大きく振り回されたか」の判定に使う。
@@ -411,22 +608,26 @@
         // 書き換えられる形で更新されるので、ここで参照を1度持っておけば以後ずっと最新を指す。
         // 既定（全項目3）ならすべて 1.0＝設定を触らない限り従来と完全に同じ挙動になる。
         attr: ATTRS.you,
+        netDir: NET_DIR.you,
       };
       // chaseDist＝この球を追って走った距離、settleT＝目標地点に着いてから動かずに
       // 待っている秒数（どちらも moveTowards() が更新する。hit() の「余裕」判定に使う）。
-      this.cpu = {
-        x: 0, z: CPU.HOME_Z, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, spin: 'flat', stamina: 1,
-        attr: ATTRS.cpu,
-      };
+      // 必殺技まわり（special / specialLabel / specialUses / runX / fwd）は人間と同じ
+      // 意味の値を AI も持つ：Hard では AI も技を使うので、打球の計算もフォーム
+      // （scene/player.js は player.special を見る）も人間とまったく同じ道を通る。
+      const aiActor = (x, z, who) => ({
+        x, z, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, spin: 'flat', stamina: 1,
+        runX: 0, fwd: 0, special: null, specialLabel: null, specialUses: {}, leap: null,
+        // dash＝縮地で跳ぶ前の位置（表示専用の残像。人間の you.dash と同じもの）、
+        // diveVolley＝この1打は飛びつきボレーだ、という旗（swingAiAt が立て hit が下ろす）。
+        // どちらも Extreme でだけ立つ（SPECIAL.AI.MOVES_ALL）。
+        dash: null, diveVolley: false,
+        attr: ATTRS[who], netDir: NET_DIR[who],
+      });
+      this.cpu = aiActor(0, CPU.HOME_Z, 'cpu');
       // ダブルス（this.doubles === true）のときだけ動く AI パートナー。シングルスでは未使用のまま。
-      this.youMate = {
-        x: 0, z: DOUBLES.NET_Z_YOU, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, spin: 'flat', stamina: 1,
-        attr: ATTRS.youMate,
-      };
-      this.cpuMate = {
-        x: 0, z: DOUBLES.NET_Z_CPU, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, spin: 'flat', stamina: 1,
-        attr: ATTRS.cpuMate,
-      };
+      this.youMate = aiActor(0, DOUBLES.NET_Z_YOU, 'youMate');
+      this.cpuMate = aiActor(0, DOUBLES.NET_Z_CPU, 'cpuMate');
 
       this.phase = 'idle';
       /**
@@ -451,6 +652,17 @@
        * newPoint() で毎ポイント消す。
        */
       this.lastShotBy = { you: null, cpu: null };
+      /**
+       * 直近に打たれたサーブの初速(km/h)。サーブだけで決まった1点（エース）のとき、球種名に
+       * 添えて「何km/h のサーブだったか」を出すのに使う。serve() で入れ、newPoint() で消す。
+       */
+      this.lastServeKmh = null;
+      /**
+       * 次の1点に何がかかっているか（scoring.pointStakes() の結果。かかっていなければ null）。
+       * beginServe() で毎ポイント決め直し、ポイントが決まった時点（endPoint）で消す。
+       * 表示（スコアボードの見出し）とスタッツ（ブレークポイントの本数）の両方がここを読む。
+       */
+      this.stakes = null;
       /** このポイントで何本打たれたか（サーブも1本に数える）。beginServe() で数え直す。 */
       this.rallyShots = 0;
       /**
@@ -463,9 +675,15 @@
       /**
        * ダブルスで、各チームの2人のうちどちらが現在の担当サーバーか。
        * 1ゲームごとに、そのチームの番が来るたびに交代する（実際のダブルスのルール）。
+       * タイブレーク中も同じ順番のまま、サーブ権が移るたびに回る（passServe()）。
        * シングルスでは参照されない。
        */
       this.serverPartner = { you: 'you', cpu: 'cpu' };
+      /**
+       * タイブレークの1本目をサーブしたチーム（タイブレーク中でなければ null）。
+       * タイブレークで決まったセットの次は、このチームの相手からサーブする（ITF ルール 5(b)）。
+       */
+      this.tiebreakOpener = null;
       this.started = false;
       /** true ならダブルス（you+youMate vs cpu+cpuMate）。既定はシングルス。 */
       this.doubles = false;
@@ -529,6 +747,21 @@
       };
       /** 直前フレームの ball.last。変化を検知して反応遅延タイマーを起動するために使う。 */
       this.lastBallOwnerSeen = null;
+      /**
+       * ダブルスの前衛が、いま飛んできている1球に対して「ポーチに出る」と決めたか。
+       * 相手が打った瞬間に球ごと1回だけ抽選し（updateReactTimers）、次の球まで持ち越さない。
+       * true の間だけ、前衛は構え位置ではなく ai.poachRun() の迎撃点へ全力で走る。
+       */
+      this.poachCommit = { cpuMate: false, youMate: false };
+      /**
+       * AI の「救済技」（縮地・飛びつきボレー。Extreme のみ）を、いま飛んできている1球に
+       * 対して出す気でいるか。ポーチ（poachCommit）と同じく相手が打った瞬間に球ごと1回だけ
+       * 抽選する（updateReactTimers → rollAiRescue）。**毎フレーム引いてはいけない**：
+       * どちらも「条件を満たしたフレームで出す」判定なので、フレームごとに CHANCE を
+       * 引くと条件を満たした最初の数フレームでほぼ必ず当たり＝確率の意味がなくなる。
+       */
+      this.dashCommit = { cpu: false, cpuMate: false, youMate: false };
+      this.diveCommit = { cpu: false, cpuMate: false, youMate: false };
       /** 今のポイントのサーブが1本目(1)か、1本目がフォールトした後のセカンドサーブ(2)か。 */
       this.serveNumber = 1;
       /**
@@ -578,15 +811,60 @@
      * ダブルスで、今の球にチームのどちらが応答するか。
      * サーブがまだ一度も返されていない間（serveInFlight）は、実際のダブルスと同じく
      * レシーバーが固定：落下点に近くても、レシーブ側でない相方（ネット際で構えている方）は
-     * 手を出さない。一度でも返球された後は通常のラリーとして、落下点に近い方が応答する。
+     * 手を出さない。
+     *
+     * 一度でも返球された後は、雁行陣（後衛＝you/cpu、前衛＝相方）の役割で決める
+     * （ai.pairResponder）：前衛がポーチできるならポーチ優先、そうでなければ落下点が
+     * どちらの持ち場かで決まる。単に「落下点に近い方」だと中途半端な深さの球のたびに
+     * 前衛が下がって雁行が崩れていた。
+     * パートナーに「下がれ」を指示している間は前衛がいない＝従来どおり近い方（isResponder）。
      * @param {'you'|'cpu'} team 応答する側のチーム
      * @returns {'you'|'youMate'|'cpu'|'cpuMate'}
      */
     doublesResponder(team) {
       if (this.serveInFlight) return this.receivingPlayer(team, this.match.serveSide);
-      const primaryKey = team === 'you' ? 'you' : 'cpu';
-      const mateKey = team === 'you' ? 'youMate' : 'cpuMate';
-      return isResponder(this[primaryKey], this[mateKey], this.ball) ? primaryKey : mateKey;
+      const backKey = team === 'you' ? 'you' : 'cpu';
+      const frontKey = team === 'you' ? 'youMate' : 'cpuMate';
+      if (!this.hasFrontPlayer(team)) {
+        return isResponder(this[backKey], this[frontKey], this.ball) ? backKey : frontKey;
+      }
+      return pairResponder(this[backKey], this[frontKey], this.ball) === 'back' ? backKey : frontKey;
+    }
+
+    /**
+     * そのチームが雁行陣を敷いているか（＝相方が前衛として前にいるか）。
+     * you チームだけは人間がパートナーに「下がれ」（E）を指示できるので、その間は
+     * 2人とも後衛＝前衛なしとして扱う。
+     * @param {'you'|'cpu'} team
+     */
+    hasFrontPlayer(team) {
+      if (!this.doubles) return false;
+      return team === 'cpu' || this.youMateFormation !== 'back';
+    }
+
+    /**
+     * ダブルスで、who から見た相手ペアの並び。
+     * - near / far：単純にネットに近い方／遠い方（常にどちらも入る）
+     * - atNet：near がネット際（DOUBLES.FRONT_MAX_Z 以内）にいればその選手。ボレーの狙いを
+     *   「その人の逆」にするために使う（目の前の相手へ打ち込んで至近距離のボレー合戦に
+     *   なるのを防ぐ）。2人とも下がっていれば null。
+     * - front / back：雁行（前衛がネット際・後衛はそれより深く）になっているときだけ
+     *   front が入る。2人とも下がっている／2人とも前に出ているときは front=null で、
+     *   後衛の配球は従来どおり（cpuShot）に戻る。
+     * @param {'you'|'youMate'|'cpu'|'cpuMate'} who 打つ本人
+     * @returns {{near: object, far: object, atNet: object|null, front: object|null, back: object}}
+     */
+    doublesFoes(who) {
+      const foeTeam = TEAM_OF[who] === 'cpu' ? 'you' : 'cpu';
+      const main = this.actor(foeTeam);
+      const mate = this.actor(foeTeam === 'you' ? 'youMate' : 'cpuMate');
+      const near = Math.abs(main.z) <= Math.abs(mate.z) ? main : mate;
+      const far = near === main ? mate : main;
+      const atNet = Math.abs(near.z) <= DOUBLES.FRONT_MAX_Z ? near : null;
+      const gankou = atNet && Math.abs(far.z) > DOUBLES.FRONT_MAX_Z;
+      return {
+        near, far, atNet, front: gankou ? near : null, back: far,
+      };
     }
 
     /* -------------------------------------------------------------- 入力 */
@@ -637,6 +915,26 @@
         this.you.chargeSpin = spin;
         return;
       }
+      // レシーブ側は、サーブが飛んでくる前からラケットを引いて待てる（実際のテニスと
+      // 同じ「テイクバックして待つ」）。以前はここが素通りで、サーブが打たれて
+      // phase が 'rally' になるまで溜め始めることすらできず、0.6秒しかない猶予の中で
+      // 「反応する→走る→押す→離す」を全部やる必要があった（＝レシーブが返せない一因）。
+      // フォア/バックはボールがまだ静止していて決められないので、サーブが打たれた
+      // 瞬間（serve()）に確定させる。
+      // 'serve' だけでなく 'fault'（1本目が外れてから2本目の構えに入るまで）と
+      // 'over'（ポイントが決まってから次のサーブ待ちに入るまで）も受け付ける：
+      // この1〜2秒の間に押してしまうと、以前はどこにも引っかからず握り直しになっていた
+      // （キーは押されたままなので keydown は二度と来ない）。tickCharge() 側で
+      // 実際に溜まり始めるのは 'serve'/'fault' になってからなので、ここで構えを
+      // 受け付けても「ポイント間に溜めておける」ことにはならない。
+      if (this.servingPlayer() !== 'you'
+        && (this.phase === 'serve' || this.phase === 'fault' || this.phase === 'over')) {
+        this.you.charging = true;
+        this.you.chargeTime = 0;
+        this.you.chargeSpin = spin;
+        this.you.chargeStroke = null;
+        return;
+      }
       if ((myServe && this.tossActive) || this.phase === 'rally') {
         this.you.charging = true;
         this.you.chargeTime = 0;
@@ -684,7 +982,12 @@
         this.you.swingConnected = false; // この1振りはまだ当たっていない
         // 縮地だけは打点まで瞬間移動するぶん、届くまでスイングの有効時間を伸ばす
         // （通常の SWING_WINDOW のままでは、跳んだ先で待っている間に振り終わってしまう）。
-        this.you.swing = move === 'shukuchi' ? this.dashToBall() : PLAYER.SWING_WINDOW;
+        this.you.swing = move === 'shukuchi' ? this.dashToBall() : this.swingWindow();
+        this.you.swingSpan = this.you.swing; // 引っ張り／流しの換算（swingWaited()）に使う
+        // 跳んで打つ1打なら、まだ跳んでいなければここで跳ぶ。ふつうは tickLeap() が
+        // 溜めている間に（球が届く少し前に）跳ばせているので、ここに来るのは
+        // 「球がまだ遠いのに離した」ような場合だけの保険。
+        this.startLeap(this.leapKind(move, this.you.swingCharge));
       }
     }
 
@@ -727,20 +1030,26 @@
      * ふつうの曲がるストレート（BUGGY.CURVE）として打つ。
      * @param {{x:number, z:number}} target 落とす場所
      * @param {number} flight 飛翔時間(秒)
+     * @param {string} who 打つ選手（手前/奥で曲がる向きもネットを通る向きも反転する）
      * @returns {number} ball.curve に入れる横加速度
      */
-    aroundPostCurve(target, flight) {
+    aroundPostCurve(target, flight, who = 'you') {
       const { BUGGY } = SPECIAL;
+      const sign = buggyCurveSign(who); // 曲がる向き（コート中央へ向かう側）
+      const plain = sign * BUGGY.CURVE; // 回りきれないときのふつうの曲がるストレート
       const from = this.ball; // まだ打点のまま（solveShot が書き換えるのは速度だけ）
       const vz = (target.z - from.z) / flight;
-      if (!(vz > 0)) return BUGGY.CURVE;
+      if (!(vz * NET_DIR[who] > 0)) return plain; // 相手コートへ向かっていない
       const tNet = -from.z / vz; // ネット面(z=0)を通過する時刻
-      if (!(tNet > 0 && tNet < flight)) return BUGGY.CURVE;
-      const clearX = RACKET_SIDE.you * (COURT.NET_HALF + BUGGY.POST_CLEAR);
+      if (!(tNet > 0 && tNet < flight)) return plain;
+      const clearX = RACKET_SIDE[who] * (COURT.NET_HALF + BUGGY.POST_CLEAR);
       const chordX = from.x + (target.x - from.x) * (tNet / flight);
       const need = (2 * (clearX - chordX)) / (tNet * (tNet - flight));
-      if (!(need > BUGGY.CURVE)) return BUGGY.CURVE; // 既にポストの外にいる等
-      return need > BUGGY.MAX_CURVE ? BUGGY.CURVE : need;
+      // 大きさで比べる（向きは sign 側が持っている）。既にポストの外にいる等で
+      // ふつうの曲がり以下しか要らない／内側すぎて回りきれない、のどちらも plain。
+      const mag = need * sign;
+      if (!(mag > BUGGY.CURVE)) return plain;
+      return mag > BUGGY.MAX_CURVE ? plain : need;
     }
 
     /**
@@ -752,9 +1061,90 @@
       return this.you.chargeStroke || classifyStroke('you', this.ball, this.you);
     }
 
-    /** その技がこのゲームであと何回使えるか。 */
-    usesLeft(move) {
-      return this.specialUses[move] || 0;
+    /**
+     * その技がこのゲームであと何回使えるか。回数は選手ごとに独立していて、
+     * 人間は this.specialUses、AI は actor.specialUses に持つ。
+     * @param {string} move
+     * @param {string} [who] 省略時は人間（'you'）
+     */
+    usesLeft(move, who = 'you') {
+      const from = who === 'you' ? this.specialUses : this.actor(who).specialUses;
+      return from[move] || 0;
+    }
+
+    /**
+     * AI_SPECIAL_MATCH に渡す「当たる瞬間の場面」。hit() の途中で作るが、テストや
+     * 見積もりからも同じものを作れるように切り出してある（引数を省けば今の状態から作る）。
+     * @param {string} who
+     * @param {string} [stroke] フォア／バック（省略時は今のボールとの位置関係で見る）
+     * @param {{smash:boolean, volley:boolean}} [natural] 技が乗らなければどうなる1打か
+     */
+    aiSpecialContext(who, stroke, natural) {
+      const ball = this.ball;
+      const player = this.actor(who);
+      return {
+        who,
+        ball,
+        player,
+        bounces: ball.bounces,
+        contactY: ball.y,
+        stroke: stroke || classifyStroke(who, ball, player),
+        natural: natural || naturalStroke(this, who, ball, player, 0),
+      };
+    }
+
+    /**
+     * いまの難易度で AI が使える技の一覧（＝回数を配る対象でもある）。
+     * Hard は守備範囲を広げない7種（SPECIAL.AI.MOVES）、Extreme は飛びつきボレー・縮地を
+     * 含む全9種（MOVES_ALL）。どちらを使うかは難易度プリセットの CPU.SPECIAL_ALL_MOVES。
+     * @returns {string[]}
+     */
+    aiMoves() {
+      return CPU.SPECIAL_ALL_MOVES ? SPECIAL.AI.MOVES_ALL : SPECIAL.AI.MOVES;
+    }
+
+    /**
+     * Hard の AI がこの1打に乗せる必殺技（無ければ null）。人間の pickSpecial() と
+     * 同じ「並び順＝優先度、上から最初に条件の合った1つ」の拾い方をする。
+     * 回数が残っていない技は飛ばして次の候補へ落ちる。
+     * 条件がそろっても SPECIAL.AI.CHANCE で外すので、同じ場面で必ず出るわけではない
+     * （回数は実際に出たときだけ減るので、外れたぶんは後の場面に取っておかれる）。
+     * @param {string} who cpu / cpuMate / youMate
+     * @param {object} ctx AI_SPECIAL_MATCH に渡す「当たる瞬間の場面」
+     * @returns {string|null}
+     */
+    pickAiSpecial(who, ctx) {
+      if (!this.aiSpecialsOn()) return null;
+      // 飛びつきボレー・縮地（Extreme のみ）は AI_SPECIAL_MATCH を持たない＝ここでは拾われない。
+      // どちらも「当たる瞬間」より前に決まる技なので、それぞれ swingAiAt() / tryAiDash() が持つ。
+      const found = this.aiMoves().find((move) => AI_SPECIAL_MATCH[move]
+        && this.usesLeft(move, who) > 0
+        && AI_SPECIAL_MATCH[move](this, ctx));
+      if (!found) return null;
+      return Math.random() < CPU.SPECIAL_CHANCE ? found : null;
+    }
+
+    /**
+     * Hard の AI がこのサーブに乗せる必殺技（無ければ null）。ラリー中の技と違って
+     * 場面の条件は「自分のサーブであること」だけなので、ここは確率だけで決める。
+     * @param {string} who
+     * @returns {string|null}
+     */
+    pickAiServeSpecial(who) {
+      if (!this.aiSpecialsOn()) return null;
+      if (this.aiMoves().indexOf('kickServe') === -1) return null;
+      if (this.usesLeft('kickServe', who) <= 0) return null;
+      return Math.random() < CPU.SPECIAL_CHANCE ? 'kickServe' : null;
+    }
+
+    /**
+     * AI が必殺技を使える状態か。難易度 Hard（CPU.SPECIALS）が前提で、既定ではさらに
+     * 「人間が技を1つ以上選んでいること」も要る（スタート画面で何も選ばなければ
+     * 従来とまったく同じゲーム、という約束を壊さないため。SPECIAL.AI 参照）。
+     */
+    aiSpecialsOn() {
+      if (!CPU.SPECIALS) return false;
+      return !SPECIAL.AI.REQUIRE_PLAYER_SPECIALS || this.specials.length > 0;
     }
 
     /**
@@ -782,6 +1172,7 @@
       const contacts = {};
       let dash;
       let unreachable;
+      let peak;
       return {
         serving: this.phase === 'serve' && this.servingPlayer() === 'you',
         // いまの溜め量(0〜1)。自動発動なので「どれくらい本気の1打か」を条件に使える技がある。
@@ -794,6 +1185,13 @@
           const key = `${r.mult}:${r.y}`;
           if (!(key in contacts)) contacts[key] = this.predictContact(r.mult, r.y);
           return contacts[key];
+        },
+        // バウンド後の球を、この1振りでいちばん高く捉えられる高さ(m)。
+        // 「高い球を叩く」技（ジャックナイフ）の判定に使う。
+        // 高さの線はジャックナイフのもの（この先読みを使う技がそれだけなので）。
+        peak: () => {
+          if (peak === undefined) peak = this.contactPeak(SPECIAL.JACK.MIN_Y);
+          return peak;
         },
         dashSpot: () => {
           if (dash === undefined) dash = this.dashSpot();
@@ -826,12 +1224,14 @@
      * @param {string} move
      * @param {string} [label] 呼び名の上書き（同じ技でもコースで呼び方が変わる場合に使う）
      */
-    spendSpecial(move, label) {
-      this.specialUses[move] = this.usesLeft(move) - 1;
-      this.stats.you.specials++;
-      this.you.specialLabel = label || SPECIAL_LABEL[move];
+    spendSpecial(move, label, who = 'you') {
+      const actor = this.actor(who);
+      if (who === 'you') this.specialUses[move] = this.usesLeft(move) - 1;
+      else actor.specialUses[move] = this.usesLeft(move, who) - 1;
+      this.stats[TEAM_OF[who]].specials++;
+      actor.specialLabel = label || SPECIAL_LABEL[move];
       this.hooks.sound('special');
-      this.hooks.call(`${this.you.specialLabel}！`, '必殺技');
+      this.hooks.call(`${actor.specialLabel}！`, '必殺技');
       // ポイントが決まった後のコール（ポイント／ウィナー！）を消してしまわないよう、
       // まだラリーが続いているときだけ引っ込める。
       this.after(SPECIAL.CALL_T, () => {
@@ -839,9 +1239,21 @@
       });
     }
 
-    /** ゲームが替わった（またはタイブレークが一巡した）ときに、全技の使用回数を戻す。 */
+    /**
+     * ゲームが替わった（またはタイブレークでサーブ権が移った）ときに、全技の使用回数を戻す。
+     * 人間だけでなく AI（Hard で技を使う）の持ち分も同じタイミングで回復させる。
+     */
     refreshSpecials() {
       SPECIAL_MOVES.forEach((m) => { this.specialUses[m.key] = SPECIAL.USES_PER_GAME; });
+      const moves = this.aiMoves();
+      ACTORS.forEach((who) => {
+        if (who === 'you') return;
+        const uses = this.actor(who).specialUses;
+        // 前の難易度で配った持ち分を残さない（Extreme→Hard と選び直したとき、
+        // Hard では使えないはずの技の回数が残ったままになるのを防ぐ）。
+        Object.keys(uses).forEach((key) => { delete uses[key]; });
+        moves.forEach((move) => { uses[move] = CPU.SPECIAL_USES; });
+      });
     }
 
     /**
@@ -863,6 +1275,115 @@
       this.you.fwd = 0;
       // 打点に着くまでの時間ぶん（＋わずかな余裕）だけ振り続けられるようにする。
       return clamp(spot.t + SPECIAL.DASH.WINDOW_MARGIN, PLAYER.SWING_WINDOW, SPECIAL.DASH.WINDOW);
+    }
+
+    /**
+     * AI の縮地（Extreme のみ。SPECIAL.AI.MOVES_ALL 参照）を、必要なら全員ぶん出す。
+     * 人間は「溜めを離した瞬間」に跳ぶ（chargeRelease → dashToBall）が、AI には溜めが
+     * 無いので、飛んできた球がネットを越えた瞬間に1回だけ判断する（tryAiDash）。
+     * **movePlayers() のいちばん
+     * 最初に呼ぶこと**：移動量は「このフレームの開始位置からどれだけ動いたか」で測って
+     * いるので（moveTowards）、位置を記録した後に瞬間移動すると、その1フレームだけ
+     * 実速度もスタミナ消費も跳ね上がった扱いになる。
+     */
+    tickAiDash() {
+      if (!this.aiSpecialsOn() || this.aiMoves().indexOf('shukuchi') === -1) return;
+      ACTORS.forEach((who) => {
+        if (who === 'you') return;
+        // シングルスでコートに立っているのは cpu だけ。相方（cpuMate / youMate）は状態としては
+        // 居続けるので、ここで外さないと「見えない選手が縮地を使い、その回数まで減る」ことになる
+        // （実測：1ゲーム3回のはずの縮地が7回出ていた原因）。
+        if (!this.doubles && who !== 'cpu') return;
+        this.tryAiDash(who);
+      });
+    }
+
+    /**
+     * その AI が、いま飛んできている球に対して縮地を出すか。出すなら打点へ瞬間移動する
+     * （跳んだ時点で効果は済んでいる＝人間の dashToBall() と同じ扱い）。
+     * 条件は人間の SPECIAL_MATCH.shukuchi と同じ3つ——跳び先で打てること（dashSpotFor）・
+     * その跳び先が十分遠いこと（DASH.MIN_DIST）・走ったのでは間に合わないこと——で、
+     * 人間の「溜めを離した」に当たるのが球ごと1回の抽選（dashCommit）。
+     * 追う担当でない選手（ダブルスの相方）は出さない：2人とも同じ球へ跳んでしまうため。
+     * @param {string} who cpu / cpuMate / youMate
+     */
+    tryAiDash(who) {
+      if (!this.dashCommit[who]) return;
+      if (this.phase !== 'rally' || !this.ball.live) return;
+      if (TEAM_OF[who] === this.ball.last) return;   // 自陣へ向かってくる球だけ
+      if (this.recoverTimers[who] > 0) return;       // 打った直後は動けない（硬直中）
+      if (this.reactTimers[who] > 0) return;         // まだ反応できていない
+      const actor = this.actor(who);
+      // ボールが自陣に入るまで待つ（ネットの向こうにある間は判断しない）。相手が打った
+      // 瞬間に跳ぶと、まだネットも越えていない球に対して消えて現れることになる。
+      if (this.ball.z * actor.netDir >= PLAYER.NET_MARGIN) return;
+      if (this.doubles && this.doublesResponder(TEAM_OF[who]) !== who) return;
+      // **この球についての判断はこの1回だけ**（ネットを越えてきた最初のフレーム＝すでに
+      // 半分走った地点で「この足では間に合わない」と見たとき）。毎フレーム見てはいけない：
+      // 下で比べる「残り時間に走れる距離」は打点が近づくほど短くなるので、どんな球も
+      // いずれ「間に合わない」側に倒れる＝条件を満たすたび必ず跳ぶことになる
+      // （実測：毎フレーム判定だと1800秒で555回＝1ポイントに2回も跳んでいた）。
+      this.dashCommit[who] = false;
+      if (this.usesLeft('shukuchi', who) <= 0) return;
+      const spot = this.dashSpotFor(who);
+      if (!spot) return;
+      const dist = Math.hypot(spot.x - actor.x, spot.z - actor.z);
+      // 跳ぶ意味がある距離か（人間の「ボールとの距離」＝SPECIAL.DASH.MIN_DIST に当たる線を、
+      // AI では「瞬間移動で詰める距離」で見る。目の前の球に跳んでも技を捨てるだけ）。
+      if (dist < SPECIAL.DASH.MIN_DIST) return;
+      // 走って間に合うなら跳ばない＝人間の dashUnreachable() に当たる線。期限は
+      // 「打点に球が来る時刻」（spot.t）で、人間版が使う「次の着地」より正確：AI が打つのは
+      // バウンド後に上がってきた頂点なので、着地の瞬間を期限にすると実際には間に合う球まで
+      // 「間に合わない」と見てしまう（実測：それだと1800秒で458回＝ほぼ毎ポイント跳んでいた）。
+      const canRun = PLAYER.CPU_CHASE * actor.attr.speed * spot.t * SPECIAL.DASH.RUNNABLE
+        + PLAYER.CPU_REACH * actor.attr.reach;
+      if (dist <= canRun) return;
+      this.spendSpecial('shukuchi', undefined, who);
+      actor.dash = { x: actor.x, z: actor.z, t: SPECIAL.DASH.FX_T };
+      actor.x = spot.x;
+      actor.z = spot.z;
+      actor.speed = 0;
+      actor.fwd = 0;
+      // 跳んだ先では「走らされていない」扱いにする。人間が縮地の後にきちんと溜めて打てる
+      // （dashToBall がスイングの有効時間を打点まで伸ばす）のと同じ意味で、AI 側で
+      // 「余裕のあるなし」を持っているのがこの2つ（hit() の stretch / settleT）。
+      actor.chaseDist = 0;
+      actor.settleT = 0;
+    }
+
+    /**
+     * AI の縮地の跳び先＝**その球を打つために本来そこへ走りたかった場所**（ai.chasePosition）。
+     * 人間の dashSpot() は「軌道のうち打てる区間の真ん中」を選ぶが、AI に同じものを渡しては
+     * いけない：AI は打てる条件がそろった最初のフレームで振るので、軌道の上に立たせると
+     * **足元でバウンドした直後（高さ CPU_REACH_Y_MIN＝0.15m）を打つ**ことになり、そこから
+     * 深く狙った返球はネットを越えられない（実測：Extreme の縮地の後の返球が1800秒で32本
+     * ネットに掛かり、その全部がこの足元の打点だった）。ai.chasePosition() はバウンド後に
+     * 打ちやすい高さまで上がってきた頂点（や、スマッシュ・ポーチの打点）を返すので、
+     * 跳んだ先でそのまま普通の1打が打てる。
+     * 跳び先で本当に打てるか（コートの外へ弾む球ではないか）は、その位置から手が届く瞬間が
+     * この先にあるかで確かめる。無ければ null＝跳ばない（回数を捨てない）。
+     * @returns {{x:number, z:number, t:number}|null} t＝そこに立った場合に球が打てるようになる時刻(秒)
+     */
+    dashSpotFor(who) {
+      const ball = this.ball;
+      const actor = this.actor(who);
+      const dir = actor.netDir;    // +1＝you 陣地(z<0)の選手、-1＝cpu 陣地(z>0)の選手
+      const side = -dir;           // ai.js の側の符号（1＝cpu 陣地 z>0）
+      // 動ける範囲（youBounds() の AI 版）。ネット側の限界と後ろの限界を netDir で鏡にする。
+      const nearZ = dir * PLAYER.Z_NEAR;
+      const farZ = dir * -(HALF_L + PLAYER.Z_FAR_MARGIN);
+      const spot = chasePosition(ball, side, actor);
+      const x = clamp(spot.x, -PLAYER.X_LIMIT, PLAYER.X_LIMIT);
+      const z = clamp(spot.z, Math.min(nearZ, farZ), Math.max(nearZ, farZ));
+      const reach = PLAYER.CPU_REACH * actor.attr.reach;
+      const hittable = (at) => at.z * dir < PLAYER.NET_MARGIN
+        && at.y < PLAYER.CPU_REACH_Y && at.y > PLAYER.CPU_REACH_Y_MIN
+        && !(this.serveInFlight && at.bounces < 1)
+        && Math.hypot(at.x - x, at.z - z) < reach;
+      const window = predictWindow(ball, hittable, SPECIAL.DASH.LEAD_T, 1);
+      if (!window) return null;
+      // t＝その位置に立ったとき球が打てるようになる時刻（＝間に合うかを測る期限）。
+      return { x, z, t: window.enter.t };
     }
 
     /** いまのボールと自分の距離(m)。コート面での距離なので高さは見ない。 */
@@ -956,15 +1477,61 @@
     }
 
     /**
+     * いま人間が「サーブを打ち返す1打」に向かっているか（＝RETURN の緩和が効く場面か）。
+     * サーブが一度も返球されていない間（serveInFlight）で、かつ飛んできているのが
+     * 自分の打った球ではないとき。自分がサーバーのときも serveInFlight は立っているので、
+     * ball.last でチームを確かめる。
+     */
+    returningServe() {
+      return this.serveInFlight && this.ball.last !== 'you';
+    }
+
+    /**
+     * いま溜めを離したときの、スイング入力の有効時間(秒)。レシーブだけ長い
+     * （RETURN.SWING_WINDOW）。理由は config.js の RETURN のコメント参照。
+     */
+    swingWindow() {
+      return this.returningServe() ? RETURN.SWING_WINDOW : PLAYER.SWING_WINDOW;
+    }
+
+    /**
+     * いまの「手の届く範囲」の倍率（PLAYER.REACH に掛ける）。能力値「リーチ・読み」に、
+     * レシーブのときだけ RETURN.REACH_MULT を重ねる。
+     */
+    reachMult() {
+      return this.you.attr.reach * (this.returningServe() ? RETURN.REACH_MULT : 1);
+    }
+
+    /**
      * 溜め時間を毎フレーム加算する。ラリー中・トス中以外の文脈になったら
      * （ポイントが終わった、トスが自動リセットされた等）溜めを打ち切ってキャンセルする。
      */
     tickCharge(dt) {
       if (!this.you.charging) return;
       const myServe = this.phase === 'serve' && this.servingPlayer() === 'you';
-      const validContext = this.phase === 'rally' || (myServe && this.tossActive);
+      // 相手のサーブを待っている間も、テイクバックを引いたまま溜め続けられる
+      // （chargeStart() のコメント参照）。1本目がフォールトしてから2本目の構えに入る
+      // までの間（phase==='fault'）も含める：ここで切ってしまうと、キーを押したままでも
+      // ゲージが空になり、握り直さないと溜まらなくなる。
+      const waitingReturn = this.servingPlayer() !== 'you'
+        && (this.phase === 'serve' || this.phase === 'fault');
+      const validContext = this.phase === 'rally' || (myServe && this.tossActive) || waitingReturn;
       if (!validContext) {
-        this.you.charging = false;
+        // 自分のサーブでトスが流れた（＝上げたまま離さずに落としてしまった）ときだけは、
+        // 押しっぱなしを解除する。この場面で押し直すことには「もう一度トスを上げる」と
+        // いう意味があるので、握ったままの状態を残しても使い道がない。
+        if (myServe) {
+          this.you.charging = false;
+          return;
+        }
+        // それ以外（ポイント間＝phase 'over' など）では **charging を落とさない**：
+        // this.you.charging は「溜めキーが今も押されているか」そのものなので、ここで
+        // false にすると、押しっぱなしのままポイントをまたいだときに二度と戻せなくなる
+        // （キーは押されたままなので keydown が来ない＝chargeStart() が呼ばれない）。
+        // 実際そうなっていて、ポイント間ずっと握っていた人は次のポイントで構えが出ず、
+        // 離しても chargeRelease() が素通りしていた。溜めだけを0に戻して、打てる場面に
+        // 入ったところ（次のサーブ待ち）から改めて溜め直させる。
+        this.you.chargeTime = 0;
         return;
       }
       if (myServe) {
@@ -1040,6 +1607,7 @@
     newPoint() {
       this.serveNumber = 1;
       this.lastShotBy = { you: null, cpu: null };
+      this.lastServeKmh = null;
       // 風は毎ポイント、前のポイントの風から WIND.DRIFT_ACCEL の範囲だけ変える（無関係な
       // 値へ決め直すと点ごとに向きが唐突に入れ替わって見えるため）。フォールトによる
       // セカンドサーブ（beginServe の再実行）をまたいでも同じポイント中は吹き続ける
@@ -1082,6 +1650,10 @@
       this.serveInFlight = false;
       this.cpuNetRush = false;
       this.rallyShots = 0; // このサーブ（フォールトからのやり直しも含む）から数え直す
+      // この1点に何がかかっているか（ブレークポイント／セットポイント）。スコアと
+      // サーバーだけで決まる＝ポイント中は変わらないので、ここで一度だけ求める
+      // （セカンドサーブでもう一度通っても同じ結果になる）。
+      this.stakes = pointStakes(this.match, this.server);
 
       const ball = this.ball;
       ball.live = false;
@@ -1091,13 +1663,28 @@
       ball.wind = 0; // サーブの飛翔中（1本目の着地まで）は無風にする。返球後は hit() で this.wind に差し替える
       ball.curve = 0; // 前の打球の曲がり（バギーホイップ）を持ち越さない
 
-      this.you.charging = false;
+      // 自分のサーブなら、前のトスの溜めを持ち越さないよう完全に解除する。
+      // 相手（または味方）のサーブを待つ側は、溜めキーを押したままならテイクバックを
+      // 引いたまま構え続けられる（chargeStart() 参照）。1本目がフォールトして2本目の
+      // 構えに入り直すときも、握り直さずにそのまま待てるようにするため、ここでは
+      // charging も chargeSpin（押しているキー＝球種）も落とさない。
+      const iServe = this.servingPlayer() === 'you';
+      if (iServe) {
+        this.you.charging = false;
+        this.you.chargeSpin = 'flat';
+      }
       this.you.chargeTime = 0; // 前のサーブの溜めを持ち越さない
       this.you.chargeStroke = null;
-      this.you.chargeSpin = 'flat';
       this.you.serveMiss = false; // 前のサーブの「溜めすぎ」の抽選結果も持ち越さない
       this.you.special = null;    // 前の1打に乗っていた必殺技も持ち越さない
-      this.you.dash = null;
+      ACTORS.forEach((w) => { this.actor(w).dash = null; }); // 縮地の残像も持ち越さない
+      ACTORS.forEach((w) => { this.actor(w).leap = null; }); // 跳躍も持ち越さない
+      // AI（Hard / Extreme）ぶんも同じく持ち越さない
+      ACTORS.forEach((w) => {
+        if (w === 'you') return;
+        this.actor(w).special = null;
+        this.actor(w).diveVolley = false;
+      });
       this.specialArmed = null;
       ball.kick = false;
 
@@ -1111,6 +1698,13 @@
       this.recoverTimers.youMate = 0;
       this.recoverTimers.you = 0;
       this.lastBallOwnerSeen = null;
+      this.poachCommit.cpuMate = false;
+      this.poachCommit.youMate = false;
+      ACTORS.forEach((w) => {
+        if (w === 'you') return;
+        this.dashCommit[w] = false;
+        this.diveCommit[w] = false;
+      });
 
       const side = this.match.serveSide; // クロス(-1)から始まり、ポイントごとに逆クロス(+1)と交互になる
       const serverTeam = this.server;
@@ -1235,7 +1829,10 @@
       // 必殺技「キックサーブ」。ネットのはるか上を通してボックスの深いところへ落とし、
       // 着地後に大きく跳ね上げる（bounce()）。溜めすぎのフォールト抽選も、強打のネット
       // 掛かりも起きない＝確実に入る代わりに、球速そのものは速くない。
-      const kick = who === 'you' && this.you.special === 'kickServe';
+      // 人間は溜めを離した瞬間に決まっている（you.special）。AI（Hard のみ）はサーブに
+      // 「これから打つ」瞬間が無く、ここが唯一の判断どころなのでこの場で選ぶ。
+      if (who !== 'you') this.actor(who).special = this.pickAiServeSpecial(who);
+      const kick = this.actor(who).special === 'kickServe';
       const side = this.match.serveSide;
       // CPU/AI のセカンドサーブ。1本目より遅く、コースも深さもラインから余裕を取り、回転で
       // 確実に入れにいく（SERVE.SECOND_*）。人間は溜め量とコース入力で自分で加減するので、
@@ -1308,11 +1905,13 @@
       Object.assign(ball, solveShot(from, target, flightT, clearance, spin));
       ball.spin = spin;
       ball.curve = 0;   // サーブは曲がらない（バギーホイップ専用の効果）
+      ball.reactBonus = 0; // 前のツイーナーの「読みにくさ」も持ち越さない
       ball.kick = kick; // 1バウンド目だけ大きく跳ね上げる目印（bounce() が読んで消す）
-      if (kick) this.spendSpecial('kickServe'); // サーブは必ず「起きる」ので打った時点で消費
+      if (kick) this.spendSpecial('kickServe', undefined, who); // サーブは必ず「起きる」ので打った時点で消費
       // 打った瞬間の初速をそのままスコアボード脇に出す（次のポイントが始まるまで残す）
       const serveKmh = mpsToKmh(Math.hypot(ball.vx, ball.vy, ball.vz));
       this.hooks.serveSpeed(serveKmh);
+      this.lastServeKmh = serveKmh; // エースで決まったとき、球種名に球速を添えるのに使う
       // スタッツ用。1本目の本数はここで数え、「入った本数」は bounce() が数える
       // （入るか入らないかは着地するまで決まらないため）。
       this.stats[team].maxServeKmh = Math.max(this.stats[team].maxServeKmh, serveKmh);
@@ -1325,6 +1924,13 @@
         ? SPECIAL_LABEL.kickServe
         : shotLabel('serve', spin, false, serveCourse(magnitude));
       this.resetTrail();
+
+      // レシーブ側の人間が、サーブが来る前からラケットを引いて待っていた場合
+      // （chargeStart()）、フォア/バックはここで確定させる。chargeStart() の時点では
+      // ボールがまだサーバーの手元で静止していて、左右のどちらへ来るか決められない。
+      if (who !== 'you' && this.you.charging && !this.you.chargeStroke) {
+        this.you.chargeStroke = classifyStroke('you', ball, this.you);
+      }
 
       this.tossActive = false;
       this.aiTossActive = false;
@@ -1403,15 +2009,22 @@
       this.serveInFlight = false; // 一度でも打ち返されたら「ノーバウンド禁止」の制約は解除
       this.rallyShots++; // 観客の歓声・実況の盛り上がりに使う（ラリーが長いほど盛り上がる）
 
-      // この1打に乗っている必殺技（chargeRelease() が入れる）。人間だけが持つ。
-      // 溜めを離したあとに場面が変わっていたら（前へ詰めてボレーになった／バウンドを
-      // 待った）ここで下ろし、普通の1打として打つ（SPECIAL_STILL_VALID 参照）。
+      // この1打に乗っている必殺技。人間は chargeRelease() が溜めを離した瞬間に決めて
+      // あるので、場面が変わっていないか（前へ詰めてボレーになった／バウンドを待った）
+      // だけ確かめ、外れていたら下ろして普通の1打として打つ（SPECIAL_STILL_VALID）。
+      // AI（Hard のみ）は溜めが無く「これから打つ」瞬間が存在しないので、下の
+      // 打ち方の判定を済ませてからこの場で決める（後追い判定は要らない）。
       let special = who === 'you' ? this.you.special : null;
       const stillValid = special && SPECIAL_STILL_VALID[special];
       if (stillValid && !stillValid(this, ball)) {
         special = null;
         this.you.special = null;
       }
+      // AI の飛びつきボレー（Extreme のみ）だけは、他の技と決まる場所が違う：普通のリーチでは
+      // 届かない球へ手を伸ばす瞬間＝ swingAiAt() で決まっている。ここでは旗を受け取るだけ
+      // （実際に乗せるのは下の「AI の必殺技はここで決まる」の分岐）。
+      const dove = who !== 'you' && player.diveVolley === true;
+      if (dove) player.diveVolley = false;
 
       if (who === 'you') this.you.swingConnected = true; // この1振りは当たった（空振りではない）
 
@@ -1420,7 +2033,7 @@
       // 飛びつきボレーだけは飛び込んで倒れ込むぶん、起き上がるまで長く動けない（技の代償）。
       this.recoverTimers[who] = who === 'you'
         ? (special === 'divingVolley' ? SPECIAL.DIVE.RECOVER : PLAYER.HIT_RECOVER_DELAY)
-        : PLAYER.CPU_RECOVER_DELAY;
+        : (dove ? SPECIAL.DIVE.RECOVER : PLAYER.CPU_RECOVER_DELAY);
 
       // ball.x/z はまだ打点のまま（solveShot が書き換えるのは vx/vy/vz だけ）なので、
       // ここで打点とプレイヤー位置からフォア/バックを判定できる。shot の計算より前に
@@ -1439,25 +2052,29 @@
       // スマッシュではなく、ただ高い打点の返球）。
       // 必殺技を出した1打は、どの打ち方になるかも技が決める（＝場面で選ばれた技どおりの
       // モーション・狙いになる。溜め量や打点の高さでの再判定は挟まない）。
-      const isSmash = special
-        ? special === 'dunkSmash'
-        : who === 'you'
-          ? ball.y >= PLAYER.SMASH_MIN_Y && charge >= PLAYER.SMASH_MIN_CHARGE
-          : ball.y >= CPU.SMASH_MIN_Y && ball.vy <= CPU.SMASH_FALLING_VY
-            && Math.abs(player.z) <= CPU.SMASH_Z_MAX;
+      // 技が乗っていなければどうなる1打か（＝AI が技を選ぶときの材料でもある）。
+      const natural = naturalStroke(this, who, ball, player, charge);
+
+      // AI の必殺技はここで決まる（人間の specialAim() に当たる分岐点）。
+      if (who !== 'you') {
+        special = dove
+          ? 'divingVolley'
+          : this.pickAiSpecial(who, this.aiSpecialContext(who, baseStroke, natural));
+        player.special = special;
+      }
+
+      const isSmash = special ? special === 'dunkSmash' : natural.smash;
       // サービスラインより前（ネット寄り）で、ノーバウンドの球を返すときはボレー。
       // フォア/バックの区別はテイクバックのモーションにだけ使い、実際の威力・角度は
       // 溜めではなくボールとの左右距離で決まる（playerShot() 側で計算する）。
       // CPU/AI がノーバウンドで返せるのは元々ネット際（PLAYER.VOLLEY_Z 以内。
       // checkSwings() のゲート）だけなので、その1本がそのままボレーになる。
-      const isVolley = special
-        ? special === 'divingVolley'
-        : !isSmash && ball.bounces === 0 && (who === 'you'
-          ? player.z > -COURT.SERVICE
-          : Math.abs(player.z) <= PLAYER.VOLLEY_Z);
-      // ツイーナー（股抜き）は他のどれでもない専用のモーション。
+      const isVolley = special ? special === 'divingVolley' : natural.volley;
+      // ツイーナー（股抜き）とジャックナイフ（跳んで高い打点を叩く）は、
+      // 他のどれでもない専用のモーション。
       const stroke = special === 'tweener' ? 'tweener'
-        : isSmash ? 'smash' : isVolley ? `volley-${baseStroke}` : baseStroke;
+        : special === 'jackknife' ? 'jackknife'
+          : isSmash ? 'smash' : isVolley ? `volley-${baseStroke}` : baseStroke;
 
       // AI（cpu/cpuMate は人間の逆をつきつつ you 陣地(z<0)へ、youMate はダブルスで唯一の
       // AI仲間なので相手チームの主力 cpu の逆をつきつつ cpu 陣地(z>0)へ）。
@@ -1489,24 +2106,52 @@
       // CPU/AI は打ち方（スマッシュ／ボレー／グラウンドストローク）ごとに狙いを変える。
       // 以前はどの打ち方でも一律 cpuShot()（中速のグラウンドストローク）だったため、
       // ネット際で捕まえた球も頭上に上がってきた球も同じ速さ・深さで返っていた。
-      const aimAt = TEAM_OF[who] === 'cpu' ? this.you : this.cpu; // 逆をつく相手
-      const aimDir = TEAM_OF[who] === 'cpu' ? -1 : 1;             // 打ち込む方向
+      // 逆をつく相手。ダブルスでは相手ペアのうち「実際に拾いにくる方」＝後衛を見る
+      // （前衛はネット際にいるので、その逆をついても意味がない）。
+      const foes = this.doubles ? this.doublesFoes(who) : null;
+      const aimAt = foes ? foes.back : (TEAM_OF[who] === 'cpu' ? this.you : this.cpu);
+      // ボレーだけは別枠。相手がネット際にいる場面では「逆サイドを狙う」＝その相手の目の前を
+      // 横切らせることになり、至近距離のボレーの打ち合いになる（ユーザー報告）。
+      // ai.doublesVolleyShot() は横切らずに相手の外側へ抜くか、抜けなければ頭を越す。
+      // 雁行かどうかではなく「ネット際に誰かいるか」で見る：2人とも前に出ている場面でも
+      // 目の前の相手は避けたい。
+      const netFoe = foes && foes.atNet;
+      // 自分もネット際にいるか。ここが「目の前を横切らせない」配慮が要る条件で、
+      // ベースラインから打つスマッシュには不要（コートの長さぶん横に開く余裕がある）。
+      const atNetToo = netFoe && Math.abs(player.z) <= PLAYER.VOLLEY_Z;
+      const aimDir = NET_DIR[who];                                // 打ち込む方向
       // 打ち方に対応する能力（フォア／バック／ボレー／スマッシュ）と安定感を、倍率だけの
       // 小さなオブジェクトに畳んで渡す（ai.js は「誰が打つか」を知らないままでいられる）。
-      // 必殺技は狙いが技そのもので決まっているので、打点タイミング（引っ張り／流し）は
-      // 効かない＝常に素直なタイミングとして扱う。
+      // 必殺技が乗った1打は、人間も AI も同じ specialShot() を通る（技の効果・狙い・
+      // 球速は同じもの）。狙いが技そのもので決まっているので打点タイミング（引っ張り／
+      // 流し）は効かず、常に素直なタイミングとして扱う。AI は ←→ を持たないので
+      // aim=0＝常にクロス側、溜めの代わりに SPECIAL.AI.CHARGE を渡す。
       const shot = who === 'you'
         ? this.playerShot(stroke, special ? TIMING_AIM.NEUTRAL_WAIT_T : this.swingWaited(), false, special)
-        : isSmash
-          ? cpuSmashShot(aimAt, aimDir, smashStretch, shotSkill(player.attr, 'smash'))
-          : isVolley
-            ? cpuVolleyShot(aimAt, aimDir, stretch, ball.y, shotSkill(player.attr, 'volley'))
-            : cpuShot(aimAt, aimDir, stretch, lobScale, arcScale, shotSkill(player.attr, baseStroke));
+        : special
+          ? this.specialShot(special, baseStroke, 0, SPECIAL.AI.CHARGE, rand, who)
+          : isSmash
+            // ネット際からのスマッシュも、ボレーと同じ理由で相手の真ん前を横切らせない。
+            ? (atNetToo
+              ? doublesSmashShot(netFoe, foes.far, player.x, aimDir, smashStretch,
+                shotSkill(player.attr, 'smash'))
+              : cpuSmashShot(aimAt, aimDir, smashStretch, shotSkill(player.attr, 'smash')))
+            : isVolley
+              ? (atNetToo
+                ? doublesVolleyShot(netFoe, foes.far, player.x, aimDir, stretch, ball.y,
+                  shotSkill(player.attr, 'volley'))
+                : cpuVolleyShot(aimAt, aimDir, stretch, ball.y, shotSkill(player.attr, 'volley')))
+              // ダブルスで相手が雁行（前衛がネット際・後衛が深く）なら、後衛の配球は
+              // 「前衛を避けてクロス、隙があればストレートをパッシング」に切り替える。
+              : foes && foes.front
+                ? doublesRallyShot(foes.front, foes.back, aimDir, stretch, lobScale, arcScale,
+                  shotSkill(player.attr, baseStroke))
+                : cpuShot(aimAt, aimDir, stretch, lobScale, arcScale, shotSkill(player.attr, baseStroke));
 
       // 必殺技はここで初めて回数を使う（空振りしただけでは減らない）。縮地はこの1打では
       // なく「跳んだ瞬間」に済ませてあるので、ここでは数えない。呼び名は技が決めた
       // shot.label があればそれ（バギーホイップのポール回しなど）。
-      if (special && special !== 'shukuchi') this.spendSpecial(special, shot.label);
+      if (special && special !== 'shukuchi') this.spendSpecial(special, shot.label, who);
 
       // スピン選択は通常のグラウンドストローク限定（スマッシュ・ボレーはフラット固定）。
       // 人間は C＝スライス／V＝トップスピン。chargeStart() の瞬間に固定した値を使う（当たる
@@ -1545,6 +2190,9 @@
       Object.assign(ball, solveShot(from, shot.target, shot.flight, shot.clearance, spin, curve));
       ball.spin = spin;
       ball.curve = curve;
+      // 背を向けたまま打つツイーナーだけ、相手の反応がこの秒数ぶん余計に遅れる
+      // （updateReactTimers）。他の1打では 0 に戻す＝前の技を持ち越さない。
+      ball.reactBonus = shot.reactBonus || 0;
       // サーブの返球も含め、ここで打たれた球は以降このポイントの風(this.wind)にさらされる
       // （サーブ自体の飛翔だけは beginServe() が ball.wind=0 にしているので無風のまま）。
       ball.wind = this.wind;
@@ -1558,13 +2206,22 @@
       ball.kick = false; // 前のキックサーブの跳ね上げを持ち越さない
       this.resetTrail();
 
-      // スマッシュだけは跳んで打つぶんモーションが長い（scene/player.js 参照）。
-      player.anim = stroke === 'smash' ? PLAYER.SMASH_ANIM : PLAYER.SWING_ANIM;
+      // スマッシュとツイーナーは跳んで打つぶんモーションが長い（scene/player.js 参照）。
+      player.anim = stroke === 'smash' ? PLAYER.SMASH_ANIM
+        : stroke === 'tweener' ? SPECIAL.TWEENER.ANIM
+          : stroke === 'jackknife' ? SPECIAL.JACK.ANIM
+            : PLAYER.SWING_ANIM;
       player.stroke = stroke;
+      // AI には「溜めを離す瞬間」も先読みも無いので、跳躍はここ（当たった瞬間）から。
+      // 人間は tickLeap()／chargeRelease() で既に跳んでいるので、その続きをそのまま使う。
+      if (who !== 'you') this.startLeap(stroke === 'smash' || stroke === 'jackknife' ? stroke : null, who);
       player.spin = spin; // 振っている間のフォーム（scene/player.js）に使う
       // 必殺技で決めたときは球種名ではなく技名を出す（「何で取ったか」がそのまま伝わる）。
+      // 技名は打った本人（who）の specialLabel を見る。以前はここで常に this.you を見て
+      // いたため、cpu/cpuMate/youMate が技を決めても「you」側の（多くは無関係な）技名が
+      // 出てしまっていた。
       this.lastShotBy[TEAM_OF[who]] = special
-        ? (this.you.specialLabel || SPECIAL_LABEL[special])
+        ? (player.specialLabel || SPECIAL_LABEL[special])
         : shotLabel(stroke, spin, shot.lob);
       // 音程はチーム単位（誰が打っても同じ）。音色は打ち方(stroke)とスピンで変わる。
       this.hooks.sound('hit', TEAM_OF[who], stroke, charge, spin);
@@ -1573,15 +2230,21 @@
     /**
      * 今の1打で「スイングがボールを待った時間」(秒)。溜めキーを離してから実際に当たるまで
      * 何秒かかったか＝どれだけ早めに振り出したか、で、引っ張り／流しの打ち分けに使う
-     * （TIMING_AIM 参照）。this.you.swing は離した瞬間に SWING_WINDOW から減り始めるので、
-     * その残りから逆算できる。
+     * （TIMING_AIM 参照）。this.you.swing は離した瞬間に有効時間（swingSpan）から
+     * 減り始めるので、その残りから逆算できる。
+     * 測った時間はそのまま秒で使わず、「有効時間に対する割合」を通常の
+     * PLAYER.SWING_WINDOW に換算して返す。レシーブだけ有効時間が長い
+     * （RETURN.SWING_WINDOW）ため、秒のまま測ると早振りが必ず引っ張り最大になり、
+     * レシーブがいつもサイドライン際へ散ってしまう（TIMING_AIM.RISK_SPREAD）。
+     * 割合で測れば、窓が広がっても「早めに振れば引っ張り／引きつければ流し」という
+     * 打ち分けの関係はそのまま保たれる。
      * スイングを介さずに hit('you') を直接呼んだ場合（テストなど）は、狙いがずれない
      * 「素直なタイミング」を返す。
      */
     swingWaited() {
-      return this.you.swing > 0
-        ? PLAYER.SWING_WINDOW - this.you.swing
-        : TIMING_AIM.NEUTRAL_WAIT_T;
+      if (this.you.swing <= 0) return TIMING_AIM.NEUTRAL_WAIT_T;
+      const span = this.you.swingSpan || PLAYER.SWING_WINDOW;
+      return (span - this.you.swing) * (PLAYER.SWING_WINDOW / span);
     }
 
     /**
@@ -1619,7 +2282,7 @@
     predictContact(reachMult = 1, reachYBonus = 0) {
       const ball = this.ball;
       const you = this.you;
-      const reach = PLAYER.REACH * you.attr.reach * reachMult;
+      const reach = PLAYER.REACH * this.reachMult() * reachMult;
       const reachY = PLAYER.REACH_Y + reachYBonus;
       // サーブは1バウンドするまで打てない（checkSwings() の mustBounceFirst と同じ条件）
       const canHit = (at, bounces) => at.z < PLAYER.NET_MARGIN && at.y < reachY
@@ -1630,8 +2293,64 @@
           t: 0, x: ball.x, y: ball.y, z: ball.z, bounces: ball.bounces,
         };
       }
-      const window = predictWindow(ball, (at) => canHit(at, at.bounces), PLAYER.SWING_WINDOW, 1);
+      // predictWindow() は上限を越えた次の1コマまでサンプルを返しうる（刻みは
+      // PREDICT_STEP）。そのコマを「いま離せば当たる」として返すと、スイングの有効時間が
+      // 尽きた直後にボールが届く＝必ず空振りになる1本をガイドが「当たる」と言ってしまう
+      // （実測：この取りこぼしが空振りの主因だった）。しかも predictWindow() は
+      // PREDICT_STEP（1/120秒）刻みなのに対し実際の物理は PHYSICS.STEP（1/240秒）刻みで、
+      // 同じ軌道でも打点に届く時刻が1コマぶん前後しうる。両方を吸収するため2コマ手前で
+      // 打ち切る＝「当たる」と言ったら必ず当たる側に倒す。
+      const window = predictWindow(
+        ball, (at) => canHit(at, at.bounces), this.swingWindow() - 2 * PREDICT_STEP, 1,
+      );
       return window ? window.enter : null;
+    }
+
+    /**
+     * いま溜めを離してから振り終わるまでの間に、**バウンド後の球をいちばん高く捉えられる
+     * 高さ**(m)。届く範囲にバウンド後の球が来ないなら 0。
+     *
+     * predictContact() が返すのは「最初に届く1点」なので、**弾んで上がってくる球では
+     * ほぼ必ず上がりはじめの低いところ**になる（実測：ラリー中の打点の中央値は 0.16m、
+     * 99パーセンタイルでも 0.9m）。「高い球を叩く」ことが条件の技（ジャックナイフ）が
+     * そこを見ると、条件を満たす球が事実上存在しなくなる——ユーザー報告
+     * 「結構高めでバックフラットを打っているつもりがなかなか発動しない」の原因がこれ。
+     * 発動の判定には区間の中の最高点を使い、**実際にその高さで捉えられたかどうかは
+     * 当たった瞬間に SPECIAL_STILL_VALID が見る**（引きつけて高い打点で打てたときだけ
+     * 技になり、待ちきれずに低く打てば普通の1打に戻る）。
+     * @param {number} [minY] 「この高さを最初に超えるのはいつか」を一緒に測りたいときの線(m)。
+     *   跳躍の踏み切り（tickLeap）が使う：技が成立する**最初の瞬間**から逆算して跳ぶので、
+     *   いちばん高い点（＝引きつけきったとき）ではなくこちらが基準になる。
+     * @returns {{y:number, t:number, tAbove:number|null}}
+     *   y＝いちばん高い打点(m)、t＝そこまでの時間(秒)、tAbove＝minY を最初に超える時間(秒)。
+     *   届く範囲にバウンド後の球が来ないなら y=0, t=0, tAbove=null。
+     */
+    contactPeak(minY) {
+      const ball = this.ball;
+      const you = this.you;
+      const reach = PLAYER.REACH * this.reachMult();
+      const line = minY === undefined ? Infinity : minY;
+      const canHit = (at, bounces) => at.z < PLAYER.NET_MARGIN && at.y < PLAYER.REACH_Y
+        && !(this.serveInFlight && bounces < 1)
+        && Math.hypot(at.x - you.x, at.z - you.z) < reach;
+      let peak = 0;
+      let peakT = 0;
+      let tAbove = null;
+      if (ball.bounces > 0 && canHit(ball, ball.bounces)) {
+        peak = ball.y;
+        if (ball.y >= line) tAbove = 0;
+      }
+      // predictWindow() は「届く区間」を1つだけ追う。その間のサンプルを覗いて最高点と、
+      // 高さの線を最初に超える時刻を拾う（accept は区間の判定と兼用で、副作用で更新する）。
+      predictWindow(ball, (at) => {
+        const ok = canHit(at, at.bounces);
+        if (ok && at.bounces > 0) {
+          if (at.y > peak) { peak = at.y; peakT = at.t; }
+          if (tAbove === null && at.y >= line) tAbove = at.t;
+        }
+        return ok;
+      }, this.swingWindow() - 2 * PREDICT_STEP, 1);
+      return { y: peak, t: peakT, tAbove };
     }
 
     /**
@@ -1648,6 +2367,7 @@
       if (special === 'dunkSmash') return 'smash';
       if (special === 'divingVolley') return `volley-${base}`;
       if (special === 'tweener') return 'tweener';
+      if (special === 'jackknife') return 'jackknife';
       if (at.y >= PLAYER.SMASH_MIN_Y && charge >= PLAYER.SMASH_MIN_CHARGE) return 'smash';
       if (at.bounces === 0 && this.you.z > -COURT.SERVICE) return `volley-${base}`;
       return base;
@@ -1673,7 +2393,12 @@
       // まだボールが遠い＝いま離しても当たらない。「早すぎる」ことだけ伝える（コースは、
       // 一番早く当たったときと同じ＝引っ張り最大の向きを出しておく）。
       const tooEarly = contact === null;
-      const waited = tooEarly ? PLAYER.SWING_WINDOW : contact.t;
+      // swingWaited() と同じ換算（有効時間に対する割合 → PLAYER.SWING_WINDOW 相当）。
+      // ここを揃えないと、レシーブのときだけガイドと実際の打球がずれる。
+      const span = this.swingWindow();
+      const waited = tooEarly
+        ? PLAYER.SWING_WINDOW
+        : contact.t * (PLAYER.SWING_WINDOW / span);
       const charge = clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1);
       const stroke = this.previewStroke(contact, charge, special);
       // 実際に打つときと同じ関数を通す（preview=true でばらつきだけ中央値に固定）ので、
@@ -1819,18 +2544,23 @@
      * @param {(a:number,b:number)=>number} spread ばらつき（プレビューでは中央値に固定される rand）
      * @returns {object|null} null＝この技は狙いを変えない（通常の計算に落ちる）
      */
-    specialShot(move, stroke, aim, charge, spread) {
-      const attr = this.you.attr;
+    specialShot(move, stroke, aim, charge, spread, who = 'you') {
+      const actor = this.actor(who);
+      const attr = actor.attr;
       const ground = attr[stroke === 'backhand' ? 'backhand' : 'forehand'];
-      // 左右の向き。←→ の入力があればその側、無ければ通常のショットと同じくクロス側。
-      const dir = aim !== 0 ? Math.sign(aim) : -signOr(this.you.x, 1);
+      // 打ち込む向き（手前の人間は +z、向かい側の AI は -z）。技ごとの狙いの深さは
+      // config に「相手コート側を正」で書いてあるので、最後にこれを掛けて鏡にする。
+      const zDir = NET_DIR[who];
+      // 左右の向き。←→ の入力があればその側、無ければ通常のショットと同じくクロス側
+      // （AI は ←→ を持たないので常にクロス＝aim は 0 で呼ばれる）。
+      const dir = aim !== 0 ? Math.sign(aim) : -signOr(actor.x, 1);
 
       if (move === 'dunkSmash') {
         const { DUNK } = SPECIAL;
         const target = {
-          x: aim !== 0 ? aim * SHOT.AIM_X : -signOr(this.you.x, 1) * SHOT.DEFAULT_X,
+          x: aim !== 0 ? aim * SHOT.AIM_X : -signOr(actor.x, 1) * SHOT.DEFAULT_X,
           y: BALL_R,
-          z: DUNK.Z,
+          z: zDir * DUNK.Z,
         };
         // 打点が遠いほど飛翔時間を伸ばして初速を頭打ちにする（DUNK.MAX_SPEED 参照）。
         // ネット際で叩くぶんには SHOT.SMASH_T×T_MULT のまま＝いちばん速い。
@@ -1847,7 +2577,7 @@
       if (move === 'divingVolley') {
         const { DIVE } = SPECIAL;
         return {
-          target: { x: dir * DIVE.X, y: BALL_R, z: DIVE.Z },
+          target: { x: dir * DIVE.X, y: BALL_R, z: zDir * DIVE.Z },
           flight: DIVE.T * attr.volley,
           spin: 'flat',
           risk: 0,
@@ -1857,7 +2587,7 @@
       if (move === 'driveVolley') {
         const { DRIVE } = SPECIAL;
         return {
-          target: { x: dir * DRIVE.X, y: BALL_R, z: DRIVE.Z },
+          target: { x: dir * DRIVE.X, y: BALL_R, z: zDir * DRIVE.Z },
           flight: DRIVE.T * attr.volley,
           clearance: DRIVE.CLEARANCE,
           spin: 'top',
@@ -1867,12 +2597,58 @@
 
       if (move === 'tweener') {
         const { TWEENER } = SPECIAL;
+        // 抜かれた体勢から打つ1本なので、**相手がどこにいるか**で打ち分ける。
+        // 詰めてきている相手に低い球を打てば触られるだけ、下がっている相手にロブを
+        // 上げればただのつなぎ球——以前は場面を問わず後者（ロブ）しか出なかった。
+        const foe = this.doubles
+          ? this.doublesFoes(who).near
+          : this.actor(TEAM_OF[who] === 'you' ? 'cpu' : 'you');
+        const rushing = Math.abs(foe.z) <= TWEENER.NET_Z;
+        // 狙う左右は ←→ の入力が最優先。無入力なら相手のいない側へ逃がす
+        // （背中を向けて打つので、自分の立ち位置ではなく相手の位置で決めるほうが自然）。
+        const away = aim !== 0 ? Math.sign(aim) : -signOr(foe.x, 1);
+        if (rushing) {
+          return {
+            target: { x: away * TWEENER.LOB_X, y: BALL_R, z: zDir * TWEENER.LOB_Z },
+            flight: TWEENER.LOB_T,
+            clearance: TWEENER.LOB_CLEARANCE,
+            spin: 'top',
+            lob: true,
+            risk: 0,
+            reactBonus: TWEENER.REACT_BONUS,
+          };
+        }
         return {
-          target: { x: dir * TWEENER.X, y: BALL_R, z: TWEENER.Z },
-          flight: TWEENER.T,
-          clearance: TWEENER.CLEARANCE,
+          target: { x: away * TWEENER.PASS_X, y: BALL_R, z: zDir * TWEENER.PASS_Z },
+          flight: TWEENER.PASS_T * ground,
+          clearance: TWEENER.PASS_CLEARANCE,
           spin: 'top',
-          lob: true,
+          risk: 0,
+          reactBonus: TWEENER.REACT_BONUS,
+        };
+      }
+
+      if (move === 'jackknife') {
+        const { JACK } = SPECIAL;
+        // **打点が高いほど速く・深くなる。** 弾んだ球を落ちるまで待つと苦しいまま、
+        // 頂点を叩けてはじめて攻撃になる——という実際のテニスの理屈をそのまま値にした。
+        // 高さは打点そのもの（this.ball.y）で見る。MAX_Y を超えても頭打ち。
+        const high = clamp((this.ball.y - JACK.MIN_Y) / (JACK.MAX_Y - JACK.MIN_Y), 0, 1);
+        // 既定はダウン・ザ・ライン＝**自分が立っている側**のサイドライン際（他の技が
+        // 既定にしているクロスの逆）。コート中央にいるときだけバックハンド側へ倒す。
+        // ←→ を入れればそちらへ振れる＝クロスにも打てる。
+        const line = signOr(actor.x, -RACKET_SIDE[who]);
+        return {
+          target: {
+            x: (aim !== 0 ? Math.sign(aim) : line) * JACK.X,
+            y: BALL_R,
+            z: zDir * lerp(JACK.Z_MIN, JACK.Z_MAX, high),
+          },
+          // バックハンドの技なので能力も「バックハンド」を見る（stroke は専用の
+          // 'jackknife' に変わっているので、上の ground（フォア/バックの引き当て）は使わない）。
+          flight: lerp(JACK.T_LOW, JACK.T_HIGH, high) * attr.backhand,
+          clearance: JACK.CLEARANCE,
+          spin: 'flat',
           risk: 0,
         };
       }
@@ -1884,26 +2660,27 @@
         // コースは ←→ で2択：自分のいる側（＝ラケット側）を指せばストレート、
         // 無入力か逆側ならクロス。同じ曲がりでも、ストレートは「外へ膨らんでから戻る」
         // ＝ネットポストの外を回る軌道になる。
-        const straight = aim !== 0 && Math.sign(aim) === RACKET_SIDE.you;
+        const sign = buggyCurveSign(who);
+        const straight = aim !== 0 && Math.sign(aim) === RACKET_SIDE[who];
         if (!straight) {
           return {
-            target: { x: BUGGY.X, y: BALL_R, z: spread(BUGGY.Z_MIN, BUGGY.Z_MAX) },
+            target: { x: sign * BUGGY.X, y: BALL_R, z: zDir * spread(BUGGY.Z_MIN, BUGGY.Z_MAX) },
             flight: BUGGY.T * ground,
             clearance: BUGGY.CLEARANCE,
             // 空中で曲がる（solveShot が曲がるぶんを見越して内側へ打ち出すので、落ちる場所は
             // target のまま＝ほぼ真っ直ぐ飛び出してサイドライン際へ切れ込む）。
-            curve: BUGGY.CURVE,
+            curve: sign * BUGGY.CURVE,
             spin: 'top',
             risk: 0,
           };
         }
         const target = {
-          x: RACKET_SIDE.you * BUGGY.LINE_X,
+          x: RACKET_SIDE[who] * BUGGY.LINE_X,
           y: BALL_R,
-          z: spread(BUGGY.LINE_Z_MIN, BUGGY.LINE_Z_MAX),
+          z: zDir * spread(BUGGY.LINE_Z_MIN, BUGGY.LINE_Z_MAX),
         };
         const flight = BUGGY.LINE_T * ground;
-        const curve = this.aroundPostCurve(target, flight);
+        const curve = this.aroundPostCurve(target, flight, who);
         return {
           target,
           flight,
@@ -1912,7 +2689,7 @@
           spin: 'top',
           risk: 0,
           // ポールを回れたときだけ呼び名を変える（何が起きたのかが分かるように）
-          label: curve > BUGGY.CURVE ? `${SPECIAL_LABEL.buggyWhip}（ポール回し）` : undefined,
+          label: curve * sign > BUGGY.CURVE ? `${SPECIAL_LABEL.buggyWhip}（ポール回し）` : undefined,
         };
       }
 
@@ -1922,12 +2699,13 @@
           target: {
             x: dir * (HALF_W - HAWK.INSET),
             y: BALL_R,
-            z: lerp(HAWK.Z_MIN, HAWK.Z_MAX, charge),
+            z: zDir * lerp(HAWK.Z_MIN, HAWK.Z_MAX, charge),
           },
           flight: lerp(SHOT.TAP_T, SHOT.CHARGE_T, charge) * ground * HAWK.T_MULT,
           // 球種は押したキー（B/V/C）のまま。溜めずに離したスライスでもドロップには
           // ならない（ドロップの分岐より手前で返しているため）＝ライン際を突く技になる。
-          spin: this.you.chargeSpin,
+          // AI には押したキーが無いので、通常の返球と同じ aiSpin() で混ぜる。
+          spin: who === 'you' ? this.you.chargeSpin : aiSpin(),
           risk: 0,
         };
       }
@@ -1963,6 +2741,22 @@
       };
     }
 
+    /**
+     * サーブ権を相手チームへ渡す（ゲームの終わりと、タイブレークの2ポイントごとの交代）。
+     * ダブルスは、今サーブし終えたチームの中で次に回ってくるまで担当者も交代する
+     * （実際のルール通り。タイブレーク中もセットと同じ順番のまま回る＝A1→C1→A2→C2→A1…）。
+     */
+    passServe() {
+      if (this.doubles) {
+        const finishedTeam = this.server;
+        const mate = finishedTeam === 'you' ? 'youMate' : 'cpuMate';
+        this.serverPartner[finishedTeam] = this.serverPartner[finishedTeam] === finishedTeam
+          ? mate
+          : finishedTeam;
+      }
+      this.server = opponent(this.server);
+    }
+
     endPoint(winner, reason) {
       if (this.phase === 'over') return;
       // ダブルフォルト＝サーバー側の失点。エース＝サーブがリターンに一度も触れられずに
@@ -1980,7 +2774,20 @@
       const outcome = reason === 'ダブルフォルト' ? 'doubleFault'
         : isAce ? 'ace'
           : reason === 'ツーバウンド' ? 'winner' : 'error';
-      this.hooks.sound('point', winner, outcome, this.rallyShots);
+      // かかっていた1点（ブレークポイント／セットポイント）は、取っても凌いでも
+      // 観客の沸き方が変わる。取った＝その技の見出しそのまま、凌いだ＝'saved'。
+      const stakes = this.stakes;
+      const stakeKey = !stakes ? null : (stakes.team === winner ? stakes.kind : 'saved');
+      this.hooks.sound('point', winner, outcome, this.rallyShots, stakeKey);
+
+      // ブレークポイントの本数（スタッツ画面用）。チャンスを持っていたのはレシーブ側で、
+      // 実際に取れたかどうかで converted を分ける（実際のテニスの「3/5」と同じ数え方）。
+      if (stakes && stakes.breakPoint) {
+        this.stats[stakes.team].breakPoints++;
+        if (stakes.team === winner) this.stats[stakes.team].breaksWon++;
+      }
+      // 決着した1点なので、この先（リプレイ中も含めて）見出しは出しっぱなしにしない。
+      this.stakes = null;
 
       // 試合後のスタッツ画面（matchSummary()）のための集計。決まり方（outcome）はもう
       // 出してあるので、それをそのまま「決め球で取った(winners)」「相手のミスで取った
@@ -1997,23 +2804,22 @@
       const mine = winner === 'you';
       if (result.tiebreak && result.type === 'point') {
         // タイブレーク中は1本目だけ今のサーバーのまま、以降は2ポイントごとに交代
-        // （ダブルスのチーム内の個人ローテーションはここでは変えない簡略化。詳細は roadmap-done.md）。
+        // （＝奇数本目が終わった直後）。ダブルスは通常のゲームと同じ順番で4人が回る。
         const total = this.match.tiebreakPoints.you + this.match.tiebreakPoints.cpu;
-        if (total % 2 === 1) this.server = opponent(this.server);
-        // タイブレーク中は「ゲーム」が進まないので、必殺技の回数もこのままでは戻らない。
-        // 一定本数ごとに回復させる（6-6 からの長いタイブレークで一度も使えなくなるのを防ぐ）。
-        if (total % SPECIAL.TIEBREAK_REFRESH_POINTS === 0) this.refreshSpecials();
-      } else if (result.type !== 'point') {
-        // ダブルスは、今サーブし終えたチームの中で次に回ってくるまで担当者を交代する
-        // （実際のルール通り。次にそのチームの番が来るのは2ゲーム後）
-        if (this.doubles) {
-          const finishedTeam = this.server;
-          const mate = finishedTeam === 'you' ? 'youMate' : 'cpuMate';
-          this.serverPartner[finishedTeam] = this.serverPartner[finishedTeam] === finishedTeam
-            ? mate
-            : finishedTeam;
+        if (total % 2 === 1) {
+          this.passServe();
+          // タイブレーク中は「ゲーム」が進まないので、必殺技はサーブ権が移る節目で回復させる
+          // （通常のゲームで「ゲームが替わる＝サーブが替わる」瞬間に回復するのと揃える）。
+          const turns = (total + 1) / 2;
+          if (turns % SPECIAL.TIEBREAK_REFRESH_TURNS === 0) this.refreshSpecials();
         }
-        this.server = opponent(this.server); // ゲームごとにサーブ交代
+      } else if (result.type !== 'point') {
+        // タイブレークで決まったセットは、タイブレークの1本目をサーブしたチームが最後の
+        // ゲームをサーブした扱い＝次のセットはその相手から（最後の1本を打った側ではない）。
+        if (this.tiebreakOpener) this.server = this.tiebreakOpener;
+        this.tiebreakOpener = null;
+        this.passServe(); // ゲームごとにサーブ交代
+        if (result.tiebreak) this.tiebreakOpener = this.server; // 6-6：ここからタイブレーク
         this.refreshSpecials(); // 必殺技はゲームが替わるたびに回復する
       }
 
@@ -2038,12 +2844,20 @@
       // 「ツーバウンド」は判定としては正しいが表現として味気ないので、実況らしく言い換える：
       // サーブが一度も触れられずに決まったなら「エース！」、ラリー中の決定打なら「ウィナー！」。
       const twoBounceCall = isAce ? 'エース！' : 'ウィナー！';
+      // ブレークで取ったゲームはそう言う（サーブを持っていない側が取った＝試合が動く1ゲーム）。
+      const broke = stakes && stakes.breakPoint && stakes.team === winner;
       const sub = result.type === 'game'
-        ? `ゲーム — ${mine ? 'YOU' : 'CPU'}${result.tiebreak ? '（6-6 タイブレーク！）' : ''}`
+        ? `ゲーム — ${mine ? 'YOU' : 'CPU'}${broke ? '（ブレーク！）' : ''}${result.tiebreak ? '（6-6 タイブレーク！）' : ''}`
         : reason === 'ツーバウンド' ? twoBounceCall : reason;
       // 取った側がこのポイントで最後に放ったショット（決め球、または相手のミスを誘った球）。
       // 相手のネット／アウトで決まった場合は「その1本前に自分が打った球」になる。
-      this.hooks.call(mine ? 'ポイント' : '失点', sub, this.lastShotBy[winner]);
+      // サーブに一度も触れられずに決まった1点（エース）だけは球速も添える：そのときの
+      // 決め手は球種とコースより速さそのものなので、スコアボード脇の表示（serveSpeed）を
+      // 見に行かなくても中央のコールだけで分かるようにする。
+      const shot = isAce && this.lastServeKmh != null
+        ? `${this.lastShotBy[winner]} ${Math.round(this.lastServeKmh)}km/h`
+        : this.lastShotBy[winner];
+      this.hooks.call(mine ? 'ポイント' : '失点', sub, shot);
       this.hooks.score();
       this.after(TIMING.NEXT_POINT, () => this.newPoint());
     }
@@ -2100,11 +2914,83 @@
       this.specialArmed = this.specialAim();
       this.swingGuide = this.swingGuidePreview();
       this.updatePrep();
+      this.tickLeap(); // 跳んで打つ1打は、離す前（球が届く少し前）から跳び始める
       this.tickSpecial(dt);
 
       // トスの自動リセットなど、このフレームの stepBall() の結果を見てから
       // 溜めを継続してよいか判定する（先に判定すると1フレーム遅れてしまう）。
       this.tickCharge(dt);
+    }
+
+    /**
+     * 跳躍の長さ(秒)と、そのうち踏み切りに使う割合。打ち方ごとの定数を1か所に引き当てる。
+     * @param {'smash'|'jackknife'} kind
+     */
+    leapTiming(kind) {
+      return kind === 'jackknife'
+        ? { span: SPECIAL.JACK.LEAP_T, rise: SPECIAL.JACK.LEAP_RISE }
+        : { span: PLAYER.SMASH_LEAP_T, rise: PLAYER.SMASH_LEAP_RISE };
+    }
+
+    /**
+     * この1振りが「跳んで打つ打ち方」になるなら、その種類。ならなければ null。
+     * 判定はガイドと同じ previewStroke() を通す＝画面に出ている予告と必ず一致する。
+     * @param {string|null} move この1振りに乗る必殺技
+     * @param {number} charge 溜め量(0〜1)
+     */
+    leapKind(move, charge) {
+      const extra = specialReach(move);
+      const stroke = this.previewStroke(this.predictContact(extra.mult, extra.y), charge, move);
+      return stroke === 'smash' || stroke === 'jackknife' ? stroke : null;
+    }
+
+    /**
+     * 跳び始める（表示専用）。既に跳んでいる最中なら何もしない＝1回の振りで一度だけ跳ぶ。
+     * @param {'smash'|'jackknife'|null} kind
+     */
+    startLeap(kind, who = 'you') {
+      if (!kind) return;
+      const actor = this.actor(who);
+      if (actor.leap) return;
+      actor.leap = { t: this.leapTiming(kind).span, kind };
+    }
+
+    /**
+     * **溜めている間に、球が届く少し前から跳び始める。**
+     *
+     * 打球のモーション（anim）は hit() が「当たった瞬間」に入れるので、跳躍をそこから
+     * 始めると跳ぶのと振るのが同時になる。かといって「溜めを離した瞬間」から跳ばせても、
+     * **人はボールが来たところで離す**ので離してから当たるまでがほぼ0秒で、やはり同時に
+     * 見えた（ユーザー報告：スマッシュもジャックナイフも「飛びはじめるのと打つのが同時」）。
+     *
+     * そこで、まだ離していなくても「あと踏み切りぶんの時間で球が届く」ところまで来たら
+     * 跳び始める。こうすると当たるころには頂点にいて、**空中でラケットを振り始める**絵に
+     * なる。予測（predictContact）はガイドが使っているのと同じものなので、画面に出ている
+     * 予告と跳ぶタイミングがずれない。
+     * 跳んだあと振らなかった（空振りした／離さなかった）ときは、そのまま着地するだけ。
+     */
+    tickLeap() {
+      const you = this.you;
+      if (you.leap || !you.charging || this.phase !== 'rally') return;
+      const move = (this.specialArmed && this.specialArmed.move) || null;
+      const charge = clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1);
+      const kind = this.leapKind(move, charge);
+      if (!kind) return;
+      // 「あと何秒で打てるようになるか」から逆算して踏み切る。
+      // ・スマッシュ … 落ちてくる球を上で叩くので、最初に届く点がそのまま打点。
+      // ・ジャックナイフ … 弾んで上がってくる球なので、最初に届く瞬間はまだ低い。
+      //   **高さの条件（JACK.MIN_Y）を最初に満たす時刻**を基準にする。いちばん高い点
+      //   （引きつけきったとき）を基準にすると、「出せる」と言われてすぐ離した人が
+      //   跳ぶ前に打ってしまう＝跳ぶのと打つのが同時に見える（ユーザー報告）。
+      const extra = specialReach(move);
+      const contact = this.predictContact(extra.mult, extra.y);
+      if (!contact) return;
+      const until = kind === 'jackknife'
+        ? this.contactPeak(SPECIAL.JACK.MIN_Y).tAbove
+        : contact.t;
+      if (until === null) return;
+      const { span, rise } = this.leapTiming(kind);
+      if (until <= span * rise) this.startLeap(kind);
     }
 
     /**
@@ -2116,10 +3002,27 @@
     tickSpecial(dt) {
       const you = this.you;
       if (you.special && you.swing <= 0 && you.anim <= 0 && !you.charging) you.special = null;
-      if (you.dash) {
-        you.dash.t -= dt;
-        if (you.dash.t <= 0) you.dash = null;
-      }
+      // AI（Hard）も同じ扱い：振っている間は技が残るのでフォームに使え、モーションが
+      // 尽きたところで消える。AI には溜め（charging）もスイングの有効時間（swing）も
+      // 無いので、見るのはモーションの残り（anim）だけ。
+      ACTORS.forEach((w) => {
+        if (w === 'you') return;
+        const actor = this.actor(w);
+        if (actor.special && actor.anim <= 0) actor.special = null;
+      });
+      // 縮地の残像（表示専用）。人間も AI（Extreme）も同じ持ち方なので、まとめて薄れさせる。
+      ACTORS.forEach((w) => {
+        const actor = this.actor(w);
+        if (!actor.dash) return;
+        actor.dash.t -= dt;
+        if (actor.dash.t <= 0) actor.dash = null;
+      });
+      ACTORS.forEach((w) => {
+        const actor = this.actor(w);
+        if (!actor.leap) return;
+        actor.leap.t -= dt;
+        if (actor.leap.t <= 0) actor.leap = null;
+      });
     }
 
     /** 空振り。当たり判定はせず、振る方向だけボールの位置から見繕う。 */
@@ -2151,7 +3054,13 @@
       });
       if (this.you.charging) this.you.spin = this.you.chargeSpin;
       if (this.phase !== 'rally') {
-        this.you.prep = null;
+        // 相手のサーブを待っている間も、溜めキーを押していればテイクバックの構えを出す
+        // （サーブが来る前からラケットを引いて待てる＝chargeStart()。構えが画面に出ないと
+        // 「もう引いて待てている」ことが分からない）。フォア/バックはサーブが打たれた
+        // 瞬間に決まる（serve()）ので、それまではラケット側＝フォアの構えにしておく。
+        const waitingReturn = this.you.charging && this.servingPlayer() !== 'you'
+          && (this.phase === 'serve' || this.phase === 'fault');
+        this.you.prep = waitingReturn ? (this.you.chargeStroke || 'forehand') : null;
         this.cpu.prep = null;
         this.youMate.prep = null;
         this.cpuMate.prep = null;
@@ -2262,8 +3171,38 @@
       };
     }
 
+    /**
+     * ツイーナーを狙って背走している間だけ掛かる足の速さの倍率（それ以外は常に1）。
+     * ロブで抜かれた球はバウンド後 12m/s 前後で後ろへ抜けていくので、通常の足
+     * （PLAYER.SPEED=7.2m/s）では「ボールに追い越される一瞬」にしか手が届かない
+     * ＝ツイーナーが事実上出せない技になっていた（SPECIAL.TWEENER のコメント参照）。
+     * 「抜かれた球を追う背走ダッシュ」そのものを技の一部として扱い、この間だけ速くする。
+     * 掛かる条件は狭く、ふだんの走りの感触は変えない：
+     *   ・ツイーナーを装備していて、このゲームの回数がまだ残っている
+     *   ・ラリー中で、相手の打った球が生きている
+     *   ・その球が自陣にあって、すでに自分より後ろ（＝抜かれている）
+     *   ・後ろへ入力している（前や横へ走るぶんには速くならない）
+     * @returns {number}
+     */
+    tweenerChaseMult() {
+      const { TWEENER } = SPECIAL;
+      if (this.specials.indexOf('tweener') === -1 || this.usesLeft('tweener') <= 0) return 1;
+      if (this.phase !== 'rally') return 1;
+      const ball = this.ball;
+      if (!ball.live || ball.last === 'you') return 1;
+      if (ball.z >= PLAYER.NET_MARGIN) return 1;          // まだ自陣に入っていない
+      // ここは向き（passedBehind の45°の扇）までは見ない：追いかけている最中は
+      // まだボールの線に乗れていないのが普通で、乗るために走る足を速くするのが目的。
+      if (ball.z >= this.you.z - TWEENER.BEHIND) return 1; // まだ抜かれていない
+      if (this.input.moveZ >= 0) return 1;                // 後ろへ追っている間だけ
+      return TWEENER.CHASE_MULT;
+    }
+
     movePlayers(dt) {
       this.updateReactTimers(dt);
+      // 縮地（Extreme の AI）は、このフレームの移動を測り始める前に済ませる
+      // （tickAiDash() のコメント参照）。
+      this.tickAiDash();
 
       const cpuBefore = { x: this.cpu.x, z: this.cpu.z };
 
@@ -2281,7 +3220,8 @@
         // 目標速度（入力なしなら0）へ、加速度で少しずつ近づける。
         // 急停止・瞬間方向転換にならないので、コート上で滑るような自然さが出る。
         const hasInput = mx !== 0 || mz !== 0;
-        const maxSpeed = PLAYER.SPEED * this.you.attr.speed * this.staminaSpeedMult(this.you.stamina);
+        const maxSpeed = PLAYER.SPEED * this.you.attr.speed
+          * this.staminaSpeedMult(this.you.stamina) * this.tweenerChaseMult();
         const desiredVx = hasInput ? (mx / len) * maxSpeed : 0;
         const desiredVz = hasInput ? (mz / len) * maxSpeed : 0;
         const rate = (hasInput ? PLAYER.ACCEL : PLAYER.DECEL) * dt;
@@ -2295,7 +3235,8 @@
         // （実際に動いていないのに走って見えるのを防ぐ）。
         const moved = Math.hypot(this.you.x - youBefore.x, this.you.z - youBefore.z);
         this.you.speed = moved / dt;
-        this.you.fwd = (this.you.z - youBefore.z) / dt; // ＋＝ネット方向へ前進している
+        // ＋＝ネット方向へ前進している（netDir で4人とも同じ意味に揃える）
+        this.you.fwd = this.you.netDir * (this.you.z - youBefore.z) / dt;
         // 左右の移動は符号つきで積む（行って戻れば打ち消される＝「振り回された」量になる）
         this.you.runX += this.you.x - youBefore.x;
         this.drainStamina(this.you, moved);
@@ -2324,17 +3265,77 @@
       this.recoverTimers.youMate = Math.max(0, this.recoverTimers.youMate - dt);
       this.recoverTimers.you = Math.max(0, this.recoverTimers.you - dt);
 
+      // ラリー外（サーブ待ち・フォールトのコール・ポイント間）では「打った側」を
+      // 覚えない。ball.last は beginServe() をまたいでも前のポイントの値のまま残るので、
+      // ここで覚えてしまうと「前のポイントで最後に打ったチーム」＝「次のサーバー」の
+      // ときだけ owner が変化せず、そのサーブに対する反応遅延が丸ごと飛んでいた
+      // （＝自分のミスやウィナーでポイントを終えた次の自分のサーブでは、CPU が
+      // ノータイムでリターンに動き出していた）。null に戻しておけば、サーブが打たれて
+      // phase が 'rally' になった最初のフレームで必ず「変化した」と見なされる。
+      if (this.phase !== 'rally') {
+        this.lastBallOwnerSeen = null;
+        return;
+      }
       const owner = this.ball.last;
-      if (this.phase === 'rally' && owner !== this.lastBallOwnerSeen) {
+      if (owner !== this.lastBallOwnerSeen) {
         // 能力値「リーチ・読み」が高い選手ほど反応遅延が短い（attr.react）。
+        // コースが読みにくい1打（ツイーナー）は、その分だけ反応の出足を遅らせる。
+        const bonus = this.ball.reactBonus || 0;
         if (owner === 'you') {
-          this.reactTimers.cpu = PLAYER.CPU_REACT * this.cpu.attr.react;
-          this.reactTimers.cpuMate = PLAYER.CPU_REACT * this.cpuMate.attr.react;
+          this.reactTimers.cpu = PLAYER.CPU_REACT * this.cpu.attr.react + bonus;
+          this.reactTimers.cpuMate = PLAYER.CPU_REACT * this.cpuMate.attr.react + bonus;
+          this.rollPoach('cpuMate', 'cpu');
+          this.rollAiRescue('cpu');
+          this.rollAiRescue('cpuMate');
         } else if (owner === 'cpu') {
-          this.reactTimers.youMate = PLAYER.CPU_REACT * this.youMate.attr.react;
+          this.reactTimers.youMate = PLAYER.CPU_REACT * this.youMate.attr.react + bonus;
+          this.rollPoach('youMate', 'you');
+          this.rollAiRescue('youMate');
         }
       }
       this.lastBallOwnerSeen = owner;
+    }
+
+    /**
+     * 飛んできた1球に対して、その前衛が「ポーチに出る」かどうかを1回だけ決める。
+     * 立っていれば触れる球（ai.poachSpot）は担当の判定で自然に拾うので、ここで決めるのは
+     * 「ストレートを守る位置を捨てて中央へ仕掛けにいくか」だけ。能力値「ネット志向」
+     * （attr.net）が高い選手ほどよく仕掛ける。
+     * @param {'cpuMate'|'youMate'} mate 前衛
+     * @param {'cpu'|'you'} team その前衛のチーム
+     */
+    rollPoach(mate, team) {
+      // サーブへは仕掛けない。実際のダブルスと同じくレシーバー以外は手を出せない球なので、
+      // 飛び出しても触れず、ネット際を空けるだけになる。
+      this.poachCommit[mate] = this.doubles && !this.serveInFlight && this.hasFrontPlayer(team)
+        && Math.random() < DOUBLES.POACH_CHANCE * this.actor(mate).attr.net;
+    }
+
+    /**
+     * 飛んできた1球に対して、その AI が「救済技（縮地・飛びつきボレー）を出す気でいるか」を
+     * 1回だけ決める。どちらも条件を満たしたフレームで出る技なので、毎フレーム
+     * CPU.SPECIAL_CHANCE を引くと事実上必ず出てしまう＝確率の意味がなくなる
+     * （他の技は「当たる瞬間」という1回きりの機会なので pickAiSpecial の中で引いている）。
+     * @param {'cpu'|'cpuMate'|'youMate'} who
+     */
+    rollAiRescue(who) {
+      const on = this.aiSpecialsOn();
+      const moves = this.aiMoves();
+      this.dashCommit[who] = on && moves.indexOf('shukuchi') !== -1
+        && Math.random() < CPU.SPECIAL_CHANCE;
+      this.diveCommit[who] = on && moves.indexOf('divingVolley') !== -1
+        && Math.random() < CPU.SPECIAL_CHANCE;
+    }
+
+    /**
+     * ポーチに出ると決めている前衛の、いまの迎撃点。出ると決めていない／どこにも
+     * 間に合わない（＝仕掛けても届かない）なら null で、通常どおり構え位置に戻る。
+     * @param {'cpuMate'|'youMate'} mate
+     * @param {1|-1} side その前衛がいる陣地
+     */
+    poachTarget(mate, side) {
+      if (!this.poachCommit[mate] || this.phase !== 'rally') return null;
+      return poachRun(this.ball, this.actor(mate), side);
     }
 
     /** シングルスの CPU 移動（従来どおり）。ダブルスでは使わない。 */
@@ -2377,8 +3378,12 @@
     }
 
     /**
-     * ダブルスの4人の移動。各ペアは、落下点に近い方（＝ isResponder ）が返球に向かい、
-     * もう一方は相方の反対サイドのネット際で構える（本格的なフォーメーション戦略ではない簡易版）。
+     * ダブルスの4人の移動。ソフトテニスの雁行陣（後衛＝you/cpu、前衛＝相方）を敷き、
+     * 取りにいく側（doublesResponder）が返球に向かい、もう一方は役割どおりの位置で構える：
+     * - 後衛が追っている間、前衛は展開（クロス／ストレート）に応じた構え（ai.frontPosition）。
+     * - 前衛がポーチに出ている間、後衛はベースライン付近で逆サイドを開ける（ai.backPosition）。
+     * 以前はどちらの場合も coverPosition()＝ネット際の鏡映しだったので、前衛がポーチに
+     * 出ると後衛までネット際へ上がってしまい、触れなかったときに自陣ががら空きになっていた。
      *
      * サーブ待ち中（phase==='serve'）は4人とも動かさない。newPoint() が既にサーバー・
      * レシーバー・両者の相方を正しいスタンスへ置いているので、ここで通常のラリー用の
@@ -2405,37 +3410,53 @@
       // （doublesResponder：サーブリターン中はレシーバー固定、それ以外は近い方）。
       // 反応遅延タイマーが残っている間は、担当側でも静止したまま（＝逆を突かれる余地）。
       const cpuTeamChasing = this.phase === 'rally' && ball.last === 'you';
+      // cpu 陣地の前衛（cpuMate）の構え。相手の後衛（you チームの深い方）と味方後衛(cpu)の
+      // 位置関係＝展開で、ストレートを守るか・真ん中を越えて攻めに出るかが決まる。
+      const cpuFront = () => frontPosition(this.doublesFoes('cpuMate').back, this.cpu, DOUBLES.NET_Z_CPU);
       if (cpuTeamChasing && this.doublesResponder('cpu') === 'cpu') {
         if (this.reactTimers.cpu <= 0) {
           this.moveIfRecovered('cpu', this.cpu, cpuBefore, chasePosition(ball, 1, this.cpu), PLAYER.CPU_CHASE, dt);
         } else {
           this.cpu.speed = 0;
         }
-        this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore, coverPosition(this.cpu.x, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
+        // 後衛が追っている間、前衛は「仕掛ける」と決めていれば迎撃点へ全力で出て
+        // （＝ポーチ）、そうでなければ展開に応じた構え位置へ寄る。
+        const poach = this.reactTimers.cpuMate <= 0 ? this.poachTarget('cpuMate', 1) : null;
+        this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore,
+          poach || cpuFront(), poach ? PLAYER.CPU_CHASE : DOUBLES.FRONT_MOVE, dt);
       } else if (cpuTeamChasing) {
         if (this.reactTimers.cpuMate <= 0) {
           this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore, chasePosition(ball, 1, this.cpuMate), PLAYER.CPU_CHASE, dt);
         } else {
           this.cpuMate.speed = 0;
         }
-        this.moveIfRecovered('cpu', this.cpu, cpuBefore, coverPosition(this.cpuMate.x, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
+        this.moveIfRecovered('cpu', this.cpu, cpuBefore, backPosition(this.cpuMate.x, 1), PLAYER.CPU_RECOVER, dt);
       } else {
         this.moveIfRecovered('cpu', this.cpu, cpuBefore, homePosition(), PLAYER.CPU_RECOVER, dt);
-        this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore, coverPosition(0, DOUBLES.NET_Z_CPU), PLAYER.CPU_RECOVER, dt);
+        this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore, cpuFront(), DOUBLES.FRONT_MOVE, dt);
       }
 
       // youMate：人間（you）の打球が向かってくる番で、自分が応答すべき側なら追う
       // （doublesResponder：サーブリターン中はレシーバー固定、それ以外は近い方）。
       // 自陣（z<0）を追わせるため chasePosition には side=-1 を渡す。
+      // 「下がれ」を指示されている間は、ロブを叩きにネット際まで走り出ていかない
+      // （DOUBLES.BACK_SMASH_Z より手前のロブは、下がったままバウンドを待って返す）。
       const mateChasing = this.phase === 'rally' && ball.last === 'cpu'
         && this.doublesResponder('you') === 'youMate';
+      const mateSmashNearZ = this.youMateFormation === 'back' ? DOUBLES.BACK_SMASH_Z : undefined;
       if (mateChasing && this.reactTimers.youMate <= 0) {
-        this.moveIfRecovered('youMate', this.youMate, youMateBefore, chasePosition(ball, -1, this.youMate), PLAYER.CPU_CHASE, dt);
+        this.moveIfRecovered('youMate', this.youMate, youMateBefore, chasePosition(ball, -1, this.youMate, mateSmashNearZ), PLAYER.CPU_CHASE, dt);
       } else if (mateChasing) {
         this.youMate.speed = 0;
+      } else if (this.hasFrontPlayer('you')) {
+        // 前衛として構える。cpu 側の前衛と同じ考え方（ポーチに出るか／展開に応じた構え）。
+        const poach = this.reactTimers.youMate <= 0 ? this.poachTarget('youMate', -1) : null;
+        this.moveIfRecovered('youMate', this.youMate, youMateBefore,
+          poach || frontPosition(this.doublesFoes('youMate').back, this.you, DOUBLES.NET_Z_YOU),
+          poach ? PLAYER.CPU_CHASE : DOUBLES.FRONT_MOVE, dt);
       } else {
-        const youMateZ = this.youMateFormation === 'back' ? DOUBLES.BACK_Z_YOU : DOUBLES.NET_Z_YOU;
-        this.moveIfRecovered('youMate', this.youMate, youMateBefore, coverPosition(this.you.x, youMateZ), PLAYER.CPU_RECOVER, dt);
+        // 「下がれ」を指示されている間は前衛ではない＝従来どおり人間の逆サイドで構える。
+        this.moveIfRecovered('youMate', this.youMate, youMateBefore, coverPosition(this.you.x, DOUBLES.BACK_Z_YOU), PLAYER.CPU_RECOVER, dt);
       }
     }
 
@@ -2459,10 +3480,11 @@
      * 実際に stretch を読む hit() の時点では常に「この球を追った距離」だけが入っている。
      */
     resetChase() {
-      this.you.runX = 0;
-      this.cpu.chaseDist = 0;
-      this.youMate.chaseDist = 0;
-      this.cpuMate.chaseDist = 0;
+      ACTORS.forEach((who) => {
+        const actor = this.actor(who);
+        actor.runX = 0;
+        if (who !== 'you') actor.chaseDist = 0;
+      });
     }
 
     /**
@@ -2487,6 +3509,10 @@
       const moved = Math.hypot(actor.x - before.x, actor.z - before.z);
       actor.speed = moved / dt;
       actor.chaseDist += moved;
+      // 人間の you と同じ意味の2つ。Hard の AI が必殺技を出せるかの判定に使う
+      // （fwd＝ネット方向へ前進している速さ、runX＝相手が打ってから左右へ動いた量）。
+      actor.fwd = actor.netDir * (actor.z - before.z) / dt;
+      actor.runX += actor.x - before.x;
       // 目標地点に着いて動かずにいる間だけ積む「待てている時間」。走り出したら0に戻る。
       // 走行距離(chaseDist)だけでは「遠くまで走ったが、先回りして落下点で待っていた」
       // 状況が「苦しい」と誤判定されるので、その打ち消しに使う（hit() のスマッシュ）。
@@ -2680,7 +3706,8 @@
         // 能力値「リーチ・読み」で手の届く範囲が広がる／狭まる（attr.reach）。
         // 必殺技（飛びつきボレー・ツイーナー・ダンクスマッシュ）はさらにその上から広がる。
         const extra = specialReach(this.you.special);
-        if (reaches(ball, this.you, PLAYER.REACH * this.you.attr.reach * extra.mult)
+        // レシーブ（サーブを打ち返す1打）だけ RETURN.REACH_MULT ぶん広い（reachMult()）。
+        if (reaches(ball, this.you, PLAYER.REACH * this.reachMult() * extra.mult)
           && ball.y < PLAYER.REACH_Y + extra.y) {
           this.hit('you');
           this.you.swing = 0;
@@ -2688,36 +3715,68 @@
       }
 
       // ダブルスの youMate：人間が届かなかった／振らなかった球を、CPUと同様に自動で拾う。
-      // ただし自分が応答すべき側（doublesResponder：サーブリターン中はレシーバー固定、それ
-      // 以外は近い方）のときだけ。そうしないと、人間が取るべき球やレシーブの権利がない球まで
-      // 先に振ってしまう。ノーバウンドで返す（ボレー）のはネット際（VOLLEY_Z 以内）にいるときだけ。
+      // 基本は自分が応答すべき側（doublesResponder）のときだけ——そうしないと人間が取る
+      // べき球まで先に振ってしまう——だが、人間がどうやっても届かない球だけは担当外でも
+      // 拾わせる（目の前に来た球を「担当ではないから」と見逃さないため。ユーザー報告）。
+      // サーブリターン中だけはこの救済を外す：レシーバー以外が返してはいけない球なので。
+      // ノーバウンドで返す（ボレー）のはネット際（VOLLEY_Z 以内）にいるときだけ。
       // それより後ろにいるなら、前に詰めていない＝1バウンド待ってグラウンドストロークで返す。
-      if (this.doubles && ball.last !== 'you' && ball.z < PLAYER.NET_MARGIN
-        && this.doublesResponder('you') === 'youMate') {
-        const inRange = ball.y < PLAYER.CPU_REACH_Y && ball.y > PLAYER.CPU_REACH_Y_MIN;
-        const canReturn = aiCanReturnNow(this.youMate, ball);
-        const mateReach = reactReach(ball.age, this.youMate.attr.reach);
-        if (canReturn && reaches(ball, this.youMate, mateReach) && inRange) this.hit('youMate');
+      if (this.doubles && ball.last !== 'you' && ball.z < PLAYER.NET_MARGIN) {
+        const rescue = !this.serveInFlight
+          && !reaches(ball, this.you, PLAYER.REACH * this.you.attr.reach);
+        if (this.doublesResponder('you') === 'youMate' || rescue) this.swingAiAt('youMate', ball);
       }
 
-      // CPU は届く範囲なら自動で振る。ダブルスでは応答すべき側（doublesResponder）だけが
-      // 手を出す。youMate と同様、前に出ていなければ1バウンド待つ。
+      // CPU は届く範囲なら自動で振る。ダブルスでは応答すべき側（doublesResponder）を
+      // 先に試し、その人が実際には届かなかったときだけ相方に回す（同じく見逃し防止）。
+      // サーブリターン中はレシーバー固定なので相方には回さない。
       if (ball.last !== 'cpu' && ball.z > PLAYER.NET_MARGIN) {
-        const inRange = ball.y < PLAYER.CPU_REACH_Y && ball.y > PLAYER.CPU_REACH_Y_MIN;
         const responder = this.doubles ? this.doublesResponder('cpu') : 'cpu';
-        const cpuCanReturn = responder === 'cpu' && aiCanReturnNow(this.cpu, ball);
-        const cpuMateCanReturn = this.doubles && responder === 'cpuMate'
-          && aiCanReturnNow(this.cpuMate, ball);
-        // 反応に使える時間ぶんに狭めた守備範囲で判定する（ai.reactReach 参照）。
-        // 打たれてすぐ届く球（スマッシュ・至近距離のボレー）は体の近くしか触れない。
-        // 能力値「リーチ・読み」の倍率は選手ごとに違うので、2人ぶん別々に求める。
-        if (cpuCanReturn && reaches(ball, this.cpu, reactReach(ball.age, this.cpu.attr.reach)) && inRange) {
-          this.hit('cpu');
-        } else if (cpuMateCanReturn
-          && reaches(ball, this.cpuMate, reactReach(ball.age, this.cpuMate.attr.reach)) && inRange) {
-          this.hit('cpuMate');
-        }
+        const order = !this.doubles || this.serveInFlight
+          ? [responder]
+          : (responder === 'cpu' ? ['cpu', 'cpuMate'] : ['cpuMate', 'cpu']);
+        order.some((key) => this.swingAiAt(key, ball));
       }
+    }
+
+    /**
+     * その CPU/AI がいま実際にその球を打てるなら打つ。
+     * 反応に使える時間ぶんに狭めた守備範囲で判定する（ai.reactReach 参照）。
+     * 打たれてすぐ届く球（スマッシュ・至近距離のボレー）は体の近くしか触れない。
+     * 能力値「リーチ・読み」の倍率は選手ごとに違うので、1人ずつ求める。
+     * @returns {boolean} 実際に振ったら true
+     */
+    swingAiAt(who, ball) {
+      const actor = this.actor(who);
+      if (!aiCanReturnNow(actor, ball)) return false;
+      if (ball.y >= PLAYER.CPU_REACH_Y || ball.y <= PLAYER.CPU_REACH_Y_MIN) return false;
+      const reach = reactReach(ball.age, actor.attr.reach);
+      // 普通のリーチでは届かない球でも、飛びつきボレー（Extreme のみ）なら手が届く。
+      if (!reaches(ball, actor, reach) && !this.tryAiDive(who, ball, reach)) return false;
+      this.hit(who);
+      return true;
+    }
+
+    /**
+     * AI の飛びつきボレー（Extreme のみ。SPECIAL.AI.MOVES_ALL 参照）。
+     * 人間の条件（SPECIAL_MATCH.divingVolley＝「ノーバウンドだが、普通に振ったのでは
+     * 届かない」）をそのまま AI の当たり判定へ移したもので、伸びたリーチ
+     * （SPECIAL.DIVE.REACH_MULT）でだけ届く球のときに true を返し、この1打に技が乗る旗を
+     * 立てる（hit() が受け取る）。代償——打った後の長い硬直（DIVE.RECOVER）——も人間と同じ。
+     * 出すかどうかの抽選は球ごとに1回（diveCommit）。
+     * @param {number} reach 普通に手を伸ばして届く距離(m)（reactReach の結果）
+     */
+    tryAiDive(who, ball, reach) {
+      if (!this.aiSpecialsOn() || !this.diveCommit[who]) return false;
+      if (this.aiMoves().indexOf('divingVolley') === -1) return false;
+      if (this.usesLeft('divingVolley', who) <= 0) return false;
+      if (ball.bounces !== 0) return false; // ボレーの場面だけ（バウンド後の球は対象外）
+      const actor = this.actor(who);
+      if (Math.abs(actor.z) > PLAYER.VOLLEY_Z) return false; // ネット際にいるときだけ
+      if (!reaches(ball, actor, reach * SPECIAL.DIVE.REACH_MULT)) return false;
+      this.diveCommit[who] = false;
+      actor.diveVolley = true;
+      return true;
     }
 
     /* ---------------------------------------------------------- タイマー */

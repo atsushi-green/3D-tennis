@@ -188,6 +188,34 @@
    *     固定される swingCharge を使い続ける。
    * @param {boolean} [tossing] トス中（打つ前）かどうか。サーブの構えを出す
    */
+  /** 0→1 を滑らかに立ち上げる（両端で速度0）。振り向きのカクつきを消すのに使う */
+  function ease(t) {
+    const x = clamp(t, 0, 1);
+    return x * x * (3 - 2 * x);
+  }
+
+  /** ツイーナーのモーションの進行度（0＝打点、1＝振り終わり）。それ以外は null */
+  function tweenerProgress(anim, stroke) {
+    if (stroke !== 'tweener' || anim <= 0) return null;
+    const span = SPECIAL.TWEENER.ANIM;
+    return clamp((span - anim) / span, 0, 1);
+  }
+
+  /**
+   * ツイーナーの「体ごとの振り向き」(rad)。打った瞬間にはもう背を向けているが、
+   * 1フレームで π 回すとカクッと入れ替わって見えるので、ごく短い時間（TURN_IN）で
+   * 回し切り、振り終わりにかけて（TURN_OUT 以降）正面へ戻す。
+   */
+  function tweenerTurn(anim, stroke) {
+    const progress = tweenerProgress(anim, stroke);
+    if (progress === null) return 0;
+    const T = SWING.TWEENER;
+    const frac = progress < T.TURN_IN
+      ? progress / T.TURN_IN
+      : (progress < T.TURN_OUT ? 1 : 1 - (progress - T.TURN_OUT) / (1 - T.TURN_OUT));
+    return Math.PI * ease(frac);
+  }
+
   function poseArm(player, state, tossing) {
     const { anim, stroke, prep, spin, chargeFrac, swingCharge } = state;
     const arm = player.userData.arm;
@@ -195,8 +223,7 @@
     // ツイーナー（股抜き）の間だけ、体ごと相手に背を向ける。ラケット腕はモデルの
     // ローカル +x 側に作られているので、向きを反転させればそのまま「背中側の球を
     // 股の下から打つ」形になる（普段の向きは userData.facing に控えてある）。
-    player.rotation.y = (player.userData.facing || 0)
-      + (stroke === 'tweener' && anim > 0 ? Math.PI : 0);
+    player.rotation.y = (player.userData.facing || 0) + tweenerTurn(anim, stroke);
 
     if (anim <= 0) {
       if (tossing) {
@@ -226,9 +253,13 @@
       return;
     }
 
-    // スマッシュだけはモーションが長い（PLAYER.SMASH_ANIM）ので、進行度もその長さで割る。
-    // 他のストロークは従来どおり ARM_SPAN 基準（＝既存の振り付けを変えない）。
-    const span = stroke === 'smash' ? PLAYER.SMASH_ANIM : ARM_SPAN;
+    // スマッシュとツイーナーはモーションが長い（PLAYER.SMASH_ANIM / SPECIAL.TWEENER.ANIM）
+    // ので、進行度もその長さで割る。他のストロークは従来どおり ARM_SPAN 基準
+    // （＝既存の振り付けを変えない）。
+    const span = stroke === 'smash' ? PLAYER.SMASH_ANIM
+      : stroke === 'tweener' ? SPECIAL.TWEENER.ANIM
+        : stroke === 'jackknife' ? SPECIAL.JACK.ANIM
+          : ARM_SPAN;
     const progress = clamp((span - anim) / span, 0, 1);
 
     if (stroke === 'serve') {
@@ -260,6 +291,21 @@
       arm.rotation.z = lerp(S.Z_START, S.Z_END, progress);
       arm.rotation.x = S.X;
       torso.rotation.y = 0;
+      return;
+    }
+
+    if (stroke === 'jackknife') {
+      // ジャックナイフ。高い打点をフラットのバックハンドで叩くので、横振り(rotation.y)は
+      // グラウンドストロークと同じ系統のまま、仰角(rotation.z)を肩の高さ（Z_START）から
+      // 体の前（Z_END）へ下ろす＝上から叩き込む弧になる。必ずバックハンド側に振る。
+      // **進行度0がそのまま打点**（Y_START/Z_START）で、そこから振り抜く：跳躍も
+      // 打点が頂点なので、1コマ目が「跳んだ一番高いところで球を捉えた絵」になる。
+      const J = SWING.JACK;
+      arm.rotation.y = mirrorGroundAngle(lerp(J.Y_START, J.Y_END, progress), true);
+      arm.rotation.z = lerp(J.Z_START, J.Z_END, progress);
+      arm.rotation.x = 0;
+      // 跳びながら体をひねって振り抜く（通常のバックハンドより深くひねる）
+      torso.rotation.y = -J.TORSO_TWIST * Math.sin(progress * Math.PI);
       return;
     }
 
@@ -319,22 +365,43 @@
   };
 
   /**
-   * スマッシュのジャンプの高さ(m)。打点の瞬間には既に跳び上がっていて
-   * （SMASH_JUMP_START の高さ）、SMASH_JUMP_PEAK の進行度で頂点、振り終わりで着地する。
-   * sin カーブに乗せているので、頂点付近でふわりと粘り、着地は滑らかに0へ収束する。
-   * 見た目だけの値で、当たり判定（PLAYER.REACH_Y）には一切影響しない。
+   * 跳躍の進み具合(0〜1)。0＝踏み切り、1＝着地。跳んでいなければ null。
+   * **打球のモーション（anim）とは別の時計**（state.leap）で動く：anim は「当たった
+   * 瞬間」からしか始められないので、そこに跳躍を乗せると跳ぶのと打つのが同時に見える。
+   * leap は game.js#tickLeap が「もうすぐ球が届く」ところで、まだ離していなくても
+   * 始める＝当たるころには頂点にいて、空中で振り始める絵になる。
+   * @param {object} state その選手の見た目に関わる状態
+   * @param {'smash'|'jackknife'} kind この関数が受け持つ跳び方
    */
-  function smashLift(anim, stroke, special) {
-    if (stroke !== 'smash' || anim <= 0) return 0;
-    const progress = clamp((PLAYER.SMASH_ANIM - anim) / PLAYER.SMASH_ANIM, 0, 1);
-    const rise = Math.asin(clamp(SWING.SMASH_JUMP_START, 0, 1)); // 打点の瞬間の位相
-    const peak = SWING.SMASH_JUMP_PEAK;
-    const phase = progress < peak
-      ? lerp(rise, Math.PI / 2, progress / peak)               // 打点 → 頂点
-      : lerp(Math.PI / 2, Math.PI, (progress - peak) / (1 - peak)); // 頂点 → 着地
-    // ダンクスマッシュ（必殺技）だけは、同じ振り付けのままもっと高く跳ぶ。
-    const height = SWING.SMASH_JUMP_H * (special === 'dunkSmash' ? SPECIAL.DUNK.JUMP_MULT : 1);
-    return height * Math.sin(phase);
+  function leapProgress(state, kind) {
+    const leap = state.leap;
+    if (!leap || leap.kind !== kind || leap.t <= 0) return null;
+    const span = kind === 'jackknife' ? SPECIAL.JACK.LEAP_T : PLAYER.SMASH_LEAP_T;
+    return clamp((span - leap.t) / span, 0, 1);
+  }
+
+  /**
+   * 上昇（0〜π/2）→ 下降（π/2〜π）の sin カーブ。頂点付近は sin が寝るので滞空感が出る。
+   * @param {number} u 跳躍の進み具合(0〜1)
+   * @param {number} riseFrac そのうち上昇に使う割合
+   */
+  function leapArc(u, riseFrac) {
+    const phase = u < riseFrac
+      ? (u / riseFrac) * (Math.PI / 2)
+      : Math.PI / 2 + ((u - riseFrac) / (1 - riseFrac)) * (Math.PI / 2);
+    return Math.sin(phase);
+  }
+
+  /**
+   * スマッシュのジャンプの高さ(m)。見た目だけの値で、当たり判定（PLAYER.REACH_Y）には
+   * 一切影響しない。ダンクスマッシュ（必殺技）だけは同じ振り付けのままもっと高く跳ぶ。
+   */
+  function smashLift(state) {
+    const u = leapProgress(state, 'smash');
+    if (u === null) return 0;
+    const height = SWING.SMASH_JUMP_H
+      * (state.special === 'dunkSmash' ? SPECIAL.DUNK.JUMP_MULT : 1);
+    return height * leapArc(u, PLAYER.SMASH_LEAP_RISE);
   }
 
   /**
@@ -348,7 +415,7 @@
    */
   scene3d.applySmashJump = function applySmashJump(player, state) {
     const { anim, stroke, special } = state;
-    const lift = smashLift(anim, stroke, special);
+    const lift = smashLift(state);
     player.position.y = lift;
     if (lift <= 0) return 0;
 
@@ -357,7 +424,11 @@
     // 分母にもジャンプの倍率を掛けて正規化する）。
     const peak = SWING.SMASH_JUMP_H * (special === 'dunkSmash' ? SPECIAL.DUNK.JUMP_MULT : 1);
     const air = clamp(lift / peak, 0, 1);
-    const progress = clamp((PLAYER.SMASH_ANIM - anim) / PLAYER.SMASH_ANIM, 0, 1);
+    // 体幹は打球のモーション側の進み具合で折る：当たる前（anim=0）は反ったまま跳び上がり、
+    // 当たってから振り下ろしに合わせて前へ折れる。
+    const progress = stroke === 'smash' && anim > 0
+      ? clamp((PLAYER.SMASH_ANIM - anim) / PLAYER.SMASH_ANIM, 0, 1)
+      : 0;
     // はさみ跳びは「ラケット側の脚を後ろへ蹴り上げる」。legs[0] がローカル -x 側、
     // legs[1] が +x 側なので、利き手（HAND）でどちらがラケット側かを選ぶ。
     const back = gait.legs[HAND < 0 ? 0 : 1];
@@ -400,6 +471,84 @@
       knee.rotation.x = lerp(knee.rotation.x, -SWING.DIVE_KNEE_TUCK, arc);
     });
     gait.torso.rotation.x = lerp(gait.torso.rotation.x, SWING.DIVE_TORSO_X, arc);
+    return lift;
+  };
+
+  /**
+   * ツイーナー（必殺技の股抜き）の跳躍と股割り。applySmashJump() と同じ考え方で、
+   * 歩行ポーズの後に上から重ねる。
+   * - 体を浮かせる（打点の瞬間にはもう跳び上がっていて、振り終わりで着地する）
+   * - 股を**左右**に割る：カメラは選手の真後ろにあるので、前後に開いても奥行き方向に
+   *   しか動かず「股を抜いた」ことが読めない。左右に開いた脚の間をラケットが通る
+   * - 体幹を前へ折って、股の下を覗き込む形にする
+   * 股割りに使う hip の rotation.z は setGaitPose() が触らない軸なので、技が終わった
+   * フレームで自分で0へ戻す（戻さないと開いたまま走り続ける）。
+   * @param {object} state その選手の見た目に関わる状態（setSwingPose と同じもの）
+   * @returns {number} 浮いた高さ(m)。影を小さくするのに使う（world.js 参照）
+   */
+  scene3d.applyTweenerHop = function applyTweenerHop(player, state) {
+    const gait = player.userData.gait;
+    const progress = tweenerProgress(state.anim, state.stroke);
+    if (progress === null) {
+      gait.legs.forEach(({ hip }) => { hip.rotation.z = 0; });
+      return 0;
+    }
+    const T = SWING.TWEENER;
+    // 打点（progress=0）の時点で既に HOP_START の高さまで上がっている → 頂点 → 着地
+    const rise = Math.asin(clamp(T.HOP_START, 0, 1));
+    const phase = progress < T.HOP_PEAK
+      ? lerp(rise, Math.PI / 2, progress / T.HOP_PEAK)
+      : lerp(Math.PI / 2, Math.PI, (progress - T.HOP_PEAK) / (1 - T.HOP_PEAK));
+    const lift = T.HOP_H * Math.sin(phase);
+    player.position.y = lift;
+
+    // 浮いているほど強くポーズを効かせる（着地に向けて自然に歩行ポーズへ戻る）
+    const air = clamp(lift / T.HOP_H, 0, 1);
+    // legs[0] がローカル -x 側、legs[1] が +x 側。hip.rotation.z を正にすると足先が
+    // +x 側へ振れるので、外側へ開くには -x 側の脚を負・+x 側の脚を正にする。
+    gait.legs.forEach(({ hip, knee }, i) => {
+      const outward = i === 0 ? -1 : 1;
+      hip.rotation.z = lerp(0, outward * T.LEG_SPLAY, air);
+      hip.rotation.x = lerp(hip.rotation.x, outward * T.LEG_KICK, air);
+      knee.rotation.x = lerp(knee.rotation.x, -T.KNEE_TUCK, air);
+    });
+    gait.offArm.rotation.x = lerp(gait.offArm.rotation.x, T.OFF_ARM_X, air);
+    gait.torso.rotation.x = lerp(gait.torso.rotation.x, T.TORSO_X, air);
+    return lift;
+  };
+
+  /**
+   * ジャックナイフ（必殺技）の跳躍。applySmashJump() と同じく歩行ポーズの後に上から
+   * 重ねる。高い打点へ跳び上がり、**両脚をそろえて後ろへ折りたたむ**（＝体が折りたたみ
+   * ナイフのように「くの字」になる、技の名前そのものの形）。
+   *
+   * **跳躍だけは打球のモーション（anim）ではなく専用の時計（state.leap）で動く。**
+   * anim は「当たった瞬間」からしか始められないので、そこに跳躍も乗せると跳ぶのと
+   * 振るのが同時になり、「打ってから跳んだ」ように見えてしまう（ユーザー報告）。
+   * leap は**溜めを離した瞬間**（game.js#chargeRelease）から数え始めるので、
+   * 跳ぶ → ボールが来る → 振り抜く → 着地、の順に読める。
+   * 踏み切り（LEAP_RISE）で上がり、頂点でふわりと粘ってから着地する。
+   * @param {object} state その選手の見た目に関わる状態（setSwingPose と同じもの）
+   * @returns {number} 浮いた高さ(m)。影を小さくするのに使う（world.js 参照）
+   */
+  scene3d.applyJackknifeLeap = function applyJackknifeLeap(player, state) {
+    const u = leapProgress(state, 'jackknife');
+    if (u === null) return 0;
+    const J = SWING.JACK;
+    const lift = J.JUMP_H * leapArc(u, SPECIAL.JACK.LEAP_RISE);
+    player.position.y = lift;
+
+    const gait = player.userData.gait;
+    const air = clamp(lift / J.JUMP_H, 0, 1);
+    // 両脚そろえて後ろへ折る（はさみ跳びのスマッシュと違い、左右で開かない）。
+    // 膝は**カメラ側（選手の後ろ）へ**折りたたむ：カメラは選手の真後ろにあるので、
+    // 逆へ折ると体に隠れて「折りたたんだ」ことが見えない。靴の裏が見えるのが正解。
+    gait.legs.forEach(({ hip, knee }) => {
+      hip.rotation.x = lerp(hip.rotation.x, J.LEG_FOLD, air);
+      knee.rotation.x = lerp(knee.rotation.x, J.KNEE_TUCK, air);
+    });
+    gait.offArm.rotation.x = lerp(gait.offArm.rotation.x, -J.LEG_FOLD * 0.4, air);
+    gait.torso.rotation.x = lerp(gait.torso.rotation.x, J.TORSO_X, air);
     return lift;
   };
 

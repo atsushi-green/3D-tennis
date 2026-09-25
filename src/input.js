@@ -24,8 +24,15 @@
   /** ダブルスのAIパートナーへの指示。Q＝ネットへ前へ、E＝ベースラインまで下がれ */
   const FORMATION_NET = ['KeyQ'];
   const FORMATION_BACK = ['KeyE'];
-  /** スタート画面でのみ有効。CPU/AIの強さ（Easy/Normal/Hard）を選ぶ */
-  const DIFFICULTY_KEYS = { Digit1: 'easy', Digit2: 'normal', Digit3: 'hard' };
+  /**
+   * スタート画面でのみ有効。CPU/AIの強さ（Easy/Normal/Hard/Extreme）を選ぶ。
+   * Extreme だけ数字キーではなく X なのは、Digit1〜0 が既に難易度3段・サーフェス3種・
+   * プレースタイル4種でちょうど埋まっているため（頭文字の e は KeyE＝ダブルスの
+   * 「下がれ」指示と衝突する）。
+   */
+  const DIFFICULTY_KEYS = {
+    Digit1: 'easy', Digit2: 'normal', Digit3: 'hard', KeyX: 'extreme',
+  };
   /** スタート画面でのみ有効。コートサーフェス（ハード／クレー／芝）を選ぶ */
   const SURFACE_KEYS = { Digit4: 'hard', Digit5: 'clay', Digit6: 'grass' };
   /** スタート画面でのみ有効。CPU/AIのプレースタイルを選ぶ（強さとは直交） */
@@ -69,7 +76,8 @@
     }
 
     /**
-     * @param {{onStart:Function, onStartDoubles:Function, onChargeStart:Function,
+     * @param {{onStart:Function, onStartSingles:Function, onStartDoubles:Function,
+     *   onChargeStart:Function,
      *   onChargeRelease:Function, onFormationNet:Function, onFormationBack:Function,
      *   onSelectDifficulty:Function, onSelectSurface:Function, onSelectStyle:Function,
      *   onToggleGuide:Function, onCycleSpecials:Function,
@@ -87,7 +95,10 @@
             if (TOSS_KEYS[e.code]) handlers.onSelectToss(TOSS_KEYS[e.code]);
             return; // トスの結果待ちの間は、他の開始キーには反応しない
           }
-          if (e.code === 'KeyD') handlers.onStartDoubles();
+          // S / D は「その形式を選んでそのまま開始」。Space など他のキーは
+          // 「いま選ばれている形式で開始」なので、形式を指定したいときはこの2つを使う。
+          if (e.code === 'KeyS') handlers.onStartSingles();
+          else if (e.code === 'KeyD') handlers.onStartDoubles();
           else if (DIFFICULTY_KEYS[e.code]) handlers.onSelectDifficulty(DIFFICULTY_KEYS[e.code]);
           else if (SURFACE_KEYS[e.code]) handlers.onSelectSurface(SURFACE_KEYS[e.code]);
           else if (STYLE_KEYS[e.code]) handlers.onSelectStyle(STYLE_KEYS[e.code]);

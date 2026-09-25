@@ -39,6 +39,27 @@ canvas{display:block}
   font-size:11px;letter-spacing:.04em;color:var(--dim);
   font-variant-numeric:tabular-nums;
 }
+/* 次の1点にかかっているもの（ブレーク／ゲーム／セットポイント）。実況のテロップに
+   当たるので、スコアボード脇でいちばん強く主張してよい唯一の表示にする。
+   色で意味を分ける：ブレークポイント＝赤（サーブ側が崩れる1点）、セットポイント＝金
+   （試合が決まる1点）、ゲームポイント＝スコアバーと同じ黄緑（ふつうの山場）。
+   かかっていないポイントでは中身が空になり :empty で消える。 */
+#stakes{
+  margin-top:6px;padding:5px 10px;
+  background:rgba(9,20,34,.85);border-radius:2px;
+  border-left:3px solid currentColor;
+  font-size:14px;font-weight:700;letter-spacing:.06em;
+  color:var(--ball);
+  animation:stakePulse 1.6s ease-in-out infinite;
+}
+#stakes:empty{display:none}
+#stakes.brk{color:#ff6b6b}
+#stakes.set{color:#ffc83d}
+/* 誰にかかっているか。見出しより一段落として、色は見出しから受け継ぐ */
+#stakes .who{font-size:11px;font-weight:400;letter-spacing:.04em;opacity:.8;margin-left:6px}
+@keyframes stakePulse{0%,100%{opacity:1}50%{opacity:.62}}
+@media (prefers-reduced-motion:reduce){#stakes{animation:none}}
+
 /* 風向き。プレイ判断に直結する情報なので #stats より目立たせる（大きめ・太め・スコアバーと
    同系色のアクセント縁取り）。playフィールドから絶えず見える位置に置いてあるので、
    毎ポイントの変化にも気づきやすい */

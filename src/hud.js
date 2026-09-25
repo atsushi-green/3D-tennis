@@ -35,9 +35,21 @@
     { label: 'ウィナー', value: (t) => ({ text: `${t.winners}`, cmp: t.winners }) },
     { label: 'ミス', value: (t) => ({ text: `${t.unforced}`, cmp: null }) },
     {
+      label: 'ブレークポイント',
+      // 「決めた本数／チャンスの本数」。上下を比べるのは**決めた本数**で、割合では
+      // ない：1/1 の選手が 4/8 の選手を上回って見えるのはスタッツとしておかしいし、
+      // セットを動かすのは実際に取ったブレークの数のほうだから。
+      // どちらにもチャンスが無かった試合（全ゲーム 40-0 で終わった等）では行ごと出さない。
+      skip: (you, cpu) => !you.breakPoints && !cpu.breakPoints,
+      value: (t) => (t.breakPoints
+        ? { text: `${t.breaksWon}/${t.breakPoints}`, cmp: t.breaksWon }
+        : { text: '—', cmp: null }),
+    },
+    {
       label: '必殺技',
-      // 必殺技を使わない試合では行ごと出さない（CPU/AI は使わないので常に0）。
-      skipIfZero: true,
+      // どちらも0（＝誰も技を使わなかった試合／技を1つも選んでいない試合）なら行ごと出さない。
+      // Hard では CPU/AI 側も技を使うので、ここは人間ぶんだけを見るのでは足りない（SPECIAL.AI）。
+      skip: (you, cpu) => !you.specials && !cpu.specials,
       value: (t) => ({ text: `${t.specials}`, cmp: t.specials }),
     },
     {
@@ -86,6 +98,7 @@
         points: { you: $('p1'), cpu: $('p2') },
         aces: { you: $('ace1'), cpu: $('ace2') },
         doubleFaults: { you: $('df1'), cpu: $('df2') },
+        stakes: $('stakes'),
         wind: $('wind'),
         serveSpeed: $('serveSpeed'),
         staminaFillYou: $('staminaFillYou'),
@@ -514,9 +527,34 @@
     }
 
     /**
+     * 次の1点にかかっているもの（ブレーク／ゲーム／セットポイント）をスコアボード脇に出す。
+     * 毎フレーム呼ばれるので、中身が変わったときだけ組み立て直す（setSpecialUses と同じ作り）。
+     * @param {{kind:'set'|'break'|'game', label:string, team:'you'|'cpu'}|null} stakes
+     *   RallyOne.Game#stakes。null（何もかかっていない／ポイントが決着した）なら消す。
+     */
+    setStakes(stakes) {
+      const key = stakes ? `${stakes.kind}:${stakes.team}` : '';
+      if (key === this.stakesKey) return;
+      this.stakesKey = key;
+      const el = this.el.stakes;
+      el.classList.toggle('brk', !!stakes && stakes.kind === 'break');
+      el.classList.toggle('set', !!stakes && stakes.kind === 'set');
+      if (!stakes) {
+        el.replaceChildren(); // :empty で行ごと消える
+        return;
+      }
+      const who = document.createElement('span');
+      who.className = 'who';
+      // スコアボードと同じ呼び名（ダブルスでもチーム名としてそのまま通る）
+      who.textContent = stakes.team === 'you' ? 'YOU' : 'CPU';
+      el.replaceChildren(document.createTextNode(stakes.label), who);
+    }
+
+    /**
      * @param {string} big 大きい方の文字（'ポイント'・'失点'・コール）
      * @param {string} [sub] 補足（'ウィナー！'・'ゲーム — YOU' など）
      * @param {string} [shot] 決めた側が最後に放った球種（'スマッシュ' など）。
+     *   サーブだけで決まった1点（エース）は球速も付く（'フラットサービス（センター） 187km/h'）。
      *   無いポイント（ダブルフォルト直後など）は空にして行ごと隠す。
      */
     showCall(big, sub, shot) {
@@ -623,10 +661,10 @@
 
       const rows = [row('head', '', { text: label.you }, { text: label.cpu })];
       STAT_ROWS.forEach((spec) => {
-        const you = spec.value(summary.you);
-        const cpu = spec.value(summary.cpu);
-        if (spec.skipIfZero && !you.cmp && !cpu.cmp) return;
-        rows.push(row('', spec.label, you, cpu));
+        // skip() は生の集計を受け取る（value() が畳んだ後の数字では「0回」と
+        // 「そもそも機会が無かった」を見分けられない行があるため）。
+        if (spec.skip && spec.skip(summary.you, summary.cpu)) return;
+        rows.push(row('', spec.label, spec.value(summary.you), spec.value(summary.cpu)));
       });
       this.el.msTable.replaceChildren(...rows);
 

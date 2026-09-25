@@ -38,19 +38,33 @@
     };
     // 縮地（必殺技）の残像。跳ぶ前に立っていた位置へ置いて薄れさせるだけなので、
     // 選手と同じメッシュのマテリアルを半透明の金色1枚に差し替えて使い回す。
-    const dashGhost = scene3d.createPlayer(THEME.YOU);
-    const ghostMaterial = new THREE.MeshBasicMaterial({
-      color: THEME.DASH_GHOST, transparent: true, opacity: 0, depthWrite: false,
-    });
-    dashGhost.traverse((o) => { if (o.isMesh) o.material = ghostMaterial; });
-    dashGhost.visible = false;
+    // 人間だけでなく AI も縮地を使う（難易度 Extreme）ので、4人ぶん用意する。
+    // マテリアルは1人1枚：同じフレームに2人が跳ぶと、共有していると薄れ方が混ざる。
+    function createGhost(facing) {
+      const mesh = scene3d.createPlayer(THEME.YOU);
+      const material = new THREE.MeshBasicMaterial({
+        color: THEME.DASH_GHOST, transparent: true, opacity: 0, depthWrite: false,
+      });
+      mesh.traverse((o) => { if (o.isMesh) o.material = material; });
+      mesh.rotation.y = facing;
+      mesh.visible = false;
+      return { mesh, material };
+    }
+    const dashGhosts = {
+      you: createGhost(0),
+      youMate: createGhost(0),
+      cpu: createGhost(Math.PI),
+      cpuMate: createGhost(Math.PI),
+    };
+    const GHOST_KEYS = Object.keys(dashGhosts);
 
     const impactFlash = scene3d.createImpactFlash();
     const trail = scene3d.createTrail();
     const smashHint = scene3d.createSmashHint();
     const swingGuide = scene3d.createSwingGuide();
     scene.add(
-      you, cpu, youMate, cpuMate, ballMesh, dashGhost,
+      you, cpu, youMate, cpuMate, ballMesh,
+      ...GHOST_KEYS.map((key) => dashGhosts[key].mesh),
       shadows.ball, shadows.you, shadows.cpu, shadows.youMate, shadows.cpuMate,
       impactFlash, trail, smashHint, swingGuide,
     );
@@ -72,10 +86,13 @@
       mesh.position.set(state.x, 0, state.z);
       scene3d.setSwingPose(mesh, state, !!tossing);
       scene3d.setGaitPose(mesh, state.speed, maxSpeed, dt);
-      // スマッシュのジャンプ・飛びつきボレーの倒れ込みは歩行の後（同じ関節を上書きする
-      // ため）。同時に起きることはないので、浮いた高さは足し合わせて影に渡す。
+      // スマッシュのジャンプ・飛びつきボレーの倒れ込み・ツイーナーの跳躍は歩行の後
+      // （同じ関節を上書きするため）。同時に起きることはないので、浮いた高さは
+      // 足し合わせて影に渡す。
       const lift = scene3d.applySmashJump(mesh, state)
-        + scene3d.applyDiveLean(mesh, state);
+        + scene3d.applyDiveLean(mesh, state)
+        + scene3d.applyTweenerHop(mesh, state)
+        + scene3d.applyJackknifeLeap(mesh, state);
       scene3d.placeGroundShadow(shadow, state, lift);
     }
 
@@ -96,13 +113,18 @@
 
       // 縮地の残像（跳ぶ前の位置に一瞬だけ残る分身）。リプレイでも同じように出したいので、
       // 生の state とリプレイのコマの両方が通る applyFrame() の中で面倒を見る。
-      const dash = state.you.dash;
-      dashGhost.visible = !!dash;
-      if (dash) {
-        dashGhost.position.set(dash.x, 0, dash.z);
-        ghostMaterial.opacity = SPECIAL.DASH.FX_OPACITY
+      // ダブルスの2人（youMate/cpuMate）はシングルスでは state にいてもコートに出ていないので、
+      // 本体と同じく doubles のときだけ出す。
+      GHOST_KEYS.forEach((key) => {
+        const ghost = dashGhosts[key];
+        const dash = state[key] && (state.doubles || key === 'you' || key === 'cpu')
+          ? state[key].dash : null;
+        ghost.mesh.visible = !!dash;
+        if (!dash) return;
+        ghost.mesh.position.set(dash.x, 0, dash.z);
+        ghost.material.opacity = SPECIAL.DASH.FX_OPACITY
           * clamp(dash.t / SPECIAL.DASH.FX_T, 0, 1);
-      }
+      });
 
       const ball = state.ball;
       ballMesh.position.set(ball.x, ball.y, ball.z);
@@ -129,6 +151,8 @@
         chargeFrac: p.chargeFrac, swingCharge: p.swingCharge, speed: p.speed,
         // 必殺技（フォーム・ジャンプの高さ・倒れ込みに効く）と、縮地の残像。
         special: p.special || null,
+        // 跳躍（打球のモーションとは別の時計。スマッシュ／ジャックナイフ）
+        leap: p.leap ? { t: p.leap.t, kind: p.leap.kind } : null,
         dash: p.dash ? { x: p.dash.x, z: p.dash.z, t: p.dash.t } : null,
       };
     }
@@ -137,6 +161,8 @@
       recClock += dt;
       history.push({
         t: recClock,
+        // startReplay() が「今のサーブの構えより前」を切り落とすのに使う（IN_POINT 参照）
+        phase: state.phase,
         ball: {
           x: state.ball.x, y: state.ball.y, z: state.ball.z,
           impact: state.ball.impact, impactPower: state.ball.impactPower,
@@ -146,6 +172,7 @@
         youMate: snapshotPlayer(state.youMate),
         cpuMate: snapshotPlayer(state.cpuMate),
         doubles: state.doubles,
+        tossing: state.tossActive === true && state.server === 'you',
       });
       while (history.length > 1 && recClock - history[0].t > REPLAY.WINDOW_SEC) history.shift();
     }
@@ -169,9 +196,24 @@
       camera.lookAt(0, REPLAY.CAM_LOOK_Y, z);
     }
 
+    /**
+     * 1本のサーブの構え（beginServe() で phase が 'serve' になる）から決着までの間の phase。
+     * これ以外（'fault'・'over' など）のコマは、別のサーブ／前のポイントのもの。
+     */
+    const IN_POINT = new Set(['serve', 'rally']);
+
     /** ポイントが決まった瞬間に main.js から呼ぶ。録れていなければ何もしない。 */
     function startReplay() {
       if (history.length < 2) return;
+      // 再生してよいのは、決着したサーブの構えに入ってから後のコマだけ。
+      // 以前は直近 MAX_PLAY_SEC ぶんをそのまま切り出していたため、サーブで決まる短い
+      // ポイント（特にダブルフォルト：CPU は構えてから打つまで2秒足らず）では、頭に
+      // 1本目のフォールトの後始末（ネットに掛かって止まったボールなど）や前のポイントの
+      // 終わりが混ざり、そこから beginServe() が選手とボールをスタンスへ瞬間移動させる
+      // コマまで映っていた＝「アウトなのにネットに掛かる」「立ち位置が一瞬おかしい」。
+      let from = history.length - 1; // 最後のコマ＝決着の瞬間（phase は 'over'）
+      while (from > 0 && IN_POINT.has(history[from - 1].phase)) from--;
+      const segment = history.slice(from);
       // MAX_PLAY_SEC で長さを絞るのは前側（リード）だけ。末尾は必ず history の最後の
       // コマ＝ポイントが決まった瞬間（アウトならボールが実際にベースラインを越えた
       // 座標）まで含める。ここを history.slice() のまま先頭から MAX_PLAY_SEC ぶんだけ
@@ -179,8 +221,9 @@
       // リプレイがボールの決着より手前で止まって見えていた。
       const endT = history[history.length - 1].t;
       const startT = endT - REPLAY.MAX_PLAY_SEC;
-      reel = history.filter((f) => f.t >= startT);
-      if (reel.length < 2) reel = history.slice(-2);
+      reel = segment.filter((f) => f.t >= startT);
+      if (reel.length < 2) reel = segment.slice(-2);
+      if (reel.length < 2) return; // このサーブのコマが録れていない
       replayClock = 0;
       replaying = true;
     }
@@ -217,7 +260,7 @@
         // 落ち着かない切り替わりになってしまう。
         if (replayClock <= playEnd + REPLAY.HOLD_SEC) {
           const frame = frameAt(Math.min(replayClock, playEnd));
-          applyFrame(frame, dt, false);
+          applyFrame(frame, dt, frame.tossing);
           scene3d.updateTrail(trail, NO_TRAIL); // 再生そのものが「振り返り」なので軌跡は隠す
           scene3d.placeSmashHint(smashHint, null);
           scene3d.placeSwingGuide(swingGuide, null, state.you);

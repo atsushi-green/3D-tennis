@@ -96,6 +96,58 @@ ok(pointLabel(3, 3) === '40' && pointLabel(4, 3) === 'Ad' && pointLabel(3, 4) ==
   ok(m.serveSide === -1, `after 2 tiebreak points, the serve side flips back, got ${m.serveSide}`);
 }
 
+// --- ブレークポイント／ゲームポイント／セットポイントの判定（scoring.pointStakes） ---
+{
+  const { pointStakes } = R.scoring;
+  /** 判定結果を「呼び名(取れば決まる側) bp=ブレークのチャンスか」の1行に畳む */
+  const at = (setup, server) => {
+    const m = new Match();
+    Object.assign(m, setup);
+    const s = pointStakes(m, server);
+    return s ? `${s.label}(${s.team}) bp=${s.breakPoint}` : 'なし';
+  };
+  const g = (you, cpu) => ({ games: { you, cpu } });
+
+  ok(at({ points: { you: 3, cpu: 0 } }, 'you') === 'ゲームポイント(you) bp=false',
+    `40-0 on serve is a game point, got ${at({ points: { you: 3, cpu: 0 } }, 'you')}`);
+  ok(at({ points: { you: 0, cpu: 3 } }, 'you') === 'ブレークポイント(cpu) bp=true',
+    `0-40 on serve is a break point for the receiver, got ${at({ points: { you: 0, cpu: 3 } }, 'you')}`);
+  ok(at({ points: { you: 3, cpu: 3 } }, 'you') === 'なし', 'deuce has nothing riding on it');
+  ok(at({ points: { you: 4, cpu: 3 } }, 'you') === 'ゲームポイント(you) bp=false', 'advantage on serve is a game point');
+  ok(at({ points: { you: 3, cpu: 4 } }, 'you') === 'ブレークポイント(cpu) bp=true', 'advantage against serve is a break point');
+  ok(at({ points: { you: 2, cpu: 0 } }, 'you') === 'なし', '30-0 is not a game point yet');
+
+  // セットまで決まる1点は「セットポイント」が見出しになる
+  ok(at({ ...g(5, 0), points: { you: 3, cpu: 0 } }, 'you') === 'セットポイント(you) bp=false',
+    '5-0 40-0 on serve is a set point');
+  ok(at({ ...g(0, 5), points: { you: 0, cpu: 3 } }, 'you') === 'セットポイント(cpu) bp=true',
+    'a set point won by the receiver is still counted as a break chance');
+  // 5-6 で1ゲーム取っても 6-6＝タイブレークに入るだけ（セットは決まらない）
+  ok(at({ ...g(5, 6), points: { you: 3, cpu: 0 } }, 'you') === 'ゲームポイント(you) bp=false',
+    `5-6 40-0 only reaches 6-6 (a tiebreak), so it is not a set point yet, got ${at({ ...g(5, 6), points: { you: 3, cpu: 0 } }, 'you')}`);
+  ok(at({ ...g(6, 5), points: { you: 3, cpu: 0 } }, 'you') === 'セットポイント(you) bp=false',
+    '6-5 40-0 on serve is a set point (7-5 takes the set)');
+
+  // タイブレーク：取ればセットなので常にセットポイント。ブレークとしては数えない
+  const tb = { games: { you: 6, cpu: 6 }, tiebreak: true };
+  ok(at({ ...tb, tiebreakPoints: { you: 6, cpu: 3 } }, 'cpu') === 'セットポイント(you) bp=false',
+    'a tiebreak point to close it out is a set point, and never a break point');
+  ok(at({ ...tb, tiebreakPoints: { you: 5, cpu: 5 } }, 'you') === 'なし', '5-5 in a tiebreak has nothing riding on it');
+  ok(at({ ...tb, tiebreakPoints: { you: 6, cpu: 6 } }, 'you') === 'なし', '6-6 in a tiebreak needs a 2-point margin');
+
+  // peek() はスコアを一切進めない
+  {
+    const m = new Match();
+    m.points = { you: 3, cpu: 0 };
+    const snapshot = JSON.stringify([m.points, m.games, m.tiebreak, m.tiebreakPoints]);
+    ok(m.peek('you').type === 'game', 'peek reports what awardPoint would return');
+    ok(JSON.stringify([m.points, m.games, m.tiebreak, m.tiebreakPoints]) === snapshot,
+      'and peek leaves the score exactly as it was');
+    ok(m.awardPoint('you').type === 'game', 'awardPoint still works afterwards');
+    ok(m.games.you === 1, 'and it is the one that actually moves the score');
+  }
+}
+
 const {
   HALF_W, HALF_L, COURT, PLAYER, SERVE, BOUNDS,
 } = R.config;
@@ -103,6 +155,76 @@ const fakeInput = { moveX: 0, moveZ: 0, lob: false };
 const noHooks = {
   sound() {}, call() {}, clearCall() {}, score() {}, wind() {}, serveSpeed() {}, matchEnd() {},
 };
+
+// --- Game: 1点ごとに stakes が立ち、ブレークポイントがスタッツに乗る ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(false, 'you'); // 人間のサーブから
+  ok(g.stakes === null, '0-0 has nothing riding on it');
+
+  // 0-40 まで CPU に取らせる＝ブレークポイント
+  g.match.points = { you: 0, cpu: 2 };
+  g.endPoint('cpu', 'ツーバウンド'); // 0-40 になり、次のポイントの stakes が立つ
+  for (let i = 0; i < 60 * 5 && g.phase !== 'serve'; i++) g.update(1 / 60);
+  ok(!!g.stakes && g.stakes.kind === 'break' && g.stakes.team === 'cpu',
+    `0-40 on the human serve is a break point for the CPU, got ${JSON.stringify(g.stakes)}`);
+
+  // サーバーが凌ぐ＝チャンスは数えるが converted は増えない
+  g.endPoint('you', 'ツーバウンド');
+  ok(g.stats.cpu.breakPoints === 1 && g.stats.cpu.breaksWon === 0,
+    `a saved break point counts as a chance only, got ${g.stats.cpu.breakPoints}/${g.stats.cpu.breaksWon}`);
+  ok(g.stakes === null, 'the badge clears the moment the point is decided');
+
+  // 15-40 でもう一度ブレークポイント。今度は決める
+  for (let i = 0; i < 60 * 5 && g.phase !== 'serve'; i++) g.update(1 / 60);
+  ok(!!g.stakes && g.stakes.kind === 'break', 'precondition: 15-40 is another break point');
+  g.endPoint('cpu', 'ツーバウンド');
+  ok(g.stats.cpu.breakPoints === 2 && g.stats.cpu.breaksWon === 1,
+    `converting it counts both, got ${g.stats.cpu.breakPoints}/${g.stats.cpu.breaksWon}`);
+  ok(g.match.games.cpu === 1, 'precondition: the CPU actually broke');
+  ok(g.stats.you.breakPoints === 0, 'the serving side is not credited with a break chance');
+}
+
+// --- ブレークで取ったゲームはコールでそう言う／かかっていた1点は歓声も変わる ---
+{
+  const calls = [];
+  const sounds = [];
+  const hooks = {
+    ...noHooks,
+    call: (big, sub) => calls.push(`${big}|${sub || ''}`),
+    sound: (name, ...args) => sounds.push([name, ...args]),
+  };
+  const g = new R.Game({ input: fakeInput, hooks });
+  g.start(false, 'you');
+  g.match.points = { you: 0, cpu: 3 }; // 0-40＝ブレークポイント
+  g.beginServe();
+  ok(!!g.stakes && g.stakes.breakPoint, 'precondition: a break point is on');
+  calls.length = 0;
+  sounds.length = 0;
+  g.endPoint('cpu', 'ツーバウンド');
+  ok(calls.some((c) => c.includes('ブレーク！')), `the game call says it was a break, got ${JSON.stringify(calls)}`);
+  const point = sounds.find((sfx) => sfx[0] === 'point');
+  ok(!!point && point[4] === 'break',
+    `the crowd is told a break point was converted, got ${JSON.stringify(point)}`);
+
+  // 凌いだ側のときは 'saved'
+  const g2 = new R.Game({ input: fakeInput, hooks });
+  g2.start(false, 'you');
+  g2.match.points = { you: 0, cpu: 3 };
+  g2.beginServe();
+  sounds.length = 0;
+  g2.endPoint('you', 'ツーバウンド');
+  const saved = sounds.find((sfx) => sfx[0] === 'point');
+  ok(!!saved && saved[4] === 'saved', `saving it is told apart, got ${JSON.stringify(saved)}`);
+
+  // 何もかかっていない1点では従来どおり（null＝倍率1）
+  const g3 = new R.Game({ input: fakeInput, hooks });
+  g3.start(false, 'you');
+  sounds.length = 0;
+  g3.endPoint('you', 'ツーバウンド');
+  const plain = sounds.find((sfx) => sfx[0] === 'point');
+  ok(!!plain && plain[4] === null, `an ordinary point passes null, got ${JSON.stringify(plain)}`);
+}
 
 /**
  * ボールを「ちょうど (x, z) へ接地する1ステップ」の状態に置いてから bounce() を呼ぶ。
@@ -189,6 +311,41 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(full.length === 1, `serveSpeed hook fires exactly once per serve, got ${full.length}`);
   ok(full[0] > soft[0] * 1.3,
     `full-power serve reads clearly faster than a tap serve: full=${full[0].toFixed(0)} soft=${soft[0].toFixed(0)}`);
+}
+
+// --- エース（サーブだけで決まった1点）は、中央のコールに球種だけでなく球速も出す ---
+{
+  const aceCall = (finish) => {
+    const shots = [];
+    let kmh = null;
+    const g = new R.Game({
+      input: fakeInput,
+      hooks: {
+        ...noHooks,
+        call: (big, sub, shot) => shots.push(shot),
+        serveSpeed: (v) => { if (v != null) kmh = v; },
+      },
+    });
+    g.started = true;
+    g.newPoint();
+    tossAndHit(g, Math.round(SERVE.CHARGE_SWEET_T * 60));
+    finish(g);
+    return { shot: shots[shots.length - 1], kmh };
+  };
+
+  // 一度も触れられずに2バウンド＝エース。球種名のうしろに整数の km/h が付く。
+  const ace = aceCall((g) => g.endPoint('you', 'ツーバウンド'));
+  ok(/サービス|キックサーブ/.test(ace.shot), `an ace is credited to the serve, got ${ace.shot}`);
+  ok(ace.shot.endsWith(`${Math.round(ace.kmh)}km/h`),
+    `and carries the same speed the HUD showed: shot=${ace.shot} serveSpeed=${ace.kmh}`);
+
+  // 返球された後に決まった1点は従来どおり球種だけ（速さはもうその1本のものではない）。
+  const rally = aceCall((g) => { g.serveInFlight = false; g.endPoint('you', 'ツーバウンド'); });
+  ok(!/km\/h/.test(rally.shot), `a rally winner keeps the plain shot name, got ${rally.shot}`);
+
+  // 相手のミスで取った1点も同じ（エースではない）。
+  const miss = aceCall((g) => { g.serveInFlight = false; g.endPoint('you', 'アウト'); });
+  ok(!/km\/h/.test(miss.shot), `an opponent error keeps the plain shot name, got ${miss.shot}`);
 }
 
 // --- ワイド×フル溜めのサーブは、フォールトにならずサイドラインまで十分な余白を残す ---
@@ -1881,6 +2038,56 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(g.you.charging === false, 'charging is cancelled when the toss resets');
 }
 
+// --- 溜めキーを押しっぱなしのままポイントをまたいでも、次のポイントで構えられる ---
+// this.you.charging は「キーが今も押されているか」そのものなので、ポイントが決まった
+// 瞬間（phase==='over'）にここを false へ落としてしまうと、キーは押されたままで
+// keydown が二度と来ない＝chargeStart() が呼ばれず、次のポイントで構えが出ないまま
+// 離しても chargeRelease() が素通りする、という手詰まりになっていた。
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(false, 'cpu'); // cpu のサーブ＝人間はレシーブ側
+  g.chargeStart('flat'); // サーブを待ちながらラケットを引く（押したまま離さない）
+  ok(g.you.charging === true, 'precondition: holding while waiting for the serve');
+
+  for (let i = 0; i < 60 * 30 && g.phase !== 'over'; i++) g.update(1 / 60);
+  ok(g.phase === 'over', 'precondition: the point finished');
+  ok(g.you.charging === true, 'the hold survives the end of the point (the key is still down)');
+  ok(g.you.chargeTime === 0, 'but the charge itself is emptied between points');
+
+  for (let i = 0; i < 60 * 30 && g.phase !== 'serve'; i++) g.update(1 / 60);
+  ok(g.phase === 'serve' && g.servingPlayer() !== 'you', 'precondition: waiting for the next serve');
+  for (let i = 0; i < 20; i++) g.update(1 / 60);
+  ok(g.you.charging === true, 'still holding into the next point');
+  ok(g.you.chargeTime > 0, `the takeback starts filling again, got ${g.you.chargeTime}`);
+  ok(g.you.prep !== null, `and the stance is shown again, got ${g.you.prep}`);
+
+  // サーブが来たら、握り直さずに離すだけで溜まったリターンが打てる
+  for (let i = 0; i < 60 * 10 && g.phase !== 'rally'; i++) g.update(1 / 60);
+  ok(g.phase === 'rally', 'precondition: the serve is on its way');
+  g.chargeRelease();
+  ok(g.you.swing > 0, 'releasing swings without having to re-press the key');
+  ok(g.you.swingCharge > 0, `and the swing carries a real charge, got ${g.you.swingCharge}`);
+}
+
+// --- フォールトのコール中に押し直しても、そのまま2本目の構えに入れる ---
+// chargeStart() が phase==='serve' しか見ていなかった頃は、この1.3秒の間に押すと
+// どこにも引っかからず、キーが押されたままなので握り直しになっていた。
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(false, 'cpu');
+  // 1本目をわざとロングにしてフォールトさせる
+  for (let i = 0; i < 60 * 60 && g.phase !== 'fault'; i++) {
+    g.update(1 / 60);
+    if (g.phase === 'rally' && g.serveInFlight) { g.ball.vz *= 1.8; g.ball.vy *= 1.3; }
+  }
+  ok(g.phase === 'fault', 'precondition: the first serve faulted');
+  g.chargeStart('flat');
+  ok(g.you.charging === true, 'pressing during the fault call arms the takeback');
+  for (let i = 0; i < 20; i++) g.update(1 / 60);
+  ok(g.you.chargeTime > 0, `and it fills while waiting for the second serve, got ${g.you.chargeTime}`);
+  ok(g.you.prep !== null, `the stance is shown during the fault call, got ${g.you.prep}`);
+}
+
 // --- サーブのコースを ←→ で打ち分けられる ---
 {
   const { AIM_WIDE_MIN, AIM_WIDE_MAX, AIM_T_MIN, AIM_T_MAX, AIM_BODY_MIN, AIM_BODY_MAX } = SERVE;
@@ -2295,6 +2502,54 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(g.cpu.x !== before.x || g.cpu.z !== before.z, 'cpu starts chasing once it has reacted');
 }
 
+// --- サーブにも必ず反応遅延が掛かる（前のポイントで最後に打ったのが誰であっても） ---
+// ball.last は beginServe() をまたいでも前のポイントの値のまま残る。以前は
+// lastBallOwnerSeen をラリー外でも更新していたため、「前のポイントの最後の打者」＝
+// 「次のサーバー」のときだけ owner が変化せず、そのサーブへの反応遅延が丸ごと
+// 飛んでいた（＝自分のミス／ウィナーで終えた次の自分のサーブでは CPU がノータイム
+// でリターンに動き出す）。どちらのケースでも同じだけ掛かることを見る。
+{
+  const { CPU_REACT } = R.config.PLAYER;
+  /** 人間のサーブを1本打たせて、そのときの cpu の反応遅延を返す（シングルス）。 */
+  const serveWith = (previousHitter) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(false, 'you');
+    g.ball.last = previousHitter; // 前のポイントの名残
+    g.lastBallOwnerSeen = null;
+    for (let i = 0; i < 10; i++) g.update(1 / 60); // サーブ待ちのフレーム
+    g.chargeStart('flat');
+    g.you.chargeTime = 0.5;
+    for (let i = 0; i < 5; i++) g.update(1 / 60); // トスが上がる
+    g.chargeRelease();
+    g.update(1 / 60);
+    return g;
+  };
+  const want = CPU_REACT * R.config.ATTRS.cpu.react;
+  const after = serveWith('you');
+  ok(after.phase === 'rally', `precondition: the serve went out, phase=${after.phase}`);
+  ok(Math.abs(after.reactTimers.cpu - want) < 1e-9,
+    `the previous point ending on a "you" shot still gives the CPU its reaction delay: `
+    + `${after.reactTimers.cpu} (want ${want})`);
+  ok(Math.abs(serveWith('cpu').reactTimers.cpu - want) < 1e-9,
+    'and so does a previous point that ended on a "cpu" shot (unchanged)');
+
+  // ダブルスも同じ：cpu チームがサーブするとき youMate に反応遅延が掛かる
+  const doublesServe = (previousHitter) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(true, 'cpu');
+    g.ball.last = previousHitter;
+    g.lastBallOwnerSeen = null;
+    for (let i = 0; i < 10; i++) g.update(1 / 60);
+    for (let guard = 0; g.phase === 'serve' && guard < 600; guard++) g.update(1 / 60);
+    return g.reactTimers.youMate;
+  };
+  const wantMate = CPU_REACT * R.config.ATTRS.youMate.react;
+  ok(Math.abs(doublesServe('cpu') - wantMate) < 1e-9,
+    `doubles: the receiving partner reacts late even when the serving team hit last, `
+    + `got ${doublesServe('cpu')} (want ${wantMate})`);
+  ok(Math.abs(doublesServe('you') - wantMate) < 1e-9, 'doubles: unchanged the other way round');
+}
+
 // --- タイブレーク：Game#endPoint() 経由でも、1本目はサーバーそのまま・以降は2ポイントごとに交代する ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
@@ -2318,6 +2573,57 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   g.phase = 'rally';
   g.endPoint('you', 'test'); // 4本目
   ok(g.server === 'you', `server stays the same after the 4th point, got ${g.server}`);
+}
+
+// --- ダブルスのタイブレーク：4人がセットと同じ順番で回り、必殺技はサーブ権が移るたびに戻る ---
+// (退行テスト: タイブレーク中はチーム内の担当（serverPartner）を回していなかったため、
+//  主力の you/cpu だけが交互にサーブし、パートナーは一度もサーブしなかった。必殺技の回復も
+//  「6ポイントごと」で、サーブ権が移るのは奇数本目の後なので、必ず同じ人の2本の途中に来ていた)
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.setSpecials(['hawkEye']);
+  g.start(true, 'you');
+  // 全ゲームをサーブ側が取って 6-6 まで進める（通常のゲームのローテーションを通してタイブレークに入る）
+  for (let game = 0; game < 12; game++) {
+    const team = g.server;
+    for (let p = 0; p < 4; p++) { g.phase = 'rally'; g.endPoint(team, 'test'); }
+  }
+  ok(g.match.tiebreak && g.match.games.you === 6 && g.match.games.cpu === 6,
+    `precondition: doubles reaches a 6-6 tiebreak, got ${g.match.games.you}-${g.match.games.cpu} tb=${g.match.tiebreak}`);
+
+  const servers = [];
+  const receivers = [];
+  const refreshed = [];
+  for (let p = 0; p < 14; p++) {
+    servers.push(g.servingPlayer());
+    receivers.push(g.receivingPlayer(g.server === 'you' ? 'cpu' : 'you', g.match.serveSide));
+    g.specialUses.hawkEye = 0; // 毎ポイント使い切った状態にして、戻ったかどうかだけを見る
+    g.phase = 'rally';
+    g.endPoint(p % 2 ? 'you' : 'cpu', 'test'); // 交互に取らせて 7-7 まで続ける
+    refreshed.push(g.usesLeft('hawkEye') > 0);
+  }
+  // ITF ルール 5(b)：1本目は順番の人、以降は相手チームの順番の人から2本ずつ、チーム内はセットと同じ順番
+  const wantServers = ['you', 'cpu', 'cpu', 'youMate', 'youMate', 'cpuMate', 'cpuMate',
+    'you', 'you', 'cpu', 'cpu', 'youMate', 'youMate', 'cpuMate'];
+  ok(servers.join() === wantServers.join(),
+    `doubles tiebreak serve order rotates through all four players, got ${servers.join()}`);
+  // レシーブするコートはセットを通して各選手で固定（パートナーは -1 側、主力は +1 側）
+  const wantReceivers = ['cpuMate', 'you', 'youMate', 'cpu'];
+  ok(receivers.every((r, i) => r === wantReceivers[i % 4]),
+    `doubles tiebreak receivers keep their courts from the set, got ${receivers.join()}`);
+  // 必殺技はサーブ権が移った直後（奇数本目の後）だけ戻り、同じ人の2本の途中では戻らない
+  ok(refreshed.every((r, i) => r === (i % 2 === 0)),
+    `specials refresh exactly when the serve changes hands in a tiebreak, got ${refreshed.join()}`);
+
+  // タイブレークで決まったセットの次は、タイブレークの1本目をサーブした側（you）の相手から。
+  // 7-7 から 7-8 → 8-8 → 9-8 → 10-8 と進めると、最後の1本を打つのは cpu（cpu チーム）なので、
+  // 「最後にサーブした側の相手」では you になってしまう。
+  for (const w of ['cpu', 'you', 'you']) { g.phase = 'rally'; g.endPoint(w, 'test'); }
+  ok(g.servingPlayer() === 'cpu', `precondition: cpu serves the last point, got ${g.servingPlayer()}`);
+  g.phase = 'rally'; g.endPoint('you', 'test');
+  ok(g.match.games.you === 7 && g.match.games.cpu === 6, `you win the tiebreak 7-6, got ${g.match.games.you}-${g.match.games.cpu}`);
+  ok(g.server === 'cpu', `the team that received first in the tiebreak serves the next set, got ${g.server}`);
+  ok(g.tiebreakOpener === null, 'the tiebreak opener is forgotten once the set is decided');
 }
 
 // --- タイブレーク：Game#endPoint() を通しても、取った側がそのままセットを取る ---
@@ -2438,6 +2744,257 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const cover = coverPosition(2, 1.8);
   ok(cover.z === 1.8, `coverPosition uses the given net depth, z=${cover.z}`);
   ok(cover.x < 0, `coverPosition mirrors away from the responder's side, x=${cover.x}`);
+}
+
+// --- ダブルス雁行陣：前衛の構えが展開（クロス／ストレート）で変わる ---
+// クロス展開（相手後衛と味方後衛が対角）＝相手後衛と同じ側へ寄ってストレートを守る。
+// ストレート展開（同じ側）＝真ん中を越えてラリー側へ踏み込み、ネットにも詰める（攻めの姿勢）。
+{
+  const { frontPosition } = R.ai;
+  const { DOUBLES } = R.config;
+  const NET = DOUBLES.NET_Z_CPU;
+
+  const cross = frontPosition({ x: 3 }, { x: -3 }, NET);   // 相手 右 / 味方 左
+  const straight = frontPosition({ x: 3 }, { x: 3 }, NET); // 相手 右 / 味方 右
+  ok(cross.x > straight.x && straight.x > 0,
+    `cross guards wider than straight, both on the hitter's side: cross=${cross.x.toFixed(2)} straight=${straight.x.toFixed(2)}`);
+  ok(cross.x >= DOUBLES.FRONT_GUARD_X - 0.01,
+    `cross: the net player covers the down-the-line lane, x=${cross.x.toFixed(2)}`);
+  ok(straight.x >= DOUBLES.FRONT_LEAN_X - 0.01,
+    `straight: the net player steps past the middle onto the rally side, x=${straight.x.toFixed(2)}`);
+  ok(Math.abs(straight.z) < Math.abs(cross.z),
+    `straight: and closer to the net (attacking), |z|=${Math.abs(straight.z).toFixed(2)} vs ${Math.abs(cross.z).toFixed(2)}`);
+
+  // 鏡映し：左右を入れ替えれば立ち位置も左右が入れ替わるだけ
+  const crossL = frontPosition({ x: -3 }, { x: 3 }, NET);
+  ok(Math.abs(crossL.x + cross.x) < 1e-9 && crossL.z === cross.z,
+    `mirrored sides mirror the stance, got x=${crossL.x.toFixed(2)}`);
+  // 相手後衛が中央にいるうちは、どちらにも出られるよう前衛も中央
+  ok(Math.abs(frontPosition({ x: 0 }, { x: 3 }, NET).x) < 0.01,
+    'a centred opponent keeps the net player centred');
+  // you 陣地（netZ が負）でも自陣側に構える
+  ok(frontPosition({ x: 3 }, { x: -3 }, DOUBLES.NET_Z_YOU).z < 0,
+    'the you-side net player stands on its own side of the net');
+}
+
+// --- ダブルス雁行陣：前衛は自分の真横だけでなく、半歩ぶん前後を通る球にも触れる ---
+// (退行テスト: 以前の canPoach() は「自分がいまいる深さ z ちょうど」の1点しか見ておらず、
+//  頭の少し上を越えていく球や半歩前を通る球を目の前で素通りさせていた＝ユーザー報告
+//  「近くに来たボールを見逃す」)
+{
+  const { poachSpot } = R.ai;
+  const { solveShot, predictAtZ } = R.physics;
+  const front = { x: 2.0, z: 1.8 }; // cpu 側のネット際に立つ前衛
+  const from = { x: 0, y: 1.0, z: -10 };
+  const ball = Object.assign(
+    { x: from.x, y: from.y, z: from.z, spin: 'flat', wind: 0, curve: 0, bounces: 0, age: 0.25 },
+    solveShot(from, { x: 1.8, y: R.config.PHYSICS.BALL_R, z: 6 }, 1.3, undefined, 'flat', 0),
+  );
+  const atOwnZ = predictAtZ(ball, front.z);
+  ok(atOwnZ && atOwnZ.y > R.config.PLAYER.CPU_REACH_Y,
+    `precondition: right at the net player's line the ball is over their head, y=${atOwnZ && atOwnZ.y.toFixed(2)}`);
+  const spot = poachSpot(front, ball);
+  ok(spot && Math.abs(spot.z - front.z) > 0.01,
+    `half a step off their line they can still volley it, got ${JSON.stringify(spot)}`);
+  ok(spot && Math.abs(spot.z) <= R.config.PLAYER.VOLLEY_Z && Math.abs(spot.z) >= R.config.DOUBLES.POACH_MIN_Z,
+    `and the spot stays inside the net zone, z=${spot && spot.z.toFixed(2)}`);
+
+  // 完全に頭上を越えていくロブには手を出さない（バウンドを待つ／後衛に任せる）
+  const lob = Object.assign(
+    { x: from.x, y: from.y, z: from.z, spin: 'flat', wind: 0, curve: 0, bounces: 0, age: 0.25 },
+    solveShot(from, { x: 0, y: R.config.PHYSICS.BALL_R, z: 10.5 }, 1.9, undefined, 'flat', 0),
+  );
+  ok(poachSpot(front, lob) === null, 'a lob over their head is not claimed as a poach');
+}
+
+// --- ダブルス雁行陣：仕掛けるポーチ（ストレートを守る位置から中央へ出ていける） ---
+// poachSpot() は「立っていれば触れる球」しか拾わないので、それだけではクロス展開で
+// サイドを守っている前衛は一生ポーチに出られない。poachRun() は走る時間を織り込む。
+{
+  const { poachRun, poachSpot } = R.ai;
+  const { solveShot } = R.physics;
+  const from = { x: 3, y: 1.0, z: -10 };
+  // 相手後衛(右)が左へクロスで打った球。前衛は右サイド(ストレート)を守って立っている。
+  // 狙いの横位置は PLAYER.CPU_CHASE で1秒ほどに走り切れる範囲にしてある（前衛の守備
+  // 位置 FRONT_GUARD_X=3.1 から 2〜3m の横移動＝現実のポーチの間合い）。ここをコート
+  // 半面ぶん（x=-2.6 など）にすると、ネット際を1秒で5m以上走れる足を前提にすることになる。
+  const ball = Object.assign(
+    { x: from.x, y: from.y, z: from.z, spin: 'flat', wind: 0, curve: 0, bounces: 0, age: 0.05 },
+    solveShot(from, { x: -1.5, y: R.config.PHYSICS.BALL_R, z: 8.5 }, 1.0, undefined, 'flat', 0),
+  );
+  const front = { x: R.config.DOUBLES.FRONT_GUARD_X, z: R.config.DOUBLES.NET_Z_CPU };
+  ok(poachSpot(front, ball) === null,
+    'precondition: standing still on the line, the net player cannot touch the cross-court ball');
+  const run = poachRun(ball, front, 1);
+  // 「守っていた線を捨てて中央へ出ていける」ことが見たいので、絶対位置(x<0)ではなく
+  // 守備位置からどれだけ寄れたかで見る。
+  ok(run && run.x < front.x - 1,
+    `but reading it early they can run across and cut it off, got ${JSON.stringify(run)}`);
+  ok(run && run.z > 0 && Math.abs(run.z) <= R.config.PLAYER.VOLLEY_Z,
+    `and the interception stays in the net zone, z=${run && run.z.toFixed(2)}`);
+
+  // 走っても間に合わない球には仕掛けない（出ていって抜かれる最悪の形を避ける）
+  const fast = Object.assign(
+    { x: from.x, y: from.y, z: from.z, spin: 'flat', wind: 0, curve: 0, bounces: 0, age: 0.05 },
+    solveShot(from, { x: -4.6, y: R.config.PHYSICS.BALL_R, z: 9.5 }, 0.42, undefined, 'flat', 0),
+  );
+  ok(poachRun(fast, front, 1) === null, 'a ball it cannot reach in time is not chased');
+  // もうバウンドした球はポーチではない
+  ok(poachRun({ ...ball, bounces: 1 }, front, 1) === null, 'a ball that already bounced is not a poach');
+}
+
+// --- ダブルス雁行陣：どちらが取りにいくか（前衛が下がりすぎて陣形が崩れない） ---
+{
+  const { pairResponder } = R.ai;
+  const { solveShot } = R.physics;
+  const back = { x: 0, z: 10.9 };
+  const front = { x: 2.0, z: 1.8 };
+  const from = { x: 0, y: 1.0, z: -10 };
+  const shot = (tx, tz, flight) => Object.assign(
+    { x: from.x, y: from.y, z: from.z, spin: 'flat', wind: 0, curve: 0, bounces: 0, age: 0.25 },
+    solveShot(from, { x: tx, y: R.config.PHYSICS.BALL_R, z: tz }, flight, undefined, 'flat', 0),
+  );
+  // 深い展開球は後衛の持ち場。前衛の近くを通っても（通過点が高すぎて触れないなら）出ていかない
+  ok(pairResponder(back, front, shot(-3, 9.5, 1.0)) === 'back',
+    'a deep ball to the open side is the baseliner\'s ball');
+  // ネット際に落ちる短い球は前衛の持ち場（後衛をわざわざ走らせない）
+  ok(pairResponder(back, front, shot(2.5, 2.2, 0.75)) === 'front',
+    'a short ball in front of the net player is the net player\'s ball');
+}
+
+// --- ダブルス雁行陣：前衛がポーチに出ている間、後衛はベースライン付近で開ける ---
+// (退行テスト: 以前は前衛がポーチに出ても後衛まで coverPosition()＝ネット際へ上がっており、
+//  前衛が触れなかったときに自陣の深いところががら空きになっていた)
+{
+  const { backPosition } = R.ai;
+  const { DOUBLES } = R.config;
+  const spot = backPosition(2.5, 1);
+  ok(spot.z > R.config.CPU.NET_Z,
+    `the baseliner stays back while the partner poaches, z=${spot.z.toFixed(2)}`);
+  ok(spot.x < 0, `and opens the side the poacher left, x=${spot.x.toFixed(2)}`);
+  ok(backPosition(2.5, -1).z === -spot.z, 'the you-side mirror stays on its own side');
+}
+
+// --- ダブルス：ネット際の相手の「目の前を横切る」ボレーを打たない ---
+// (退行テスト: 通常の cpuVolleyShot() は相手の逆サイドを狙う。相手もネット際にいる場面では
+//  その球が相手の真ん前を至近距離で通ることになり、反応時間0.2秒足らずでボレーを打ち返され
+//  続ける——「前衛同士のボレー合戦」というユーザー報告——の原因になっていた)
+{
+  const { doublesVolleyShot, doublesSmashShot } = R.ai;
+  // 自分は you 陣地のネット際(z=-1.5)、相手はその向かいのネット際(z=+1.5)。
+  // 打った球が相手の深さを通過するときの横位置を直線近似で求め、相手からどれだけ
+  // 離れているかを見る（ボレーもスマッシュも、離れているほど「横切っていない」）。
+  const FROM_Z = -1.5; const FOE_Z = 1.5;
+  const TOO_CLOSE = PLAYER.CPU_BLIND_REACH * 3;
+  const crossX = (fromX, shot) => fromX
+    + (shot.target.x - fromX) * ((FOE_Z - FROM_Z) / (shot.target.z - FROM_Z));
+  const run = (make, fromX, foeX) => {
+    const foe = { x: foeX, z: FOE_Z };
+    const back = { x: -foeX, z: 10.0 };
+    let crossed = 0; let lobs = 0; let clear = 0; let worst = Infinity;
+    for (let i = 0; i < 2000; i++) {
+      const shot = make(foe, back, fromX);
+      if (shot.lob) { lobs++; continue; }
+      ok(shot.target.z > 0, 'the shot still goes into the opponent half');
+      // わざとラインを割る1本（scatterOut）はコートの外へ飛ばす「ミス」なので、狙いの
+      // 評価からは外す（ミス球が相手の近くを通るのは現実どおり）。
+      if (Math.abs(shot.target.z) > HALF_L || Math.abs(shot.target.x) > COURT.DW / 2) continue;
+      const gap = Math.abs(crossX(fromX, shot) - foeX);
+      worst = Math.min(worst, gap);
+      // 至近距離で届く範囲（PLAYER.CPU_BLIND_REACH）より十分に外していれば「横切っていない」
+      if (gap < TOO_CLOSE) crossed++; else clear++;
+    }
+    return { crossed, lobs, clear, worst };
+  };
+  const volley = (foe, back, fromX) => doublesVolleyShot(foe, back, fromX, 1, 0, 1.6);
+  const smash = (foe, back, fromX) => doublesSmashShot(foe, back, fromX, 1, 0);
+
+  // 相手が中央寄りに立っている＝外側に抜くスペースがある
+  const open = run(volley, 1.8, 0.6);
+  ok(open.crossed === 0,
+    `the volley never passes within a racket of the net player: crossed=${open.crossed}, closest=${open.worst.toFixed(2)}m`);
+  ok(open.clear > 0 && open.lobs === 0,
+    `and it is played past them rather than lobbed when there is room: clear=${open.clear} lobs=${open.lobs}`);
+
+  // 前衛同士が真正面で向かい合う（同じ横位置）。ここで中央側へ逃がすと相手の x を
+  // そのまま通過してしまうので、サイドライン側へ抜ける必要がある。
+  const face = run(volley, 1.9, 1.9);
+  ok(face.crossed === 0 && face.lobs === 0,
+    `face to face it still goes outside them: crossed=${face.crossed} lobs=${face.lobs} closest=${face.worst.toFixed(2)}m`);
+
+  // スマッシュも同じ（ネット際から打つスマッシュが相手の真ん前を通らない）
+  const sm = run(smash, 1.9, 1.9);
+  ok(sm.crossed === 0,
+    `the same holds for a smash from the net: crossed=${sm.crossed}, closest=${sm.worst.toFixed(2)}m`);
+
+  // 相手がサイドライン際を締めていて、自分はさらにその外＝横に抜く隙間が残っていない。
+  // ボレーはこのときだけ頭を越す（ロブボレー）。
+  const shut = run(volley, 5.0, 4.2);
+  ok(shut.lobs === 2000,
+    `with the line shut off the volley goes over their head instead: lobs=${shut.lobs}/2000`);
+  // スマッシュを打った後にロブへ切り替えるのは形として不自然なので、そちらは従来の狙いに戻る
+  ok(run(smash, 5.0, 4.2).lobs === 0, 'a smash never turns into a lob');
+
+  // 左右を入れ替えても同じ（符号だけの対称）
+  const mirrored = run(volley, -1.8, -0.6);
+  ok(mirrored.crossed === 0 && mirrored.lobs === 0, 'the mirrored case behaves the same');
+}
+
+// --- ダブルス：向かいのネット際から打たれた球は、反応が間に合わず返せない ---
+// (退行テスト: 反応時間の下限が CPU_REFLEX_REACH(0.53m) 止まりだったため、3mほどの至近距離で
+//  打たれた球にも届いてしまい、前衛同士がボレーを打ち合い続けていた＝ユーザー報告)
+{
+  const { DOUBLES, PLAYER, PHYSICS } = R.config;
+  const netToNet = (age) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(true);
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    Object.assign(g.cpuMate, { x: 0, z: DOUBLES.NET_Z_CPU });
+    Object.assign(g.cpu, { x: 0, z: HALF_L - 0.5 });
+    // 0.4m 横をかすめて通る球。立っていれば触れる距離だが、反応する時間があるかどうか。
+    Object.assign(g.ball, {
+      x: 0.4, y: 1.2, z: DOUBLES.NET_Z_CPU, px: 0.4, py: 1.2, pz: DOUBLES.NET_Z_CPU,
+      vx: 0, vy: 0, vz: 9, bounces: 0, last: 'you', live: true, age, wind: 0, spin: 'flat',
+    });
+    g.checkSwings();
+    return g.ball.last === 'cpu';
+  };
+  ok(netToNet(0.15) === false,
+    'a ball struck from the opposite net position goes past before they can move');
+  ok(netToNet(0.9) === true,
+    'the same ball played from the baseline gives them time to reach it');
+}
+
+// --- ダブルス雁行陣：後衛の配球は「前衛を避けてクロス、隙があればストレートを抜く」 ---
+{
+  const { doublesRallyShot } = R.ai;
+  const { DOUBLES } = R.config;
+  const back = { x: -3, z: 10.5 };
+  const run = (frontX, stretch) => {
+    const front = { x: frontX, z: 1.8 };
+    let cross = 0; let pass = 0; let lob = 0;
+    for (let i = 0; i < 4000; i++) {
+      const shot = doublesRallyShot(front, back, -1, stretch, 1, 1);
+      if (shot.lob) lob++;
+      else if (Math.sign(shot.target.x) === Math.sign(frontX) && Math.abs(shot.target.x) > 2.5) pass++;
+      else cross++;
+      ok(shot.target.z < 0, 'doubles rally shot always aims into the opponent half');
+    }
+    return { cross, pass, lob };
+  };
+  // 前衛がサイドを締めている（ストレートに隙がない）＝ほぼクロス一辺倒
+  const tight = run(3.2, 0);
+  ok(tight.cross > tight.pass * 6,
+    `a net player covering the line is played cross-court: cross=${tight.cross} pass=${tight.pass}`);
+  // 前衛が中央へ寄ってポーチを狙っている＝ストレートのパッシングが増える
+  const loose = run(0.6, 0);
+  ok(loose.pass > tight.pass * 3,
+    `a net player leaning to the middle gets passed down the line more: ${tight.pass} -> ${loose.pass}`);
+  ok(loose.cross > loose.pass,
+    `but cross-court stays the staple: cross=${loose.cross} pass=${loose.pass}`);
+  // 走らされているときは抜きにいかない（無理をしない）
+  ok(run(0.6, 1).pass === 0, 'a stretched baseliner never tries the pass');
 }
 
 // --- ダブルス：chasePosition(ball, side) は side=-1 のとき自陣(z<0)側に鏡映しになる ---
@@ -2675,6 +3232,135 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `receiving team (youMate) is not dragged out of its stance before the serve, got x=${g2.youMate.x} z=${g2.youMate.z}`);
 }
 
+// --- ダブルス：「下がれ」を指示したパートナーは、ロブを叩きに前へ出ない ---
+// (ユーザー報告: パートナーに「下がれ」を指示していても、ロブが上がるたびにネット際まで
+//  走り出てスマッシュしてしまい、指示が事実上効いていなかった。ai.smashApproach() は
+//  「叩けるなら叩く」だけを見ていて、指示（youMateFormation）がそこまで届いていなかった)
+{
+  const { DOUBLES, COURT } = R.config;
+  const { smashApproach, chasePosition } = R.ai;
+  const mate = (z) => ({ x: 0, z, attr: { reach: 1, speed: 1 }, stamina: 1 });
+  /** 落ちてくる途中の高いロブ（まだノーバウンド）。vz が大きいほど奥へ落ちる */
+  const lob = (y, z, vz) => ({ x: 0, y, z, vx: 0, vy: 0, vz, bounces: 0, age: 0.3, spin: 'flat' });
+
+  // ネット際に落ちてくる短いロブ：指示が無ければ叩きに出るが、「下がれ」なら出ない。
+  // 高さは PLAYER.CPU_CHASE で z=-6 から打点まで走り着ける滞空時間になるよう取ってある
+  // （smashApproach() は dist/CPU_CHASE で「間に合うか」を見積もるので、足の速さを
+  // 変えるとこの前提も動く）。
+  const short = lob(9, 1, -3);
+  const rush = smashApproach(short, mate(-6), -1);
+  ok(rush && rush.z > -COURT.SERVICE,
+    `precondition: without an order the partner runs up to smash a short lob, got ${rush && rush.z.toFixed(2)}`);
+  ok(smashApproach(short, mate(-6), -1, DOUBLES.BACK_SMASH_Z) === null,
+    'told to stay back, the partner does not go up to smash it');
+  ok(chasePosition(short, -1, mate(-6), DOUBLES.BACK_SMASH_Z).z
+    < chasePosition(short, -1, mate(-6)).z,
+    'so the spot it chases stays deeper than the smash spot (it waits for the bounce instead)');
+
+  // 「下がれ」でも、下がったまま叩ける深いロブは今までどおり叩く（指示は前に出ることだけを止める）
+  const deep = lob(8, 0, -8);
+  const back = smashApproach(deep, mate(-9), -1, DOUBLES.BACK_SMASH_Z);
+  ok(back && back.z <= -COURT.SERVICE,
+    `a lob that comes down deep is still smashed from back there, got ${back && back.z.toFixed(2)}`);
+
+  // 指示が実際に追いかけ方まで届いている（moveDoublesTeams 経由）
+  const lobRally = (formation) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(true);
+    g.setYouMateFormation(formation);
+    g.phase = 'rally';
+    g.serveInFlight = false;   // サーブリターン中はレシーバー固定なので、通常のラリーにする
+    g.ball.last = 'cpu';
+    // 上の short とまったく同じロブを使う（別々に書くと、片方だけ直したときに静かにずれる）
+    Object.assign(g.ball, short, { live: true });
+    g.you.x = -6; g.you.z = -11; // 人間は遠くへ置いて、この球の担当を youMate に回す
+    g.youMate.x = 0; g.youMate.z = -6;
+    g.reactTimers.youMate = 0;
+    g.recoverTimers.youMate = 0;
+    ok(g.doublesResponder('you') === 'youMate',
+      `precondition: the partner is the one answering this lob (${formation})`);
+    // 目標へ着き切るだけ回す。目標は動かないので着いたらそこで止まる＝多めに回して問題ない
+    // （frame 数をぎりぎりにすると PLAYER.CPU_CHASE を変えたとき「着く手前で打ち切った」
+    // だけで落ちる）。
+    for (let i = 0; i < 200; i++) g.moveDoublesTeams(1 / 60);
+    return g.youMate.z;
+  };
+  const zNet = lobRally('net');
+  const zBack = lobRally('back');
+  ok(zBack < zNet - 1,
+    `the order reaches the chase itself: net z=${zNet.toFixed(2)} vs back z=${zBack.toFixed(2)}`);
+  ok(zNet > -COURT.SERVICE && Math.abs(zNet - rush.z) < 0.01,
+    `and without it the partner really does run to the smash spot, got z=${zNet.toFixed(2)}`);
+}
+
+// --- ダブルス雁行陣：展開が変わると CPU の前衛が実際に立ち位置を変える（moveDoublesTeams 経由） ---
+{
+  const { DOUBLES } = R.config;
+  // you 陣地の後衛（人間）を左右に置き分けて、cpu の前衛(cpuMate)がどちらへ構えるか見る。
+  // cpu（味方後衛）は右(+x)固定なので、人間も右＝ストレート展開／人間が左＝クロス展開。
+  const stance = (youX) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(true);
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.ball.last = 'cpu'; // cpu チームが打った直後＝前衛は構えに戻るだけ（追わない）
+    Object.assign(g.ball, { x: 0, y: 1.2, z: -2, vx: 0, vy: 1, vz: -6, bounces: 0, age: 0.2, live: true });
+    g.you.x = youX; g.you.z = -10.5;
+    g.youMate.x = -youX; g.youMate.z = DOUBLES.NET_Z_YOU;
+    g.cpu.x = 3; g.cpu.z = 10.5;
+    g.cpuMate.x = 0; g.cpuMate.z = DOUBLES.NET_Z_CPU;
+    g.poachCommit.cpuMate = false;
+    for (let i = 0; i < 240; i++) {
+      g.poachCommit.cpuMate = false; // ここで見たいのは「仕掛けない」ときの構え
+      // 後衛たちは展開そのものなので固定する（放っておくと両者ともセンターへ戻ってしまい、
+      // 「クロスかストレートか」自体が消えてしまう）
+      g.cpu.x = 3; g.cpu.z = 10.5;
+      g.you.x = youX; g.you.z = -10.5;
+      g.moveDoublesTeams(1 / 60);
+    }
+    return { x: g.cpuMate.x, z: g.cpuMate.z };
+  };
+  const straight = stance(3);   // 人間も cpu も +x 側＝ストレート展開
+  const cross = stance(-3);     // 人間が -x 側＝クロス展開
+  ok(straight.x > 0 && straight.x >= DOUBLES.FRONT_LEAN_X - 0.1,
+    `straight rally: the CPU net player steps past the middle onto the rally side, x=${straight.x.toFixed(2)}`);
+  ok(cross.x < 0 && Math.abs(cross.x) >= DOUBLES.FRONT_GUARD_X - 0.1,
+    `cross rally: it moves over to guard the line instead, x=${cross.x.toFixed(2)}`);
+  ok(straight.z < cross.z,
+    `and stands closer to the net on the straight pattern, z=${straight.z.toFixed(2)} vs ${cross.z.toFixed(2)}`);
+}
+
+// --- ダブルス雁行陣：CPU の後衛は相手の前衛を避けて打つ ---
+// (退行テスト: 以前は常に「相手チームの主力(you)」の逆をつくだけで、相手前衛がどこに
+//  立っていようと配球が変わらず、ネット際の前衛へ自分から打ち込んでいた)
+{
+  const aimSides = (frontX) => {
+    let towardFront = 0; let away = 0;
+    for (let i = 0; i < 300; i++) {
+      const g = new R.Game({ input: fakeInput, hooks: noHooks });
+      g.start(true);
+      g.phase = 'rally';
+      g.serveInFlight = false;
+      // you チームは雁行（前衛がネット際・後衛が深く）。cpu の後衛がこれから打つ。
+      g.you.x = frontX; g.you.z = R.config.DOUBLES.NET_Z_YOU;
+      g.youMate.x = -frontX * 0.5; g.youMate.z = -10.5;
+      g.cpu.x = 0; g.cpu.z = 9.5;
+      Object.assign(g.ball, {
+        x: 0, y: 1.0, z: 9.5, vx: 0, vy: 0, vz: 0, bounces: 1, age: 1.2, live: true, last: 'you',
+      });
+      g.hit('cpu');
+      if (Math.sign(g.ball.vx) === Math.sign(frontX)) towardFront++; else away++;
+    }
+    return { towardFront, away };
+  };
+  const right = aimSides(3.0);
+  ok(right.away > right.towardFront * 3,
+    `the CPU baseliner plays away from the net player: away=${right.away} toward=${right.towardFront}`);
+  const left = aimSides(-3.0);
+  ok(left.away > left.towardFront * 3,
+    `and the same with the net player on the other side: away=${left.away} toward=${left.towardFront}`);
+}
+
 // --- ダブルス：フルマッチのシミュレーション（フリーズ・タイマーリークがないか） ---
 {
   const events = [];
@@ -2704,7 +3390,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 // --- CPU/AIの強さプリセット（Easy/Normal/Hard）：スタート画面の難易度選択が実際にCPUの値へ反映される ---
 {
   const { CPU_LEVELS, applyCpuLevel } = R.config;
-  ok(!!CPU_LEVELS.easy && !!CPU_LEVELS.normal && !!CPU_LEVELS.hard, 'three presets exist');
+  ok(!!CPU_LEVELS.easy && !!CPU_LEVELS.normal && !!CPU_LEVELS.hard && !!CPU_LEVELS.extreme,
+    'four presets exist');
 
   applyCpuLevel('normal'); // 他のテストの実行順に依存しないよう、まずベースラインへ戻す
   const baseline = { ...R.config.CPU };
@@ -2735,6 +3422,38 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(R.config.PLAYER.CPU_REACT < basePlayerCpu.CPU_REACT, 'hard reacts faster than normal');
   ok(R.config.PLAYER.CPU_CHASE > basePlayerCpu.CPU_CHASE, 'hard chases faster than normal');
 
+  // extreme は hard のさらに1段上（要望「hard よりも強い動きをする相手」）。
+  // 比べるのは hard の値そのもので、「hard より強い」が壊れたらここで落ちる。
+  {
+    applyCpuLevel('hard');
+    const hard = { ...R.config.CPU, ...Object.fromEntries(presetPlayerKeys.map((k) => [k, R.config.PLAYER[k]])) };
+    applyCpuLevel('extreme');
+    const ex = { ...R.config.CPU, ...Object.fromEntries(presetPlayerKeys.map((k) => [k, R.config.PLAYER[k]])) };
+    ok(ex.OUT_LONG < hard.OUT_LONG && ex.OUT_WIDE < hard.OUT_WIDE,
+      `extreme misses less often than hard: ${ex.OUT_LONG}/${ex.OUT_WIDE} vs ${hard.OUT_LONG}/${hard.OUT_WIDE}`);
+    ok(ex.STRETCH_OUT_LONG < hard.STRETCH_OUT_LONG && ex.STRETCH_OUT_WIDE < hard.STRETCH_OUT_WIDE,
+      'and barely misses even when it is run off the court');
+    ok(ex.SHOT_T < hard.SHOT_T && ex.SERVE_T < hard.SERVE_T,
+      `extreme hits and serves faster than hard: ${ex.SHOT_T}/${ex.SERVE_T} vs ${hard.SHOT_T}/${hard.SERVE_T}`);
+    ok(ex.SMASH_T < hard.SMASH_T && ex.VOLLEY_ANGLE_T < hard.VOLLEY_ANGLE_T,
+      'its put-aways are sharper too');
+    ok(ex.CPU_CHASE > hard.CPU_CHASE && ex.CPU_RECOVER > hard.CPU_RECOVER,
+      `extreme moves faster than hard: ${ex.CPU_CHASE} vs ${hard.CPU_CHASE}`);
+    ok(ex.CPU_REACT < hard.CPU_REACT && ex.CPU_RECOVER_DELAY < hard.CPU_RECOVER_DELAY,
+      'reacts and recovers quicker');
+    ok(ex.CPU_REACT > 0, 'but still takes a beat to react (a 0 here reads as "sees the future")');
+    ok(ex.CPU_REACH > hard.CPU_REACH && ex.CPU_REFLEX_REACH > hard.CPU_REFLEX_REACH,
+      'and covers more court');
+    ok(ex.CPU_REFLEX_REACH / hard.CPU_REFLEX_REACH <= ex.CPU_REACH / hard.CPU_REACH,
+      'with the reflex range raised no faster than the normal one (hard\'s rule: leave net winners possible)');
+    ok(ex.SPECIALS === true && ex.SPECIAL_ALL_MOVES === true,
+      'extreme turns on the AI specials, all of them');
+    ok(ex.SPECIAL_USES > hard.SPECIAL_USES && ex.SPECIAL_CHANCE > hard.SPECIAL_CHANCE,
+      `and lets the AI use each one several times a game: ${ex.SPECIAL_USES}x at ${ex.SPECIAL_CHANCE}`);
+    ok(hard.SPECIAL_ALL_MOVES === false && hard.SPECIAL_USES === R.config.SPECIAL.USES_PER_GAME,
+      'while hard keeps the seven-move, once-per-game budget it always had');
+  }
+
   applyCpuLevel('normal');
   ok(JSON.stringify(R.config.CPU) === JSON.stringify(baseline), 'switching back to normal restores the baseline CPU values');
   // プリセットが上書きしうる PLAYER のキーが1つ残らず normal の値へ戻ること
@@ -2757,10 +3476,13 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const easyMiss = missRate('easy');
   const normalMiss = missRate('normal');
   const hardMiss = missRate('hard');
-  ok(easyMiss.base > normalMiss.base && normalMiss.base > hardMiss.base,
-    `miss rate falls monotonically easy>normal>hard: ${easyMiss.base} > ${normalMiss.base} > ${hardMiss.base}`);
-  ok(easyMiss.stretch > normalMiss.stretch && normalMiss.stretch > hardMiss.stretch,
-    `stretched-shot miss rate falls monotonically too: ${easyMiss.stretch} > ${normalMiss.stretch} > ${hardMiss.stretch}`);
+  const extremeMiss = missRate('extreme');
+  ok(easyMiss.base > normalMiss.base && normalMiss.base > hardMiss.base
+    && hardMiss.base > extremeMiss.base,
+    `miss rate falls monotonically easy>normal>hard>extreme: ${easyMiss.base} > ${normalMiss.base} > ${hardMiss.base} > ${extremeMiss.base}`);
+  ok(easyMiss.stretch > normalMiss.stretch && normalMiss.stretch > hardMiss.stretch
+    && hardMiss.stretch > extremeMiss.stretch,
+    `stretched-shot miss rate falls monotonically too: ${easyMiss.stretch} > ${normalMiss.stretch} > ${hardMiss.stretch} > ${extremeMiss.stretch}`);
   // 単調なだけでは「Hardを選んでもほとんど変わらない」状態を防げない（変更前もミス率自体は
   // normal より低かった）。ベンチで体感差が出た比率を下限として固定する：
   // hard は normal の 1/3 以下、easy は normal の 2.5 倍以上。
@@ -3180,6 +3902,52 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   g.ball.x = 0; g.ball.y = 1; g.ball.z = -2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
   g.hit('you');
   ok(g.ball.wind === -0.4, `a groundstroke picks up the current point wind, got ${g.ball.wind}`);
+}
+
+// --- 予測の着地点が、実際に弾む座標とぴったり一致する ---
+// game.js の bounce() は reflectBounce() 経由で「本当の接地点」（groundCrossing で
+// 補間した座標）を使う。予測側がこれとずれると、CPU の追跡目標も縮地の「間に合うか」の
+// 判定も実際の打点から外れる。ずれの原因は2つあって向きが逆なので、片方だけ直すと
+// 打ち消しが消えてかえって悪化する（詳しくは physics.js の landedAt() のコメント）：
+//   ・コマ送り後の座標をそのまま返す（＝進行方向へ行き過ぎる）
+//   ・予測の刻みが実際の物理より粗い（＝準陰的オイラーの誤差 g·dt·t/2 で手前に落ちる）
+{
+  const { predictLanding, integrate, reflectBounce, hitsNet } = R.physics;
+  const { PHYSICS } = R.config;
+  const BALL_R = PHYSICS.BALL_R;
+  // 乱数を使わず、決まった弾道を並べて回す（毎回同じ結果になるように）
+  const realBounce = (b) => {
+    const s = { ...b };
+    for (let t = 0; t < 5; t += PHYSICS.STEP) {
+      integrate(s, PHYSICS.STEP);
+      if (hitsNet(s)) return null;
+      if (s.y <= BALL_R && s.vy < 0) { reflectBounce(s); return { x: s.x, z: s.z }; }
+    }
+    return null;
+  };
+  let worst = 0;
+  let checked = 0;
+  for (const speed of [18, 28, 38, 48, 58]) {
+    for (const ang of [-0.04, 0.05, 0.14, 0.25, 0.4]) {
+      for (const spin of ['flat', 'top', 'slice']) {
+        const b = {
+          x: 1.2, y: 1.4, z: -10.5, px: 1.2, py: 1.4, pz: -10.5,
+          vx: 2.1, vy: speed * Math.sin(ang), vz: speed * Math.cos(ang),
+          spin, wind: 0.3, curve: 0, bounces: 0,
+        };
+        const real = realBounce({ ...b });
+        const predicted = predictLanding({ ...b });
+        if (!real || predicted.net) continue;
+        checked++;
+        worst = Math.max(worst, Math.hypot(predicted.x - real.x, predicted.z - real.z));
+      }
+    }
+  }
+  ok(checked > 50, `precondition: enough trajectories land in bounds, got ${checked}`);
+  ok(worst < 0.005,
+    `predictLanding() lands where the ball really bounces, worst gap ${(worst * 1000).toFixed(1)}mm`);
+  ok(R.config.PHYSICS.STEP === 1 / 240,
+    'and the predictions are stepped at the same rate as the real physics');
 }
 
 // --- 軌跡：誰か（you）が打つと Game#trail がその打点1点から描き直される ---
@@ -3674,6 +4442,68 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       `a normal groundstroke still uses SWING_ANIM, got ${g.you.stroke}/${g.you.anim}`);
   }
 
+  // --- 跳躍は「打つ前」から始まる（スマッシュ／ダンクスマッシュ） ---
+  // 打球のモーション（anim）は hit() が当たった瞬間に入れるので、跳躍を同じ時計に
+  // 乗せると跳ぶのと打つのが同時に見える（ユーザー報告）。tickLeap() が「あと踏み切り
+  // ぶんの時間で球が届く」ところで、まだ溜めキーを離していなくても跳び始める。
+  {
+    const mk = () => {
+      const g = new R.Game({ input: fakeInput, hooks: noHooks });
+      g.start();
+      g.phase = 'rally';
+      g.ball.live = true; g.ball.last = 'cpu'; g.wind = 0;
+      g.you.x = 0; g.you.z = -3;
+      Object.assign(g.ball, {
+        x: 0.3, y: PLAYER.SMASH_MIN_Y + 0.5, z: -2.8, vx: 0, vy: -2, vz: -3, bounces: 0,
+        spin: 'flat', wind: 0, curve: 0,
+      });
+      g.chargeStart('flat');
+      g.you.chargeTime = R.config.CHARGE.MAX_TIME * (PLAYER.SMASH_MIN_CHARGE + 0.2);
+      return g;
+    };
+
+    const g = mk();
+    ok(!g.you.leap, 'precondition: not leaping yet');
+    ok(g.leapKind(null, PLAYER.SMASH_MIN_CHARGE + 0.2) === 'smash',
+      `precondition: this swing would be a smash, got ${g.leapKind(null, 0.7)}`);
+    g.specialArmed = g.specialAim();
+    g.tickLeap();
+    ok(g.you.leap && g.you.leap.kind === 'smash' && g.you.leap.t === PLAYER.SMASH_LEAP_T,
+      `the leap starts while still charging, got ${JSON.stringify(g.you.leap)}`);
+    ok(g.you.charging && g.you.anim === 0 && g.you.stroke !== 'smash',
+      `and the swing motion has not started: ${g.you.stroke}/${g.you.anim}`);
+    ok(PLAYER.SMASH_LEAP_T * PLAYER.SMASH_LEAP_RISE > 0.1,
+      `the take-off is long enough to read, got ${(PLAYER.SMASH_LEAP_T * PLAYER.SMASH_LEAP_RISE).toFixed(3)}s`);
+
+    // 溜めが足りなければ（スマッシュにならないので）跳ばない
+    const weak = mk();
+    weak.you.chargeTime = R.config.CHARGE.MAX_TIME * (PLAYER.SMASH_MIN_CHARGE - 0.2);
+    weak.specialArmed = weak.specialAim();
+    weak.tickLeap();
+    ok(!weak.you.leap, `a swing that will not be a smash does not leap, got ${JSON.stringify(weak.you.leap)}`);
+
+    // 低い球（ふつうのストローク）でも跳ばない
+    const low = mk();
+    low.ball.y = 1.0;
+    low.specialArmed = low.specialAim();
+    low.tickLeap();
+    ok(!low.you.leap, `a normal groundstroke does not leap, got ${JSON.stringify(low.you.leap)}`);
+
+    // 当たったときには、離す前に始めた跳躍がまだ続いている
+    const rise = PLAYER.SMASH_LEAP_T * PLAYER.SMASH_LEAP_RISE;
+    for (let i = 0; i < Math.round(rise * 60); i++) g.update(1 / 60);
+    g.chargeRelease();
+    g.update(1 / 60);
+    ok(g.you.leap && g.you.leap.kind === 'smash',
+      `the leap is still running at contact, got ${JSON.stringify(g.you.leap)}`);
+    ok(g.you.leap.t < PLAYER.SMASH_LEAP_T - rise + 1 / 60,
+      `and it is past the take-off by then, got ${g.you.leap.t.toFixed(3)}`);
+
+    // ポイントをまたいで持ち越さない
+    g.newPoint();
+    ok(!g.you.leap, `a new point clears the leap, got ${JSON.stringify(g.you.leap)}`);
+  }
+
   // スマッシュで打てる位置に立って溜めている間は、構えが 'smash'（頭の後ろへ担ぐ振りかぶり）になる
   {
     const g = new R.Game({ input: fakeInput, hooks: noHooks });
@@ -3711,15 +4541,22 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const DOUBLES = R.config.DOUBLES;
   const {
     CPU_REACH, CPU_REFLEX_REACH, CPU_REFLEX_T_MIN, CPU_REFLEX_T_MAX,
+    CPU_BLIND_REACH, CPU_BLIND_T,
   } = PLAYER;
 
-  ok(reactReach(0) === CPU_REFLEX_REACH, `no time at all leaves only the reflex reach, got ${reactReach(0)}`);
-  ok(reactReach(CPU_REFLEX_T_MIN) === CPU_REFLEX_REACH, 'at T_MIN it is still the reflex reach');
+  ok(reactReach(0) === CPU_BLIND_REACH, `no time at all leaves only a body block, got ${reactReach(0)}`);
+  ok(reactReach(CPU_BLIND_T) === CPU_BLIND_REACH, 'at the blind limit it is still only a body block');
+  ok(reactReach(CPU_REFLEX_T_MIN) === CPU_REFLEX_REACH, 'at T_MIN the reflex reach is back');
   ok(reactReach(CPU_REFLEX_T_MAX) === CPU_REACH, 'at T_MAX the full reach is available again');
   ok(reactReach(5) === CPU_REACH, 'plenty of time is still just the full reach (no bonus)');
-  ok(reactReach(undefined) === CPU_REFLEX_REACH, 'a ball with no age recorded is treated as the strictest case');
+  ok(reactReach(undefined) === CPU_BLIND_REACH, 'a ball with no age recorded is treated as the strictest case');
+  const blind = reactReach((CPU_BLIND_T + CPU_REFLEX_T_MIN) / 2);
+  ok(blind > CPU_BLIND_REACH && blind < CPU_REFLEX_REACH, `it ramps out of the blind zone, got ${blind}`);
   const mid = reactReach((CPU_REFLEX_T_MIN + CPU_REFLEX_T_MAX) / 2);
   ok(mid > CPU_REFLEX_REACH && mid < CPU_REACH, `it ramps in between, got ${mid}`);
+  // 至近距離のボレー（ネット際同士は 0.2 秒ほどで届く）は、体の正面しか触れない
+  ok(reactReach(0.17) < 0.3,
+    `a volley from the opposite net position leaves almost no reach, got ${reactReach(0.17)}`);
 
   // 実際の当たり判定：打たれた直後に届く球（＝スマッシュやネット際のボレー）は取りこぼす
   const netPlayerTry = (age) => {
@@ -4691,7 +5528,9 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 // Space（input.special）を押しながら溜めキーを離すと、その場面に合う技が1つだけ出る。
 // 1ゲームにつき SPECIAL.USES_PER_GAME 回まで（全技で共有、ゲームが替わると回復）。
 {
-  const { SPECIAL, SPECIAL_MOVES, CHARGE, HALF_W: HW, HALF_L: HL } = R.config;
+  const { SPECIAL, SPECIAL_MOVES, CHARGE, PLAYER, COURT, HALF_W: HW, HALF_L: HL } = R.config;
+  /** 人間のラケット側（game.js の RACKET_SIDE.you）。フォア側が world -x、バック側が +x */
+  const RACKET_SIDE_YOU = -1;
   const ALL = SPECIAL_MOVES.map((m) => m.key);
   /** 必殺技は自動発動なので、専用の入力はない（いつもの無入力でよい） */
   const idle = { moveX: 0, moveZ: 0, lob: false };
@@ -4779,11 +5618,19 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     ballAt(high, 2.6, 0.3, 0);
     ok(high.pickSpecial() === 'dunkSmash', `a high ball picks the dunk smash, got ${high.pickSpecial()}`);
 
-    // ネット前のノーバウンド（高くない）→ 飛びつきボレー
+    // ネット前のノーバウンドでも、普通に届く球には飛び込まない（下の優先度へ落ちる）
+    const easy = rally(ALL);
+    easy.you.z = -3;
+    ballAt(easy, 1.0, 0.3, 0);
+    ok(easy.pickSpecial() !== 'divingVolley',
+      `a volley within normal reach does not dive, got ${easy.pickSpecial()}`);
+
+    // 普通のリーチでは届かないノーバウンド → 飛びつきボレー
     const net = rally(ALL);
     net.you.z = -3;
     ballAt(net, 1.0, 0.3, 0);
-    ok(net.pickSpecial() === 'divingVolley', `a no-bounce ball at the net picks the diving volley, got ${net.pickSpecial()}`);
+    net.ball.x = net.you.x - 2.4; // 通常(1.55)では届かず、飛びつき(×1.95)なら届く距離
+    ok(net.pickSpecial() === 'divingVolley', `an out-of-reach no-bounce ball picks the diving volley, got ${net.pickSpecial()}`);
 
     // ベースライン寄りのノーバウンドの浮き球 → ドライブボレー
     const drive = rally(ALL);
@@ -4810,7 +5657,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     const behind = rally(ALL);
     behind.you.z = -10;
     behind.you.speed = 5;
-    ballAt(behind, 1.0, -0.5);
+    ballAt(behind, 1.0, -1.2); // 真後ろに 1.2m ＝ 抜かれた球
     ok(behind.pickSpecial() === 'tweener', `a ball that got past you picks the tweener, got ${behind.pickSpecial()}`);
 
     // 自分のサーブ → キックサーブ（ラリー用の技は出ない）
@@ -4821,12 +5668,23 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   }
 
   // --- 装備していない技は出ない（同じ場面でも次の優先度へ落ちる） ---
+  // 場面は「振り回されたフォアのトップスピン」＝バギーホイップ（優先度が上）と
+  // 鷹の目の両方が条件を満たすところ。鷹の目はグラウンドストローク限定なので、
+  // 2つが重なる場面をここで作る必要がある。
   {
-    const g = rally(['hawkEye', 'buggyWhip']);
-    g.you.z = -3;
-    ballAt(g, 2.6, 0.3, 0); // ダンクスマッシュの場面だが装備していない
-    g.you.speed = 0;
-    chargeUp(g);
+    const scene = (g) => {
+      g.you.z = -9;
+      ballAt(g, 1.0);
+      chargeUp(g);      // 溜め（鷹の目の条件）
+      draggedWide(g);   // 振り回されたフォアのトップスピン（バギーホイップの条件）
+    };
+    const both = rally(['hawkEye', 'buggyWhip']);
+    scene(both);
+    ok(both.pickSpecial() === 'buggyWhip',
+      `precondition: with both equipped the higher-priority move wins, got ${both.pickSpecial()}`);
+
+    const g = rally(['hawkEye']); // バギーホイップは装備していない
+    scene(g);
     ok(g.pickSpecial() === 'hawkEye',
       `an unequipped move is skipped for the next matching one, got ${g.pickSpecial()}`);
   }
@@ -4913,14 +5771,14 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 
   // --- 回数は技ごとに独立。使い切った技は飛ばして、次の候補がその場面を拾う ---
   {
-    const g = rally(['dunkSmash', 'hawkEye']);
-    g.you.z = -3; g.you.speed = 0;
-    rushingIn(g);
-    ballAt(g, 2.6, 0.3, 0); // 前に詰めながらの高い球＝ダンクの場面（鷹の目も条件は満たす）
-    chargeUp(g);
-    ok(g.pickSpecial() === 'dunkSmash', `precondition: the dunk is picked first, got ${g.pickSpecial()}`);
-    g.spendSpecial('dunkSmash');
-    ok(g.usesLeft('dunkSmash') === 0 && g.usesLeft('hawkEye') === SPECIAL.USES_PER_GAME,
+    const g = rally(['buggyWhip', 'hawkEye']);
+    g.you.z = -9;
+    ballAt(g, 1.0);
+    chargeUp(g);    // 振り回されたフォアのトップスピンを溜めて打つ場面＝
+    draggedWide(g); // バギーホイップ（優先度が上）と鷹の目の両方が条件を満たす
+    ok(g.pickSpecial() === 'buggyWhip', `precondition: the buggy whip is picked first, got ${g.pickSpecial()}`);
+    g.spendSpecial('buggyWhip');
+    ok(g.usesLeft('buggyWhip') === 0 && g.usesLeft('hawkEye') === SPECIAL.USES_PER_GAME,
       'spending one move does not touch the others');
     ok(g.pickSpecial() === 'hawkEye',
       `a spent move is skipped for the next matching one, got ${g.pickSpecial()}`);
@@ -5048,9 +5906,10 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       ['dunkSmash', (g) => { g.you.z = -3; ballAt(g, 2.6, 0.3, 0); }],
       ['divingVolley', (g) => { g.you.z = -3; ballAt(g, 1.0, 0.3, 0); }],
       ['driveVolley', (g) => { g.you.z = -9; ballAt(g, 1.2, 0.3, 0); }],
+      ['jackknife', (g) => { g.you.x = 2; g.you.z = -9.5; ballAt(g, 1.8, 0.2, 1, 1); }],
       ['buggyWhip', (g) => { g.you.z = -9; ballAt(g, 1.0); }],
       ['hawkEye', (g) => { g.you.z = -9; ballAt(g, 1.0); }],
-      ['tweener', (g) => { g.you.z = -10.5; ballAt(g, 1.0, -0.5); }],
+      ['tweener', (g) => { g.you.z = -10.5; ballAt(g, 1.0, -1.2); }],
     ];
     cases.forEach(([move, place]) => {
       let outs = 0;
@@ -5100,6 +5959,498 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       ok(deep < cap * 1.05, `a dunk smash from deep is capped near MAX_SPEED: ${deep.toFixed(0)}km/h (cap ${cap.toFixed(0)})`);
       ok(deep <= near * 1.05,
         `and the extra distance does not make it faster: deep ${deep.toFixed(0)} vs near ${near.toFixed(0)}km/h`);
+    }
+  }
+
+  // --- ツイーナー：相手の位置で打ち分け、背走で追いつけるようにする ---
+  {
+    const { TWEENER } = SPECIAL;
+    /** 打球が飛翔中にいちばん高く上がる高さ(m)（predictApex は高さを返さないので自前で追う） */
+    const apexY = (ball) => {
+      const s = Object.assign({}, ball);
+      let top = s.y;
+      for (let i = 0; i < 240 * 5; i++) {
+        R.physics.integrate(s, 1 / 240);
+        top = Math.max(top, s.y);
+        if (s.y <= R.config.PHYSICS.BALL_R && s.vy < 0) break;
+      }
+      return top;
+    };
+    /** 抜かれた球（自分のすぐ後ろ）をツイーナーで1本打ち、その打球を調べる */
+    const tweener = (foeZ, foeX = 0, moveX = 0) => {
+      const g = rally(['tweener'], { moveX, moveZ: 0, lob: false });
+      g.you.x = 0; g.you.z = -12;
+      g.cpu.x = foeX; g.cpu.z = foeZ;
+      ballAt(g, 0.9, -1.2);
+      g.you.special = 'tweener';
+      g.hit('you');
+      return {
+        land: R.physics.predictLanding(g.ball),
+        apex: apexY(g.ball),
+        kmh: R.math.mpsToKmh(Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz)),
+        reactBonus: g.ball.reactBonus,
+        label: g.lastShotBy.you,
+      };
+    };
+
+    // 詰めてきた相手には頭上を越すロブ、下がっている相手には低く速い抜き球
+    const vsNet = tweener(2.0);
+    const vsBack = tweener(10.5);
+    ok(inOpponentCourt(vsNet.land) && inOpponentCourt(vsBack.land),
+      `both tweener shots land in: net ${JSON.stringify(vsNet.land)} back ${JSON.stringify(vsBack.land)}`);
+    ok(vsNet.apex > vsBack.apex + 1.5,
+      `vs a net rusher the tweener goes up and over: apex ${vsNet.apex.toFixed(2)}m vs ${vsBack.apex.toFixed(2)}m`);
+    ok(vsBack.kmh > vsNet.kmh * 1.3,
+      `vs a deep opponent it is a fast passing shot instead: ${vsBack.kmh.toFixed(0)}km/h vs ${vsNet.kmh.toFixed(0)}km/h`);
+    ok(vsNet.land.z > COURT.SERVICE && vsBack.land.z > COURT.SERVICE,
+      `both land deep, past the service line: ${vsNet.land.z.toFixed(2)} / ${vsBack.land.z.toFixed(2)}`);
+
+    // 無入力なら相手のいない側へ逃がす（←→ を入れればそちらが優先）
+    ok(tweener(2.0, 2.5).land.x < 0 && tweener(2.0, -2.5).land.x > 0,
+      'with no input the tweener goes away from the opponent');
+    // ←→ の入力（画面基準。world へは INPUT_X_TO_WORLD で反転）を入れればそちらが優先
+    ok(tweener(2.0, 2.5, -1).land.x > 0 && tweener(2.0, -2.5, 1).land.x < 0,
+      'and the arrow keys override that choice');
+
+    // 背を向けて打つので相手の出足が遅れる（この1打だけ）
+    ok(vsNet.reactBonus === TWEENER.REACT_BONUS && vsBack.reactBonus === TWEENER.REACT_BONUS,
+      `the tweener delays the opponent's reaction by ${TWEENER.REACT_BONUS}s, got ${vsNet.reactBonus}`);
+    {
+      const g = rally(['tweener']);
+      g.you.z = -12;
+      ballAt(g, 0.9, -1.2);
+      g.you.special = 'tweener';
+      g.hit('you');
+      g.lastBallOwnerSeen = null;
+      g.updateReactTimers(0);
+      const withTweener = g.reactTimers.cpu;
+      // 次の普通の1打では戻る（技の「読みにくさ」を持ち越さない）
+      g.ball.last = 'cpu';
+      ballAt(g, 1.0);
+      g.you.special = null;
+      g.hit('you');
+      g.lastBallOwnerSeen = null;
+      g.updateReactTimers(0);
+      ok(withTweener > g.reactTimers.cpu + TWEENER.REACT_BONUS * 0.9,
+        `the delay is on the tweener only: ${withTweener.toFixed(3)}s vs ${g.reactTimers.cpu.toFixed(3)}s`);
+    }
+
+    // 抜かれた球を背走で追っている間だけ足が速くなる
+    {
+      const back = { moveX: 0, moveZ: -1, lob: false };
+      const fwd = { moveX: 0, moveZ: 1, lob: false };
+      /** 「ロブで抜かれて、自分より後ろを転がっていく球」の状態を作る */
+      const passedMe = (g) => {
+        g.you.x = 0; g.you.z = -11;
+        g.ball.x = 0; g.ball.y = 1.2; g.ball.z = -12.5;
+        g.ball.vx = 0; g.ball.vy = 0; g.ball.vz = -12;
+        g.ball.bounces = 1;
+      };
+      const chasing = rally(['tweener'], back); passedMe(chasing);
+      const running = rally(['tweener'], fwd); passedMe(running);
+      const noGear = rally([], back); passedMe(noGear);
+      // 走り比べ用（下がり切る壁 PLAYER.Z_FAR_MARGIN に当たらないよう、ネット寄りから）
+      const runA = rally(['tweener'], back); passedMe(runA); runA.you.z = -4;
+      const runB = rally([], back); passedMe(runB); runB.you.z = -4;
+      const notYet = rally(['tweener'], back);
+      notYet.you.z = -11; ballAt(notYet, 1.0); // まだ自分より前にある球
+      const usedUp = rally(['tweener'], back); passedMe(usedUp);
+      usedUp.specialUses.tweener = 0;
+
+      ok(chasing.tweenerChaseMult() === TWEENER.CHASE_MULT,
+        `chasing down a ball that passed you is faster, got ${chasing.tweenerChaseMult()}`);
+      ok(running.tweenerChaseMult() === 1, 'but only while running backwards');
+      ok(noGear.tweenerChaseMult() === 1, 'and only with the tweener equipped');
+      ok(notYet.tweenerChaseMult() === 1, 'a ball still in front of you does not speed you up');
+      ok(usedUp.tweenerChaseMult() === 1, 'nor does one when the tweener is already used up');
+
+      // 実際に移動が速くなる（0.8秒下がり続けたときの距離と最高速で見る）
+      const ranBack = (g) => {
+        const from = g.you.z;
+        for (let i = 0; i < 48; i++) {
+          g.ball.z = g.you.z - 1.5; // 追っている間ずっと「自分より後ろ」に居続ける球
+          g.movePlayers(1 / 60);
+        }
+        return { dist: from - g.you.z, speed: g.you.speed };
+      };
+      const boosted = ranBack(runA);
+      const plain = ranBack(runB);
+      ok(boosted.dist > plain.dist * 1.25,
+        `and it shows up in the actual run: ${boosted.dist.toFixed(2)}m vs ${plain.dist.toFixed(2)}m in 0.8s`);
+      ok(Math.abs(boosted.speed - PLAYER.SPEED * TWEENER.CHASE_MULT) < 0.3
+        && Math.abs(plain.speed - PLAYER.SPEED) < 0.3,
+        `the top speed itself is multiplied: ${boosted.speed.toFixed(2)} vs ${plain.speed.toFixed(2)} m/s`);
+    }
+
+    // 専用モーションぶんの長さ（scene/player.js が体ごと反転させ、跳んで股を割る）
+    {
+      ok(TWEENER.ANIM > PLAYER.SWING_ANIM,
+        `the tweener animation is longer than a normal swing, got ${TWEENER.ANIM}`);
+      const g = rally(['tweener']);
+      g.you.z = -12;
+      ballAt(g, 0.9, -1.2);
+      g.you.special = 'tweener';
+      g.hit('you');
+      ok(g.you.stroke === 'tweener' && g.you.anim === TWEENER.ANIM,
+        `a tweener uses its own animation length, got ${g.you.stroke}/${g.you.anim}`);
+      // 技はモーションが終わるまで残り（フォームの表示に使う）、終われば下りる
+      g.you.swing = 0;
+      g.update(TWEENER.ANIM - PLAYER.SWING_ANIM);
+      ok(g.you.special === 'tweener' && g.you.anim > 0,
+        'the move stays on while its longer motion plays');
+      g.update(TWEENER.ANIM);
+      ok(g.you.special === null && g.you.anim === 0,
+        `and it is dropped once the motion ends, got ${g.you.special}`);
+      // 次の普通の1打は通常の長さに戻る（前の技の長さを持ち越さない）
+      g.ball.last = 'cpu';
+      ballAt(g, 1.0);
+      g.hit('you');
+      ok(g.you.stroke !== 'tweener' && g.you.anim === PLAYER.SWING_ANIM,
+        `a normal groundstroke still uses SWING_ANIM, got ${g.you.stroke}/${g.you.anim}`);
+    }
+
+    // 真横を通り過ぎる球では出ない＝ふつうのストロークが勝手にツイーナーにならない
+    // （ユーザー報告）。自動プレイで実際に誤爆していた18件の形をそのまま置いてある：
+    // 横へ 1.8〜2.6m ずれているのに、後ろへは 0.16〜1.28m しか入っていない球。
+    {
+      const wide = [
+        [0.69, 1.91], [0.59, 2.54], [0.20, 2.34], [1.28, 2.25], [0.16, 2.37], [0.90, 1.90],
+      ];
+      wide.forEach(([behind, side]) => {
+        const g = rally(ALL);
+        g.you.x = 0; g.you.z = -9;
+        Object.assign(g.ball, {
+          x: side, y: 1.0, z: -9 - behind, vx: 0, vy: 0, vz: -6, bounces: 1,
+        });
+        const pick = g.pickSpecial();
+        ok(pick !== 'tweener',
+          `a ball ${side}m to the side and only ${behind}m behind is a normal stroke, got ${pick}`);
+      });
+      // 同じ「後ろへの距離」でも、真後ろに回り込んでいればツイーナーの場面
+      const straight = rally(ALL);
+      straight.you.x = 0; straight.you.z = -9;
+      Object.assign(straight.ball, {
+        x: 0.3, y: 1.0, z: -10.2, vx: 0, vy: 0, vz: -6, bounces: 1,
+      });
+      ok(straight.pickSpecial() === 'tweener',
+        `but straight behind you it is: got ${straight.pickSpecial()}`);
+      // 真後ろから45°（SIDE_RATIO=1.0）の外側は出ない＝境界がコースで決まっている
+      const edge = (side) => {
+        const g = rally(ALL);
+        g.you.x = 0; g.you.z = -9;
+        Object.assign(g.ball, {
+          x: side, y: 1.0, z: -10.5, vx: 0, vy: 0, vz: -6, bounces: 1,
+        });
+        return g.pickSpecial();
+      };
+      ok(edge(1.2) === 'tweener' && edge(1.9) !== 'tweener',
+        `the 45-degree cone is the line: inside=${edge(1.2)} outside=${edge(1.9)}`);
+    }
+
+    // ノーバウンドの球では出ない＝ふつうのボレーが勝手にツイーナーにならない
+    // （ユーザー報告。リーチを広げたぶん、ネット際で体の横を通り過ぎる速い球が
+    //  「わずかに後ろ」に入った瞬間に拾われていた）
+    {
+      /** ネット際で、体の横をノーバウンドで通り過ぎていく速い球 */
+      const passingVolley = (g, youZ, dz, dx) => {
+        g.you.x = 0; g.you.z = youZ;
+        Object.assign(g.ball, {
+          x: dx, y: 1.1, z: youZ + dz, vx: 0, vy: -1, vz: -20, bounces: 0,
+        });
+      };
+      [[-2, -0.2, 0.4], [-2, -0.6, 1.2], [-4, -0.6, 0.4], [-6, -1.5, 1.2]].forEach(([z, dz, dx]) => {
+        const g = rally(ALL);
+        passingVolley(g, z, dz, dx);
+        const pick = g.pickSpecial();
+        ok(pick !== 'tweener',
+          `a no-bounce ball past you at z=${z} is a volley, not a tweener: got ${pick}`);
+      });
+      // 同じ球でも、バウンドしていればツイーナーの場面
+      const bounced = rally(ALL);
+      passingVolley(bounced, -6, -1.2, 0.4);
+      bounced.ball.bounces = 1;
+      ok(bounced.pickSpecial() === 'tweener',
+        `the same ball after a bounce is a tweener: got ${bounced.pickSpecial()}`);
+
+      // 離した後に場面が変わった（ノーバウンドの球に当たった／もう自分より前にある）
+      // ときは、当たる瞬間に技を下ろして普通の1打として打つ（回数も減らない）
+      const onVolley = rally(['tweener']);
+      onVolley.you.z = -3;
+      onVolley.you.special = 'tweener';
+      passingVolley(onVolley, -3, -1.2, 0.4); // bounces=0 のまま当たった
+      onVolley.hit('you');
+      ok(onVolley.you.special === null && onVolley.usesLeft('tweener') === 1,
+        `a tweener that lands on a volley is dropped: special=${onVolley.you.special} uses=${onVolley.usesLeft('tweener')}`);
+      ok(onVolley.lastShotBy.you !== SPECIAL_MOVES.find((m) => m.key === 'tweener').label,
+        `and it is called as a normal shot: ${onVolley.lastShotBy.you}`);
+
+      const inFront = rally(['tweener']);
+      inFront.you.z = -10;
+      inFront.you.special = 'tweener';
+      ballAt(inFront, 1.0, 0.5); // 自分より前（ネット側）にある球
+      inFront.hit('you');
+      ok(inFront.you.special === null && inFront.usesLeft('tweener') === 1,
+        'a tweener on a ball that is no longer behind you is dropped too');
+    }
+
+    // 抜かれた球は、縮地を装備していてもツイーナーが先に拾う（SPECIAL_MOVES の並び順）
+    {
+      /**
+       * 後ろへ抜けたあと、横切るように体の真後ろへ流れてくる球。
+       * いまは 2.6m 離れている（＝縮地の MIN_DIST を超える）が、伸びたリーチ（2.79m）の
+       * 真後ろの扇に入ってくるので、ツイーナーにも縮地にも当てはまる。
+       */
+      const passedWide = (g) => {
+        g.you.x = 0; g.you.z = -10;
+        Object.assign(g.ball, {
+          x: 2.0, y: 1.0, z: -12.6, vx: -12, vy: 1.5, vz: -1, bounces: 1,
+          spin: 'flat', wind: 0, curve: 0, // 予測（縮地の判定）が風で揺れないように固定
+        });
+      };
+      const t = rally(['tweener']); passedWide(t);
+      const s = rally(['shukuchi']); passedWide(s);
+      const both = rally(['tweener', 'shukuchi']); passedWide(both);
+      ok(t.pickSpecial() === 'tweener' && s.pickSpecial() === 'shukuchi',
+        `precondition: this ball matches both moves, got ${t.pickSpecial()} / ${s.pickSpecial()}`);
+      ok(both.pickSpecial() === 'tweener',
+        `a ball that got past you picks the tweener over shukuchi, got ${both.pickSpecial()}`);
+    }
+  }
+
+  // --- 鷹の目は「足を止めて狙い澄ますグラウンドストローク」の技（ボレー／スマッシュでは出ない） ---
+  // ユーザー報告「ノーバウンド返球（ボレー）でも鷹の目が発動する」。人間側だけ場面を
+  // 見ていなかったため、ボレーがグラウンドストロークとして飛んでいた（hit() は技が
+  // 乗った1打の打ち方を技に決めさせるため）。AI 側は最初から同じ条件で除いてある。
+  {
+    /** ネット前でノーバウンドの球に触る（＝ボレー）場面。しっかり溜めてある */
+    const volleyScene = (g, youZ, y) => {
+      g.you.x = 0; g.you.z = youZ;
+      Object.assign(g.ball, {
+        x: -0.3, y, z: youZ + 0.3, vx: 0, vy: -1, vz: -6, bounces: 0,
+      });
+      chargeUp(g);
+    };
+    [[-2, 0.8], [-3, 1.0], [-5, 1.4]].forEach(([youZ, y]) => {
+      const g = rally(['hawkEye']);
+      volleyScene(g, youZ, y);
+      ok(g.pickSpecial() === null,
+        `a volley at z=${youZ} (y=${y}) is not a hawk eye, got ${g.pickSpecial()}`);
+    });
+    // バウンドしていれば同じ高さ・同じ溜めでも鷹の目の場面
+    const grounder = rally(['hawkEye']);
+    volleyScene(grounder, -3, 1.0);
+    grounder.ball.bounces = 1;
+    ok(grounder.pickSpecial() === 'hawkEye',
+      `the same ball after a bounce is a hawk eye, got ${grounder.pickSpecial()}`);
+    // 頭上から叩く1打（スマッシュ）でも出ない＝そこはダンクスマッシュの領分
+    const overhead = rally(['hawkEye']);
+    volleyScene(overhead, -9, PLAYER.SMASH_MIN_Y + 0.3);
+    overhead.ball.bounces = 1; // 跳ね上がってスマッシュの高さに来た球
+    ok(overhead.pickSpecial() === null,
+      `a ball high enough to smash is not a hawk eye, got ${overhead.pickSpecial()}`);
+
+    // 打ち方が技に乗っ取られていないこと：ボレーはボレーのまま飛ぶ
+    const hit = (specials) => {
+      const g = rally(specials);
+      volleyScene(g, -3, 1.0);
+      g.chargeRelease();
+      g.hit('you');
+      return { stroke: g.you.stroke, special: g.you.special, call: g.lastShotBy.you };
+    };
+    const armed = hit(['hawkEye']);
+    ok(armed.stroke === 'volley-forehand' && armed.special === null,
+      `a volley stays a volley: stroke=${armed.stroke} special=${armed.special}`);
+    ok(armed.call === hit([]).call, `and it is called a volley: ${armed.call}`);
+  }
+
+  // --- ジャックナイフ：高く弾んだ球を、足を止めてフラットのバックで叩く ---
+  // バギーホイップ（フォア／トップスピン／走らされている）と背中合わせの条件。
+  // 打点が高いほど速く・深くなるのがこの技の肝。
+  {
+    const { JACK } = SPECIAL;
+    /** 高く弾んだ球をバックハンド側（world +x＝ラケット側の逆）に置く */
+    const highBall = (g, y = 1.8, speed = 0) => {
+      g.you.x = 2.0; g.you.z = -9.5; g.you.speed = speed;
+      Object.assign(g.ball, {
+        x: g.you.x - RACKET_SIDE_YOU * 0.5, y, z: g.you.z + 0.2, vx: 0, vy: -1, vz: -4, bounces: 1,
+      });
+    };
+    const armed = (opt = {}) => {
+      const g = rally(['jackknife', 'buggyWhip', 'hawkEye'],
+        { moveX: opt.moveX || 0, moveZ: 0, lob: false });
+      highBall(g, opt.y === undefined ? 1.8 : opt.y, opt.speed || 0);
+      if (opt.fore) g.ball.x = g.you.x + RACKET_SIDE_YOU * 0.5; // フォアハンド側へ置き直す
+      g.chargeStart(opt.spin || 'flat');
+      g.you.chargeTime = CHARGE.MAX_TIME * (opt.charge === undefined ? 0.6 : opt.charge);
+      return g;
+    };
+
+    ok(armed().pickSpecial() === 'jackknife',
+      `a high bounced ball with a flat backhand picks the jackknife, got ${armed().pickSpecial()}`);
+    ok(armed({ y: JACK.MIN_Y - 0.2 }).pickSpecial() !== 'jackknife',
+      'but not on a ball below shoulder height');
+    ok(armed({ spin: 'top' }).pickSpecial() !== 'jackknife'
+      && armed({ spin: 'slice' }).pickSpecial() !== 'jackknife',
+      'nor with topspin (V) or slice (C) — it is the flat (B) shot');
+    ok(armed({ fore: true }).pickSpecial() !== 'jackknife',
+      'nor on the forehand side');
+    ok(armed({ speed: JACK.MAX_SPEED + 2 }).pickSpecial() !== 'jackknife',
+      'nor while still running (that is the buggy whip situation)');
+    ok(armed({ charge: JACK.MIN_CHARGE - 0.1 }).pickSpecial() !== 'jackknife',
+      'nor on a barely-charged block return');
+    // ノーバウンドの高い球はドライブボレー／ダンクスマッシュの領分
+    {
+      const g = armed();
+      g.ball.bounces = 0;
+      ok(g.pickSpecial() !== 'jackknife', `a no-bounce high ball is not a jackknife, got ${g.pickSpecial()}`);
+    }
+
+    /** 技を乗せて1本打ち、打球を調べる */
+    const hitJack = (y, moveX = 0, youX = 2.0) => {
+      const g = armed({ y, moveX });
+      g.you.x = youX;
+      g.ball.x = youX - RACKET_SIDE_YOU * 0.5;
+      g.you.special = 'jackknife';
+      g.you.swingCharge = 0.6;
+      g.hit('you');
+      return {
+        land: R.physics.predictLanding(g.ball),
+        kmh: R.math.mpsToKmh(Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz)),
+        stroke: g.you.stroke,
+        anim: g.you.anim,
+      };
+    };
+
+    // 打点が高いほど速く、深くなる（MAX_Y より上は頭打ち）
+    const low = hitJack(JACK.MIN_Y + 0.05);
+    const high = hitJack(JACK.MAX_Y);
+    const over = hitJack(JACK.MAX_Y + 0.3);
+    ok(high.kmh > low.kmh * 1.4,
+      `taking it high makes it much faster: ${low.kmh.toFixed(0)} → ${high.kmh.toFixed(0)}km/h`);
+    ok(high.land.z > low.land.z + 1.0,
+      `and deeper: z ${low.land.z.toFixed(2)} → ${high.land.z.toFixed(2)}`);
+    ok(Math.abs(over.kmh - high.kmh) < 3,
+      `above MAX_Y it is capped: ${over.kmh.toFixed(0)} vs ${high.kmh.toFixed(0)}km/h`);
+    ok(inOpponentCourt(low.land) && inOpponentCourt(high.land),
+      `both land in: ${JSON.stringify(low.land)} / ${JSON.stringify(high.land)}`);
+
+    // 既定はダウン・ザ・ライン（自分が立っている側）、←→ で逆へ振れる
+    ok(hitJack(1.8, 0, 2.0).land.x > 0 && hitJack(1.8, 0, -2.0).land.x < 0,
+      'with no input it goes down the line, on the side you are standing');
+    ok(hitJack(1.8, 1, 2.0).land.x < 0,
+      'and the arrow keys swing it across court');
+
+    // 専用モーション（跳んで叩く）
+    ok(low.stroke === 'jackknife' && low.anim === JACK.ANIM,
+      `it uses its own motion, got ${low.stroke}/${low.anim}`);
+    ok(JACK.ANIM > PLAYER.SWING_ANIM, `which is longer than a normal swing, got ${JACK.ANIM}`);
+
+    // 離した後に打点が落ちた／ノーバウンドで触った1打では技を下ろす
+    {
+      const g = armed();
+      g.you.special = 'jackknife';
+      g.ball.y = JACK.MIN_Y - 0.3; // 落ちてくるのを待ってしまった
+      g.hit('you');
+      ok(g.you.special === null && g.usesLeft('jackknife') === 1,
+        `a jackknife on a ball that dropped is stood down: ${g.you.special}`);
+    }
+
+    // 跳躍は「溜めている間」に始まる＝跳んでから空中で振り始める。
+    // 打球のモーション（anim）は hit() が当たった瞬間に入れるので、同じ時計に乗せると
+    // 跳ぶのと振るのが同時になる。離した瞬間から跳ばせても、人はボールが来たところで
+    // 離すので結局ほぼ同時になる（ユーザー報告）。tickLeap() が離す前から跳ばせる。
+    {
+      const g = armed();
+      ok(!g.you.leap, 'precondition: not leaping yet');
+      ok(g.pickSpecial() === 'jackknife', 'precondition: the jackknife is armed');
+      // 球はもう届く位置にある＝「あと踏み切りぶんの時間で当たる」ので、
+      // 溜めキーを離す前に跳び始める
+      g.specialArmed = g.specialAim();
+      g.tickLeap();
+      ok(g.you.leap && g.you.leap.kind === 'jackknife' && g.you.leap.t === JACK.LEAP_T,
+        `the leap starts while still charging, got ${JSON.stringify(g.you.leap)}`);
+      ok(g.you.charging && g.you.anim === 0 && g.you.stroke !== 'jackknife',
+        `before releasing: still charging, no swing yet (${g.you.stroke}/${g.you.anim})`);
+      // 踏み切りぶん進めてから離すと、当たるころにはもう跳び上がっている
+      const rise = JACK.LEAP_T * JACK.LEAP_RISE;
+      for (let i = 0; i < Math.round(rise * 60); i++) g.update(1 / 60);
+      // 1コマ(1/60秒)ぶんのスラック：跳躍は毎フレーム dt ずつ減るので端数が出る
+      ok(g.you.leap && g.you.leap.t <= JACK.LEAP_T - rise + 1 / 60,
+        `the leap keeps running on its own clock, got ${g.you.leap && g.you.leap.t.toFixed(3)}`);
+
+      // 技が乗らない普通の1打では跳ばない
+      const plain = rally(['jackknife']);
+      plain.you.z = -9; ballAt(plain, 1.0);
+      chargeUp(plain);
+      plain.specialArmed = plain.specialAim();
+      plain.tickLeap();
+      plain.chargeRelease();
+      ok(!plain.you.leap, `a normal swing does not leap, got ${JSON.stringify(plain.you.leap)}`);
+
+      // ポイントをまたいで持ち越さない
+      g.newPoint();
+      ok(!g.you.leap, `a new point clears the leap, got ${JSON.stringify(g.you.leap)}`);
+    }
+
+    // 判定は「最初に届く点」ではなく「この1振りでいちばん高く捉えられる点」を見る
+    // （ユーザー報告「結構高めでバックフラットを打っているつもりが発動しない」）。
+    // 弾んで上がってくる球は、届きはじめの瞬間はまだ低い＝そこを見ると条件を満たす球が
+    // 事実上なくなる（実測：ラリー中の「最初に届く点」の中央値は 0.16m）。
+    {
+      /** 目の前でバウンドして、届く範囲にいる間に胸の高さまで上がってくる球 */
+      const risingBall = (g) => {
+        g.you.x = 0; g.you.z = -10; g.you.speed = 0;
+        Object.assign(g.ball, {
+          x: 0.3, y: 0.35, z: -9.0, vx: 0, vy: 6, vz: -6, bounces: 1,
+          spin: 'flat', wind: 0, curve: 0,
+        });
+        g.chargeStart('flat');
+        g.you.chargeTime = CHARGE.MAX_TIME * 0.6;
+      };
+      const g = rally(['jackknife']);
+      risingBall(g);
+      ok(g.predictContact(1, 0).y < JACK.MIN_Y,
+        `precondition: the first reachable point is still low (${g.predictContact(1, 0).y.toFixed(2)}m)`);
+      ok(g.contactPeak(JACK.MIN_Y).y >= JACK.MIN_Y,
+        `but it comes up to ${g.contactPeak(JACK.MIN_Y).y.toFixed(2)}m inside the swing window`);
+      ok(g.pickSpecial() === 'jackknife',
+        `so the jackknife is offered, got ${g.pickSpecial()}`);
+
+      // 低いまま通り過ぎる球（上がってこない）では出ない
+      const flat = rally(['jackknife']);
+      risingBall(flat);
+      flat.ball.vy = -1;
+      ok(flat.contactPeak(JACK.MIN_Y).y < JACK.MIN_Y && flat.pickSpecial() !== 'jackknife',
+        `a ball that never comes up is not offered, got ${flat.pickSpecial()}`);
+
+      // 出せると言われても、**低い打点で当ててしまえば**技にはならない（回数も減らない）
+      const early = rally(['jackknife']);
+      risingBall(early);
+      early.you.special = 'jackknife';
+      early.hit('you'); // まだ y=0.35 のまま振ってしまった
+      ok(early.you.special === null && early.usesLeft('jackknife') === 1
+        && early.you.stroke !== 'jackknife',
+        `hitting it early is just a normal backhand: ${early.you.stroke}/${early.you.special}`);
+
+      // 引きつけて高い打点で捉えれば技になる
+      const waited = rally(['jackknife']);
+      risingBall(waited);
+      waited.you.special = 'jackknife';
+      waited.ball.y = JACK.MIN_Y + 0.2; // 上がってくるのを待ってから当てた
+      waited.hit('you');
+      ok(waited.you.stroke === 'jackknife' && waited.lastShotBy.you === 'ジャックナイフ',
+        `waiting for it to come up gives the jackknife: ${waited.you.stroke}`);
+    }
+
+    // バギーホイップとは同じ1打で両立しない（フォア/バック・球種が背中合わせ）
+    {
+      const jackScene = armed();
+      const whipScene = rally(['jackknife', 'buggyWhip']);
+      whipScene.you.z = -9;
+      draggedWide(whipScene);
+      ballAt(whipScene, 1.0);
+      ok(jackScene.pickSpecial() === 'jackknife' && whipScene.pickSpecial() === 'buggyWhip',
+        `the two never overlap: ${jackScene.pickSpecial()} / ${whipScene.pickSpecial()}`);
     }
   }
 
@@ -5506,6 +6857,439 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     ok(g.lastShotBy.you === '鷹の目', `the winning shot is named after the move, got ${g.lastShotBy.you}`);
   }
 
+  // --- Hard の CPU/AI も必殺技を使う ---
+  // (要望: CPUも、hard以上の難易度の時は必殺技を使うようにしてほしい)
+  {
+    const { applyCpuLevel, CPU, SPECIAL: SP, HALF_W: W, HALF_L: L } = R.config;
+    /** 難易度 hard の状態でひとつ確かめて、必ず normal へ戻す */
+    const onHard = (fn) => {
+      applyCpuLevel('hard');
+      try { fn(); } finally { applyCpuLevel('normal'); }
+    };
+    /** cpu 側に「人間コートから飛んできた球」を、cpu のすぐ横に置く */
+    const cpuBallAt = (g, y, bounces = 1, dz = -0.3) => {
+      g.ball.last = 'you';
+      g.ball.x = g.cpu.x + 0.3;
+      g.ball.y = y;
+      g.ball.z = g.cpu.z + dz;
+      g.ball.bounces = bounces;
+    };
+    /**
+     * 「AI がこの技を選んだ」1打を打たせる。技を選ぶかどうか（pickAiSpecial）と、
+     * 選んだ技がどう飛ぶか（specialShot）は別物なので、後者だけを見たいときに使う。
+     */
+    const aiHitWith = (g, move, who = 'cpu') => {
+      g.pickAiSpecial = () => move;
+      g.hit(who);
+    };
+
+    ok(CPU.SPECIALS === false, 'precondition: the tests start on normal (no AI specials)');
+
+    // 難易度が hard のときだけ AI は技を使える
+    {
+      onHard(() => ok(rally(ALL).aiSpecialsOn(), 'hard turns the AI specials on'));
+      ok(!rally(ALL).aiSpecialsOn(), 'normal leaves them off');
+      applyCpuLevel('easy');
+      ok(!rally(ALL).aiSpecialsOn(), 'easy leaves them off too');
+      applyCpuLevel('normal');
+    }
+
+    // 人間が技を1つも選んでいなければ、hard でも AI は使わない
+    // （スタート画面で何も選ばなければ従来とまったく同じゲーム、という約束を守るため）
+    onHard(() => {
+      const g = rally([]);
+      ok(!g.aiSpecialsOn(), 'with nothing equipped by the player, the AI stays plain');
+      g.setSpecials(['hawkEye']);
+      ok(g.aiSpecialsOn(), 'equipping one turns the AI side on as well');
+    });
+
+    // 回数は選手ごとに独立していて、ゲームが替わると回復する
+    onHard(() => {
+      const g = rally(ALL);
+      ok(g.usesLeft('hawkEye', 'cpu') === SP.USES_PER_GAME, 'the AI starts with its own budget');
+      g.spendSpecial('hawkEye', undefined, 'cpu');
+      ok(g.usesLeft('hawkEye', 'cpu') === 0, 'spending an AI move draws down the AI budget');
+      ok(g.usesLeft('hawkEye') === SP.USES_PER_GAME, "and leaves the human's alone");
+      ok(g.stats.cpu.specials === 1, 'and it is counted on the CPU side of the stats');
+      g.refreshSpecials();
+      ok(g.usesLeft('hawkEye', 'cpu') === SP.USES_PER_GAME, 'a new game restores the AI budget too');
+    });
+
+    // 場面ごとに選ばれる技（人間と同じ config の条件を、AI 向けの代わりで見る）
+    onHard(() => {
+      /** CHANCE で外れることがあるので、何度か引いて「その場面で出うる技」を集める */
+      const pick = (build) => {
+        const g = rally(ALL);
+        build(g);
+        const seen = [];
+        for (let i = 0; i < 300; i++) {
+          const move = g.pickAiSpecial('cpu', g.aiSpecialContext('cpu'));
+          if (move && seen.indexOf(move) === -1) seen.push(move);
+        }
+        return seen.join(',');
+      };
+      // 腰から頭の高さのノーバウンド → ドライブボレー
+      ok(pick((g) => { g.cpu.z = 3; cpuBallAt(g, 1.2, 0); }) === 'driveVolley',
+        `a floating no-bounce ball picks the drive volley for the AI, got ${pick((g) => { g.cpu.z = 3; cpuBallAt(g, 1.2, 0); })}`);
+      // 足を止めて構えられたグラウンドストローク → 鷹の目（人間の「溜め5割」に当たる）
+      ok(pick((g) => { g.cpu.z = 9; g.cpu.settleT = SP.AI.SETTLE_T + 0.2; cpuBallAt(g, 1.0); }) === 'hawkEye',
+        'a settled groundstroke picks the hawk eye');
+      // 攻めの位置での高いノーバウンド → ダンクスマッシュ。AI は打点へ先回りして止まって
+      // 待つ動きなので、人間の「前へ踏み込みながら」（fwd）は出ない＝踏み込み0でも出ること。
+      // (ユーザー報告「ダブルスの hard で CPU が必殺技を打たない」の正体：人間と同じ
+      //  DUNK.MIN_FWD を要求していたため、この技だけ事実上 AI に存在しなかった)
+      ok(pick((g) => { g.cpu.z = 3; g.cpu.fwd = 0; cpuBallAt(g, 2.6, 0); }) === 'dunkSmash',
+        'a high no-bounce ball in the attacking court picks the dunk even standing still');
+      // 同じ球でも、ベースライン際まで押し戻されていれば決め球にはならない
+      ok(pick((g) => { g.cpu.z = SP.AI.DUNK_MAX_Z + 1.5; g.cpu.fwd = 0; cpuBallAt(g, 2.6, 0); }) === '',
+        'but the same ball, hit from deep behind the baseline, is just a high return');
+      // 高さの線は人間とまったく同じ（SPECIAL.DUNK.MIN_Y）
+      ok(pick((g) => { g.cpu.z = 3; g.cpu.fwd = 0; cpuBallAt(g, SP.DUNK.MIN_Y - 0.2, 0); }) !== 'dunkSmash',
+        'and a ball below the dunk line is not one');
+      // 抜かれた（自分より後ろ＝自陣側を通っている）球 → ツイーナー
+      ok(pick((g) => { g.cpu.z = 9; cpuBallAt(g, 1.0, 1, 1.2); }).indexOf('tweener') !== -1,
+        'a ball behind the AI picks the tweener');
+      // フォア側へ大きく振り回されて、まだ止まりきっていない → バギーホイップ
+      // cpu は向かい側を向いた右利きなので、フォア側は world +x（game.js の RACKET_SIDE.cpu）。
+      const CPU_RACKET_SIDE = 1;
+      const draggedCpu = (g) => {
+        g.cpu.z = 9;
+        g.cpu.x = CPU_RACKET_SIDE * (SP.BUGGY.MIN_X + 0.6);
+        g.cpu.runX = CPU_RACKET_SIDE * (SP.BUGGY.MIN_RUN_X + 0.5);
+        g.cpu.speed = 5;
+        cpuBallAt(g, 1.0, 1, -0.3);
+        g.ball.x = g.cpu.x + CPU_RACKET_SIDE * 0.3; // ラケット側の球＝フォアハンド
+      };
+      {
+        const g = rally(ALL);
+        draggedCpu(g);
+        ok(g.aiSpecialContext('cpu').stroke === 'forehand',
+          `precondition: that is the AI's forehand side, got ${g.aiSpecialContext('cpu').stroke}`);
+      }
+      ok(pick(draggedCpu) === 'buggyWhip', 'dragged wide to the forehand side picks the buggy whip');
+      // 走ってもいない・止まってもいない普通の1打 → 何も出ない
+      ok(pick((g) => { g.cpu.z = 9; g.cpu.speed = 1; cpuBallAt(g, 1.0); }) === '',
+        'an ordinary groundstroke picks nothing');
+      // 回数を使い切った技は飛ばして次の候補へ落ちる（人間と同じ拾い方）
+      const g = rally(ALL);
+      g.cpu.z = 3; cpuBallAt(g, 1.2, 0);
+      g.cpu.specialUses.driveVolley = 0;
+      let picked = null;
+      for (let i = 0; i < 300 && !picked; i++) picked = g.pickAiSpecial('cpu', g.aiSpecialContext('cpu'));
+      ok(picked === null, `a spent AI move is skipped and nothing else matches here, got ${picked}`);
+    });
+
+    // 難易度が normal なら、同じ場面でも AI は何も出さない
+    {
+      const g = rally(ALL);
+      g.cpu.z = 9; g.cpu.settleT = SP.AI.SETTLE_T + 0.2; cpuBallAt(g, 1.0);
+      let picked = null;
+      for (let i = 0; i < 300 && !picked; i++) picked = g.pickAiSpecial('cpu', g.aiSpecialContext('cpu'));
+      ok(picked === null, `normal never picks an AI special, got ${picked}`);
+    }
+
+    // AI の打球は人間コート（z<0）に入る。人間と同じ specialShot を通るが、狙いの
+    // 深さも曲がる向きもすべて鏡になっていること。
+    onHard(() => {
+      SP.AI.MOVES.forEach((move) => {
+        if (move === 'kickServe') return; // サーブは serve() の担当（下で別に見る）
+        let outs = 0;
+        let worst = null;
+        for (let i = 0; i < 30; i++) {
+          const g = rally(ALL);
+          g.cpu.z = 6; g.cpu.x = 1;
+          cpuBallAt(g, 1.4, 0);
+          aiHitWith(g, move);
+          const land = R.physics.predictLanding(g.ball);
+          const inHumanCourt = !land.net && land.z < 0 && land.z >= -(L + COURT.LINE_SLACK)
+            && Math.abs(land.x) <= W + COURT.LINE_SLACK;
+          if (!inHumanCourt) { outs++; worst = land; }
+        }
+        ok(outs === 0, `the AI ${move} always lands in the human court: ${outs}/30 out`
+          + (worst ? ` (worst x=${worst.x.toFixed(2)} z=${worst.z.toFixed(2)} net=${worst.net})` : ''));
+      });
+    });
+
+    // バギーホイップの曲がりは打つ側で鏡になる（人間は +x へ、AI は -x へ）
+    onHard(() => {
+      const g = rally(ALL);
+      g.cpu.z = 6; g.cpu.x = 1;
+      cpuBallAt(g, 1.0);
+      aiHitWith(g, 'buggyWhip');
+      ok(g.ball.curve < 0, `the AI whip curves toward -x, got ${g.ball.curve}`);
+      const human = rally(['buggyWhip']);
+      human.you.z = -9;
+      ballAt(human, 1.0);
+      human.you.special = 'buggyWhip';
+      human.hit('you');
+      ok(human.ball.curve === -g.ball.curve,
+        `and is the exact mirror of the human's: ${human.ball.curve} vs ${g.ball.curve}`);
+    });
+
+    // AI のキックサーブ：技として乗り、回数を使い、1バウンド目で跳ね上がる目印がつく
+    onHard(() => {
+      const g = new R.Game({ input: idle, hooks: noHooks });
+      g.setSpecials(ALL);
+      g.start();
+      g.server = 'cpu';
+      g.phase = 'serve';
+      g.pickAiServeSpecial = () => 'kickServe';
+      g.serve('cpu');
+      ok(g.ball.kick === true, 'the AI kick serve is marked to bounce high');
+      ok(g.usesLeft('kickServe', 'cpu') === 0, 'and it spends the AI budget for it');
+      ok(g.stats.cpu.specials === 1, 'and is counted on the CPU side');
+    });
+
+    // 技が乗った1打の後始末：モーションが尽きたら消え、ポイントをまたがない
+    onHard(() => {
+      const g = rally(ALL);
+      g.cpu.z = 6;
+      cpuBallAt(g, 1.4, 0);
+      aiHitWith(g, 'driveVolley');
+      ok(g.cpu.special === 'driveVolley', 'the move stays on while the motion plays');
+      g.cpu.anim = 0;
+      g.tickSpecial(1 / 60);
+      ok(g.cpu.special === null, 'and is cleared once the motion is done');
+      g.cpu.special = 'hawkEye';
+      g.newPoint();
+      ok(g.cpu.special === null, 'a new point never carries one over');
+    });
+
+    // hard のフルマッチ（AI の技が混ざり続けてもフリーズ・NaN・回数のマイナスがない）
+    onHard(() => {
+      const g = new R.Game({ input: fakeInput, hooks: noHooks });
+      g.setSpecials(ALL);
+      g.start();
+      let minUses = Infinity;
+      let aiSpecials = 0;
+      const spend = g.spendSpecial.bind(g);
+      g.spendSpecial = (move, label, who = 'you') => {
+        if (who !== 'you') aiSpecials++;
+        return spend(move, label, who);
+      };
+      for (let i = 0; i < 60 * 600; i++) {
+        if (g.phase === 'serve' && g.server === 'you') tap(g);
+        if (g.phase === 'rally' && i % 6 === 0) tap(g);
+        g.update(1 / 60);
+        SP.AI.MOVES.forEach((m) => {
+          minUses = Math.min(minUses, g.usesLeft(m, 'cpu'), g.usesLeft(m, 'cpuMate'), g.usesLeft(m, 'youMate'));
+        });
+      }
+      ok(Number.isFinite(g.ball.x) && Number.isFinite(g.cpu.x), 'ball and AI stay finite on hard');
+      ok(minUses >= 0, `the AI budget never goes negative, low water mark ${minUses}`);
+      ok(aiSpecials > 0, `and the AI actually used some over a full match: ${aiSpecials}`);
+    });
+
+    // ダブルスの hard でも、相手ペアが実際に技を使う（ロブの多いダブルスで目に見える
+    // 決め球＝ダンクスマッシュが出ることも含めて）
+    // (ユーザー報告: ダブルスの hard で CPU が必殺技を打ってこない)
+    onHard(() => {
+      const input = { moveX: 0, moveZ: 0, lob: false };
+      const g = new R.Game({ input, hooks: noHooks });
+      g.setSpecials(ALL);
+      g.start(true);
+      const used = {};
+      const spend = g.spendSpecial.bind(g);
+      g.spendSpecial = (move, label, who = 'you') => {
+        if (who !== 'you') used[`${who}:${move}`] = (used[`${who}:${move}`] || 0) + 1;
+        return spend(move, label, who);
+      };
+      for (let i = 0; i < 60 * 600; i++) {
+        input.moveX = Math.sin(i / 37) > 0 ? 1 : -1;
+        input.moveZ = Math.sin(i / 53) > 0 ? 1 : -1;
+        if (g.phase === 'serve' && g.server === 'you') tap(g);
+        if (g.phase === 'rally' && i % 6 === 0) tap(g);
+        g.update(1 / 60);
+      }
+      const byOpponent = Object.keys(used).filter((k) => k.indexOf('cpu') === 0);
+      ok(byOpponent.length > 0, `doubles on hard: the opposing pair uses specials, got ${JSON.stringify(used)}`);
+      ok(byOpponent.some((k) => k.indexOf('dunkSmash') !== -1),
+        `including the dunk smash on a lob, got ${JSON.stringify(used)}`);
+      ok(Number.isFinite(g.ball.x) && Number.isFinite(g.cpuMate.x), 'and the doubles match stays finite');
+    });
+
+    // --- Extreme：AI は全9種の技を1ゲームに複数回使う ---
+    // (要望: extreme hard モード。相手は全ての必殺技を1ゲーム中複数使えて、hard より強い動き)
+    {
+      const { PLAYER } = R.config;
+      /** 難易度 extreme の状態でひとつ確かめて、必ず normal へ戻す */
+      const onExtreme = (fn) => {
+        applyCpuLevel('extreme');
+        try { fn(); } finally { applyCpuLevel('normal'); }
+      };
+      /** cpu 側へ向かってくる球のある、ラリー中のゲーム（ball.age は反応済みの値にしておく） */
+      const cpuRally = () => {
+        const g = rally(ALL);
+        g.ball.last = 'you';
+        g.ball.age = 2; // reactReach() が守備範囲をいっぱいまで開く（＝一歩動ける球）
+        g.ball.bounces = 0;
+        return g;
+      };
+
+      // 技の一覧と回数：extreme は全9種、hard は守備範囲を広げない7種
+      onExtreme(() => {
+        const g = rally(ALL);
+        ok(g.aiMoves().length === R.config.SPECIAL_MOVES.length,
+          `extreme gives the AI every move, got ${g.aiMoves().join(',')}`);
+        ok(g.aiMoves().indexOf('shukuchi') !== -1 && g.aiMoves().indexOf('divingVolley') !== -1,
+          'including the two that hard withholds (the dash and the diving volley)');
+        ok(CPU.SPECIAL_USES > SP.USES_PER_GAME,
+          `and more than one use of each per game, got ${CPU.SPECIAL_USES}`);
+        ok(g.aiMoves().every((m) => g.usesLeft(m, 'cpu') === CPU.SPECIAL_USES),
+          `every move starts with that budget, got ${JSON.stringify(g.cpu.specialUses)}`);
+      });
+      // 選び直したら前の難易度の持ち分は残らない（extreme → hard で縮地が使えたままにならない）
+      {
+        applyCpuLevel('extreme');
+        const g = rally(ALL);
+        applyCpuLevel('hard');
+        g.refreshSpecials();
+        ok(g.usesLeft('shukuchi', 'cpu') === 0 && g.usesLeft('divingVolley', 'cpu') === 0,
+          `switching back to hard takes the extra moves away, got ${JSON.stringify(g.cpu.specialUses)}`);
+        ok(g.usesLeft('hawkEye', 'cpu') === SP.USES_PER_GAME,
+          'and puts the remaining ones back on the hard budget');
+        applyCpuLevel('normal');
+      }
+
+      // 飛びつきボレー：普通のリーチでは届かないノーバウンドに手が届く（その代わり硬直が長い）
+      const diveBall = (g) => {
+        g.cpu.x = 0;
+        g.cpu.z = 1.5; // ネット際（PLAYER.VOLLEY_Z 以内）
+        g.ball.y = 1.2;
+        g.ball.z = g.cpu.z - 0.1;
+        g.ball.x = g.cpu.x + PLAYER.CPU_REACH * g.cpu.attr.reach * 1.3; // 届かないが飛びつけば届く
+      };
+      onExtreme(() => {
+        const g = cpuRally();
+        diveBall(g);
+        g.diveCommit.cpu = true;
+        ok(g.swingAiAt('cpu', g.ball) === true, 'extreme: the AI dives at a volley it cannot otherwise reach');
+        ok(g.cpu.special === 'divingVolley', `and the shot carries the move, got ${g.cpu.special}`);
+        ok(g.usesLeft('divingVolley', 'cpu') === CPU.SPECIAL_USES - 1, 'it spends one use');
+        ok(g.recoverTimers.cpu === SP.DIVE.RECOVER,
+          `and pays the same long recovery the human does, got ${g.recoverTimers.cpu}`);
+        ok(g.cpu.diveVolley === false, 'the flag is cleared so the next swing is an ordinary one');
+      });
+      // 出す気でいない球（抽選に外れた球）には飛びつかない
+      onExtreme(() => {
+        const g = cpuRally();
+        diveBall(g);
+        g.diveCommit.cpu = false;
+        ok(g.swingAiAt('cpu', g.ball) === false, 'without the roll it just watches the ball go by');
+      });
+      // hard は飛びつかない（守備範囲を広げる技は持たせていない）
+      onHard(() => {
+        const g = cpuRally();
+        diveBall(g);
+        g.diveCommit.cpu = true;
+        ok(g.swingAiAt('cpu', g.ball) === false, 'hard never dives (the move is not in its list)');
+      });
+
+      // 飛びつきボレーの打球も、他の AI の技と同じく人間コートへ鏡になって飛ぶ
+      onExtreme(() => {
+        let outs = 0;
+        let worst = null;
+        for (let i = 0; i < 30; i++) {
+          const g = cpuRally();
+          diveBall(g);
+          g.diveCommit.cpu = true;
+          g.swingAiAt('cpu', g.ball);
+          const land = R.physics.predictLanding(g.ball);
+          const inHumanCourt = !land.net && land.z < 0 && land.z >= -(L + COURT.LINE_SLACK)
+            && Math.abs(land.x) <= W + COURT.LINE_SLACK;
+          if (!inHumanCourt) { outs++; worst = land; }
+        }
+        ok(outs === 0, `the AI diving volley always lands in the human court: ${outs}/30 out`
+          + (worst ? ` (worst x=${worst.x.toFixed(2)} z=${worst.z.toFixed(2)} net=${worst.net})` : ''));
+      });
+
+      // 縮地：走っても間に合わない球で打点へ瞬間移動する
+      const runaway = (g) => {
+        g.cpu.x = -4; g.cpu.z = 9;
+        g.ball.x = 0; g.ball.y = 1.3; g.ball.z = 0.5;
+        g.ball.vx = 11; g.ball.vy = 1.5; g.ball.vz = 8; // 逆サイドのはるか外へ走る球
+      };
+      onExtreme(() => {
+        const g = cpuRally();
+        runaway(g);
+        g.dashCommit.cpu = true;
+        const from = { x: g.cpu.x, z: g.cpu.z };
+        g.tickAiDash();
+        ok(g.cpu.x !== from.x || g.cpu.z !== from.z, 'extreme: the AI dashes to a ball it cannot run down');
+        ok(g.usesLeft('shukuchi', 'cpu') === CPU.SPECIAL_USES - 1, 'it spends one use');
+        ok(!!g.cpu.dash && g.cpu.dash.x === from.x && g.cpu.dash.z === from.z,
+          'and leaves the afterimage where it stood');
+        ok(g.cpu.chaseDist === 0 && g.cpu.settleT === 0,
+          'landing there counts as being set (not as a stretched run)');
+        ok(g.dashCommit.cpu === false, 'the roll is used up, so it cannot dash twice on one ball');
+        // シングルスでコートに立っていない相方は動かない（見えない選手が回数を使わないこと）
+        ok(g.cpuMate.dash === null && g.youMate.dash === null
+          && g.usesLeft('shukuchi', 'cpuMate') === CPU.SPECIAL_USES,
+          'in singles only the CPU on court dashes');
+      });
+      // 走って間に合う球には出さない（技を無駄にしない）
+      onExtreme(() => {
+        const g = cpuRally();
+        g.cpu.x = 0; g.cpu.z = 9;
+        g.ball.x = 0.2; g.ball.y = 1.3; g.ball.z = 6;
+        g.ball.vx = 0; g.ball.vy = 1; g.ball.vz = 3;
+        g.dashCommit.cpu = true;
+        g.tickAiDash();
+        ok(g.cpu.x === 0 && g.cpu.z === 9 && g.usesLeft('shukuchi', 'cpu') === CPU.SPECIAL_USES,
+          'a ball it can simply run to is not worth a dash');
+      });
+      // hard は縮地を持たない
+      onHard(() => {
+        const g = cpuRally();
+        runaway(g);
+        g.dashCommit.cpu = true;
+        g.tickAiDash();
+        ok(g.cpu.x === -4 && g.cpu.z === 9, 'hard never dashes');
+      });
+      // 残像はポイントをまたがない
+      onExtreme(() => {
+        const g = cpuRally();
+        g.cpu.dash = { x: 1, z: 2, t: SP.DASH.FX_T };
+        g.tickSpecial(SP.DASH.FX_T + 0.01);
+        ok(g.cpu.dash === null, 'the afterimage fades on its own');
+        g.cpu.dash = { x: 1, z: 2, t: SP.DASH.FX_T };
+        g.newPoint();
+        ok(g.cpu.dash === null, 'and never carries into the next point');
+      });
+
+      // extreme のフルマッチ（全9種が混ざり続けてもフリーズ・NaN・回数のマイナスがない）
+      onExtreme(() => {
+        const g = new R.Game({ input: fakeInput, hooks: noHooks });
+        g.setSpecials(ALL);
+        g.start();
+        const used = {};
+        let minUses = Infinity;
+        let maxUses = -Infinity;
+        const spend = g.spendSpecial.bind(g);
+        g.spendSpecial = (move, label, who = 'you') => {
+          if (who !== 'you') used[move] = (used[move] || 0) + 1;
+          return spend(move, label, who);
+        };
+        for (let i = 0; i < 60 * 600; i++) {
+          if (g.phase === 'serve' && g.server === 'you') tap(g);
+          if (g.phase === 'rally' && i % 6 === 0) tap(g);
+          g.update(1 / 60);
+          g.aiMoves().forEach((m) => {
+            minUses = Math.min(minUses, g.usesLeft(m, 'cpu'));
+            maxUses = Math.max(maxUses, g.usesLeft(m, 'cpu'));
+          });
+        }
+        ok(Number.isFinite(g.ball.x) && Number.isFinite(g.cpu.x) && Number.isFinite(g.cpu.z),
+          'ball and AI stay finite on extreme');
+        ok(minUses >= 0 && maxUses <= CPU.SPECIAL_USES,
+          `the AI budget stays inside 0..${CPU.SPECIAL_USES}, got ${minUses}..${maxUses}`);
+        ok(Object.keys(used).length > 0, `and the AI used some over a full match: ${JSON.stringify(used)}`);
+      });
+    }
+
+    ok(CPU.SPECIALS === false, 'the difficulty is left back on normal for the tests that follow');
+  }
+
   // --- 技は振り終わるまで残り、そこで消える（フォームの表示に使うため） ---
   {
     const g = rally(['hawkEye']);
@@ -5517,6 +7301,194 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     ok(g.you.special === 'hawkEye', 'the move stays on while the swing animation plays');
     for (let i = 0; i < 60 && g.you.special; i++) g.update(1 / 60);
     ok(g.you.special === null, 'and is cleared once the motion is over');
+  }
+}
+
+
+// --- レシーブ（サーブを打ち返す1打）の緩和 ---
+// ユーザー報告「プレイヤーがレシーブするとき、返すのがかなり難しい」への対応。
+// 球速・コース・深さは一切変えず（＝体感の速さはそのまま）、
+//   1) サーブが来る前からテイクバックを引いて待てる
+//   2) この1打だけスイングの有効時間とリーチが広い（RETURN.SWING_WINDOW / REACH_MULT）
+//   3) predictContact()（＝ガイド）が「いま離せば当たる」と言ったら本当に当たる
+// の3点で「なんとか返せる」ようにしてある。ここではその3点を検証する。
+{
+  const { RETURN, PHYSICS } = R.config;
+
+  /** CPU のサーブが実際に打たれる（phase が 'rally' に変わる）直前まで進める。 */
+  const upToServe = (input = { moveX: 0, moveZ: 0, lob: false }) => {
+    const g = new R.Game({ input, hooks: noHooks });
+    g.started = true;
+    g.server = 'cpu';
+    g.newPoint();
+    return g;
+  };
+  const runToServe = (g) => {
+    for (let i = 0; i < 4000 && !(g.serveInFlight && g.ball.live); i++) g.update(1 / 240);
+    return g.serveInFlight && g.ball.live;
+  };
+  /** そのサーブがサービスボックスに入るか（＝返球を論じる意味があるか） */
+  const servedIn = (g) => {
+    const L = R.physics.predictLanding({ ...g.ball });
+    return !L.net && L.z < 0 && L.z > -COURT.SERVICE - 0.02 && Math.abs(L.x) <= HALF_W + 0.02;
+  };
+
+  // 1) サーブを待っている間もテイクバックが溜まる（以前は chargeStart() が素通りだった）
+  {
+    const g = upToServe();
+    g.chargeStart('slice');
+    ok(g.you.charging, 'the receiver can start the takeback before the serve is struck');
+    for (let i = 0; i < 30; i++) g.update(1 / 60);
+    ok(g.you.chargeTime > 0.4,
+      `and it keeps charging while waiting, got ${g.you.chargeTime.toFixed(2)}s`);
+    ok(g.you.chargeSpin === 'slice', 'the spin key held while waiting is the one that comes out');
+    ok(g.you.chargeStroke === null,
+      'forehand/backhand is left undecided while the ball is still in the server hand');
+    ok(runToServe(g), 'precondition: the CPU serves');
+    ok(g.you.charging && g.you.chargeTime > 0.4,
+      `the takeback survives the moment the serve is struck, got ${g.you.chargeTime.toFixed(2)}s`);
+    ok(g.you.chargeStroke === 'forehand' || g.you.chargeStroke === 'backhand',
+      `and forehand/backhand is fixed right then, got ${g.you.chargeStroke}`);
+  }
+
+  // 1b) 1本目がフォールトしても、押しっぱなしのテイクバックは握り直さずに済む
+  {
+    const g = upToServe();
+    g.chargeStart('top');
+    for (let i = 0; i < 20; i++) g.update(1 / 60);
+    g.serveNumber = 1;
+    g.serveFault('アウト');
+    for (let i = 0; i < 300 && g.phase !== 'serve'; i++) g.update(1 / 60);
+    ok(g.phase === 'serve' && g.serveNumber === 2, 'precondition: a second serve is being set up');
+    ok(g.you.charging && g.you.chargeSpin === 'top',
+      'the held takeback carries into the second serve instead of being dropped');
+  }
+
+  // 1c) 自分のサーブでは、前のトスの溜めをきっちり持ち越さない（従来どおり）
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.started = true;
+    g.server = 'you';
+    g.newPoint();
+    g.chargeStart('slice');
+    for (let i = 0; i < 20; i++) g.update(1 / 60);
+    g.beginServe('アウト');
+    ok(!g.you.charging && g.you.chargeTime === 0 && g.you.chargeSpin === 'flat',
+      'the server own charge is still cleared when the stance is set up again');
+  }
+
+  // 2) スイングの有効時間は、レシーブのときだけ長い
+  {
+    const g = upToServe();
+    ok(runToServe(g), 'precondition: the CPU serves');
+    ok(Math.abs(g.swingWindow() - RETURN.SWING_WINDOW) < 1e-9,
+      `returning a serve uses the wider window, got ${g.swingWindow()}`);
+    ok(RETURN.SWING_WINDOW > PLAYER.SWING_WINDOW, 'which is wider than the normal one');
+    g.chargeStart();
+    g.chargeRelease();
+    ok(Math.abs(g.you.swing - RETURN.SWING_WINDOW) < 1e-9,
+      `and the released swing really lives that long, got ${g.you.swing.toFixed(3)}`);
+    // 返球された後（serveInFlight が下りた後）は通常の窓に戻る
+    g.serveInFlight = false;
+    ok(Math.abs(g.swingWindow() - PLAYER.SWING_WINDOW) < 1e-9,
+      'once the serve has been returned, the normal window is back');
+  }
+
+  // 2b) 窓が広がっても「早振り＝引っ張り／引きつけ＝流し」の関係は変わらない
+  // （待ち時間を秒のまま測ると、レシーブは必ず引っ張り最大＝サイドライン際へ散る）
+  {
+    const g = upToServe();
+    ok(runToServe(g), 'precondition: the CPU serves');
+    g.chargeStart();
+    g.chargeRelease();
+    const waitedAtRelease = g.swingWaited();
+    ok(waitedAtRelease < 1e-6, `waiting time starts at 0, got ${waitedAtRelease}`);
+    for (let i = 0; i < 12; i++) g.update(1 / 240);
+    const scaled = g.swingWaited();
+    const elapsed = RETURN.SWING_WINDOW - g.you.swing;
+    ok(scaled < elapsed,
+      `the wider window is read as a ratio, not raw seconds: ${scaled.toFixed(3)} < ${elapsed.toFixed(3)}`);
+    ok(Math.abs(scaled - elapsed * (PLAYER.SWING_WINDOW / RETURN.SWING_WINDOW)) < 1e-9,
+      'and it is scaled back onto the normal window exactly');
+  }
+
+  // 3) predictContact() が「いま離せば当たる」と言ったら本当に当たる。
+  // 以前は physics.predictWindow() が上限（スイングの有効時間）を1コマ越えた打点まで
+  // 返していたため、ガイドが当たると言った瞬間に離しても数ミリ秒差で必ず空振りしていた。
+  // これが空振りの主因だった（実測：レシーブ失敗の 64/66 が空振り）。
+  {
+    let tried = 0;
+    let connected = 0;
+    for (let i = 0; i < 200; i++) {
+      const input = { moveX: 0, moveZ: 0, lob: false };
+      const g = upToServe(input);
+      if (!runToServe(g)) continue;
+      if (!servedIn(g)) continue;
+      let released = false;
+      for (let f = 0; f < 800; f++) {
+        if (!released && g.predictContact() !== null) {
+          g.chargeStart();
+          g.chargeRelease();
+          released = true;
+          tried++;
+        }
+        g.update(1 / 240);
+        if (g.ball.last === 'you') { connected++; break; }
+        if (g.phase !== 'rally' || !g.ball.live || g.ball.bounces >= 2) break;
+      }
+    }
+    // 棒立ちのままラケットの円に入るのは、入ったサーブのうち半分ほど（残りは走らないと
+    // 届かない）。200本流して数十本が残る。
+    ok(tried > 40, `precondition: enough serves to swing at, got ${tried}`);
+    ok(connected >= tried * 0.98,
+      `releasing the moment predictContact() says it connects really does connect: ${connected}/${tried}`);
+  }
+
+  // 4) 通しで見て、レシーブが「なんとか返せる」水準になっている。
+  // 反応してから落下点へ走り、ボールが3mまで来たら離すだけ（人間にできる操作）で、
+  // 入ったサーブのほとんどが返る。たまにエースが決まるのは許容範囲。
+  {
+    const REACT = 0.28;
+    for (const level of ['normal', 'hard']) {
+      R.config.applyCpuLevel(level);
+      let inBox = 0;
+      let returned = 0;
+      let charge = 0;
+      for (let i = 0; i < 150; i++) {
+        const input = { moveX: 0, moveZ: 0, lob: false };
+        const g = upToServe(input);
+        g.chargeStart(); // サーブを待つ間にテイクバックを引いておく
+        if (!runToServe(g)) continue;
+        if (!servedIn(g)) continue;
+        inBox++;
+        let t = 0;
+        let released = false;
+        for (let f = 0; f < 1200; f++) {
+          const b = g.ball;
+          if (t >= REACT) {
+            const at = R.physics.predictAtZ(b, g.you.z, 3, 1) || R.physics.predictLanding(b);
+            const dx = (at.x || 0) - g.you.x;
+            input.moveX = Math.abs(dx) > 0.05 ? (dx > 0 ? -1 : 1) : 0; // INPUT_X_TO_WORLD = -1
+            if (!released && Math.hypot(b.x - g.you.x, b.z - g.you.z) < 3) {
+              g.chargeRelease();
+              released = true;
+            }
+          }
+          g.update(1 / 240);
+          t += 1 / 240;
+          if (g.ball.last === 'you') { returned++; charge += g.you.swingCharge; break; }
+          if (g.phase !== 'rally' || !g.ball.live || g.ball.bounces >= 2) break;
+        }
+      }
+      // 1本目は実際のテニスと同じく6割強しか入らない（SERVE.CPU_FIRST_MISS）。
+      ok(inBox > 60, `precondition: enough serves in the box on ${level}, got ${inBox}`);
+      ok(returned >= inBox * 0.9,
+        `${level}: most serves that land in are returnable, got ${returned}/${inBox}`);
+      ok(charge / Math.max(1, returned) > 0.3,
+        `${level}: and waiting with the racket back pays off, avg charge ${(charge / Math.max(1, returned)).toFixed(2)}`);
+    }
+    R.config.applyCpuLevel('normal');
+    ok(PHYSICS.BALL_R > 0, 'difficulty is left back on normal for anything that follows');
   }
 }
 
