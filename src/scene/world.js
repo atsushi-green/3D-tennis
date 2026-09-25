@@ -161,6 +161,8 @@
       recClock += dt;
       history.push({
         t: recClock,
+        // startReplay() が「今のサーブの構えより前」を切り落とすのに使う（IN_POINT 参照）
+        phase: state.phase,
         ball: {
           x: state.ball.x, y: state.ball.y, z: state.ball.z,
           impact: state.ball.impact, impactPower: state.ball.impactPower,
@@ -170,6 +172,7 @@
         youMate: snapshotPlayer(state.youMate),
         cpuMate: snapshotPlayer(state.cpuMate),
         doubles: state.doubles,
+        tossing: state.tossActive === true && state.server === 'you',
       });
       while (history.length > 1 && recClock - history[0].t > REPLAY.WINDOW_SEC) history.shift();
     }
@@ -193,9 +196,24 @@
       camera.lookAt(0, REPLAY.CAM_LOOK_Y, z);
     }
 
+    /**
+     * 1本のサーブの構え（beginServe() で phase が 'serve' になる）から決着までの間の phase。
+     * これ以外（'fault'・'over' など）のコマは、別のサーブ／前のポイントのもの。
+     */
+    const IN_POINT = new Set(['serve', 'rally']);
+
     /** ポイントが決まった瞬間に main.js から呼ぶ。録れていなければ何もしない。 */
     function startReplay() {
       if (history.length < 2) return;
+      // 再生してよいのは、決着したサーブの構えに入ってから後のコマだけ。
+      // 以前は直近 MAX_PLAY_SEC ぶんをそのまま切り出していたため、サーブで決まる短い
+      // ポイント（特にダブルフォルト：CPU は構えてから打つまで2秒足らず）では、頭に
+      // 1本目のフォールトの後始末（ネットに掛かって止まったボールなど）や前のポイントの
+      // 終わりが混ざり、そこから beginServe() が選手とボールをスタンスへ瞬間移動させる
+      // コマまで映っていた＝「アウトなのにネットに掛かる」「立ち位置が一瞬おかしい」。
+      let from = history.length - 1; // 最後のコマ＝決着の瞬間（phase は 'over'）
+      while (from > 0 && IN_POINT.has(history[from - 1].phase)) from--;
+      const segment = history.slice(from);
       // MAX_PLAY_SEC で長さを絞るのは前側（リード）だけ。末尾は必ず history の最後の
       // コマ＝ポイントが決まった瞬間（アウトならボールが実際にベースラインを越えた
       // 座標）まで含める。ここを history.slice() のまま先頭から MAX_PLAY_SEC ぶんだけ
@@ -203,8 +221,9 @@
       // リプレイがボールの決着より手前で止まって見えていた。
       const endT = history[history.length - 1].t;
       const startT = endT - REPLAY.MAX_PLAY_SEC;
-      reel = history.filter((f) => f.t >= startT);
-      if (reel.length < 2) reel = history.slice(-2);
+      reel = segment.filter((f) => f.t >= startT);
+      if (reel.length < 2) reel = segment.slice(-2);
+      if (reel.length < 2) return; // このサーブのコマが録れていない
       replayClock = 0;
       replaying = true;
     }
@@ -241,7 +260,7 @@
         // 落ち着かない切り替わりになってしまう。
         if (replayClock <= playEnd + REPLAY.HOLD_SEC) {
           const frame = frameAt(Math.min(replayClock, playEnd));
-          applyFrame(frame, dt, false);
+          applyFrame(frame, dt, frame.tossing);
           scene3d.updateTrail(trail, NO_TRAIL); // 再生そのものが「振り返り」なので軌跡は隠す
           scene3d.placeSmashHint(smashHint, null);
           scene3d.placeSwingGuide(swingGuide, null, state.you);
