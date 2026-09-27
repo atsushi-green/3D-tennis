@@ -410,8 +410,10 @@
         && g.you.speed <= JACK.MAX_SPEED;
     },
     // 「フォア側へ大きく振り回されて、追いつきざまにトップスピンで振り抜く」場面だけ：
-    // V（トップスピン）で溜めたフォアハンドで、まだ止まりきっておらず、ラケット側の
+    // V（トップスピン）で溜めたフォアハンドで、直前まで走っていて（sinceRunT）、ラケット側の
     // サイドへ大きく走って（runX）、実際にそちらへ寄って立っている（you.x）。
+    // 「走っていた」は離した瞬間の速さではなく直近 RECENT_RUN_T 秒で見る＝追いついて
+    // 止まってから振っても出る（SPECIAL.BUGGY.RECENT_RUN_T のコメント参照）。
     buggyWhip: (g, c) => {
       if (c.serving || !c.contact('buggyWhip')) return false;
       // ボレーの場面では出さない（走りながら擦り上げるグラウンドストロークの技なので、
@@ -420,7 +422,7 @@
       if (c.spin !== 'top' || g.currentStroke() !== 'forehand') return false;
       const { BUGGY } = SPECIAL;
       const side = RACKET_SIDE.you; // ラケット側を正にするための符号
-      return g.you.speed >= BUGGY.MIN_SPEED
+      return g.you.sinceRunT <= BUGGY.RECENT_RUN_T
         && g.you.runX * side >= BUGGY.MIN_RUN_X
         && g.you.x * side >= BUGGY.MIN_X;
     },
@@ -504,6 +506,9 @@
     // フォア側へ大きく振り回されて、追いつきざまに振り抜くグラウンドストローク。
     // 人間の「V（トップスピン）で溜めた」に当たる条件は AI には無いので、残りの
     // 3条件（フォアハンド・まだ止まりきっていない・ラケット側へ大きく走って寄った）で見る。
+    // 「止まりきっていない」は人間と違い**当たった瞬間の速さ**のまま（人間の猶予
+    // RECENT_RUN_T は持たせない）。AI は目標に着くとぴたりと止まって待つので、猶予を
+    // 与えると「間に合って待てた球」でも出るようになり、打ってくる回数が増える。
     buggyWhip: (g, c) => {
       if (c.natural.smash || c.natural.volley || c.stroke !== 'forehand') return false;
       const { BUGGY } = SPECIAL;
@@ -602,6 +607,10 @@
         // chaseDist の人間版で、resetChase() が新しい球のたびに0へ戻す。必殺技
         // バギーホイップの「フォア側へ大きく振り回されたか」の判定に使う。
         runX: 0,
+        // 最後に SPECIAL.BUGGY.MIN_SPEED 以上で走っていたときからの秒数。バギーホイップの
+        // 「まだ止まりきっていない」を、離した瞬間の速さではなく直近の走りで見るのに使う
+        // （SPECIAL.BUGGY.RECENT_RUN_T）。走っていなければ大きな値のまま。
+        sinceRunT: Infinity,
         // いまネット方向(+z)へ動いている速さ(m/s、符号つき。後ろへ下がっていれば負)。
         // speed と同じく「実際に動いた分」から出す＝コートの端でクランプされた分は入らない。
         // 必殺技ダンクスマッシュの「前へ踏み込みながら叩いたか」の判定に使う。
@@ -1040,7 +1049,7 @@
      * になる（t < flight なので後ろの項は c と逆向き＝いったん外へ膨らむ）。これを
      * 「ネット面(z=0)を通過する瞬間にポストの POST_CLEAR だけ外側を通る」で解く。
      * コートの内側すぎて回りきれない（必要な曲がりが MAX_CURVE を超える）ときは、
-     * ふつうの曲がるストレート（BUGGY.CURVE）として打つ。
+     * ふつうの曲がるストレート（BUGGY.LINE_CURVE）として打つ。
      * @param {{x:number, z:number}} target 落とす場所
      * @param {number} flight 飛翔時間(秒)
      * @param {string} who 打つ選手（手前/奥で曲がる向きもネットを通る向きも反転する）
@@ -1049,7 +1058,7 @@
     aroundPostCurve(target, flight, who = 'you') {
       const { BUGGY } = SPECIAL;
       const sign = buggyCurveSign(who); // 曲がる向き（コート中央へ向かう側）
-      const plain = sign * BUGGY.CURVE; // 回りきれないときのふつうの曲がるストレート
+      const plain = sign * BUGGY.LINE_CURVE; // 回りきれないときのふつうの曲がるストレート
       const from = this.ball; // まだ打点のまま（solveShot が書き換えるのは速度だけ）
       const vz = (target.z - from.z) / flight;
       if (!(vz * NET_DIR[who] > 0)) return plain; // 相手コートへ向かっていない
@@ -1061,7 +1070,7 @@
       // 大きさで比べる（向きは sign 側が持っている）。既にポストの外にいる等で
       // ふつうの曲がり以下しか要らない／内側すぎて回りきれない、のどちらも plain。
       const mag = need * sign;
-      if (!(mag > BUGGY.CURVE)) return plain;
+      if (!(mag > BUGGY.LINE_CURVE)) return plain;
       return mag > BUGGY.MAX_CURVE ? plain : need;
     }
 
@@ -1690,6 +1699,7 @@
       this.you.chargeStroke = null;
       this.you.serveMiss = false; // 前のサーブの「溜めすぎ」の抽選結果も持ち越さない
       this.you.special = null;    // 前の1打に乗っていた必殺技も持ち越さない
+      this.you.sinceRunT = Infinity; // 前のポイントの走りも持ち越さない（バギーホイップの条件）
       ACTORS.forEach((w) => { this.actor(w).dash = null; }); // 縮地の残像も持ち越さない
       ACTORS.forEach((w) => { this.actor(w).leap = null; }); // 跳躍も持ち越さない
       // AI（Hard / Extreme）ぶんも同じく持ち越さない
@@ -2201,8 +2211,9 @@
       Object.assign(ball, solveShot(from, shot.target, shot.flight, shot.clearance, spin, curve));
       ball.spin = spin;
       ball.curve = curve;
-      // 背を向けたまま打つツイーナーと、相手が読み負けたドロップだけ、相手の反応が
-      // この秒数ぶん余計に遅れる（updateReactTimers）。他の1打では 0 に戻す＝前の1打を持ち越さない。
+      // 背を向けたまま打つツイーナー、空中で曲がるバギーホイップ、相手が読み負けたドロップ
+      // だけ、相手の反応がこの秒数ぶん余計に遅れる（updateReactTimers）。他の1打では 0 に
+      // 戻す＝前の1打を持ち越さない。
       ball.reactBonus = shot.reactBonus || 0;
       // サーブの返球も含め、ここで打たれた球は以降このポイントの風(this.wind)にさらされる
       // （サーブ自体の飛翔だけは beginServe() が ball.wind=0 にしているので無風のまま）。
@@ -2688,6 +2699,7 @@
             curve: sign * BUGGY.CURVE,
             spin: 'top',
             risk: 0,
+            reactBonus: BUGGY.REACT_BONUS, // 曲がりを読みきるまで相手の出足が遅れる
           };
         }
         const target = {
@@ -2704,8 +2716,9 @@
           curve,
           spin: 'top',
           risk: 0,
+          reactBonus: BUGGY.REACT_BONUS,
           // ポールを回れたときだけ呼び名を変える（何が起きたのかが分かるように）
-          label: curve * sign > BUGGY.CURVE ? `${SPECIAL_LABEL.buggyWhip}（ポール回し）` : undefined,
+          label: curve * sign > BUGGY.LINE_CURVE ? `${SPECIAL_LABEL.buggyWhip}（ポール回し）` : undefined,
         };
       }
 
@@ -3255,12 +3268,14 @@
         this.you.fwd = this.you.netDir * (this.you.z - youBefore.z) / dt;
         // 左右の移動は符号つきで積む（行って戻れば打ち消される＝「振り回された」量になる）
         this.you.runX += this.you.x - youBefore.x;
+        this.you.sinceRunT = this.you.speed >= SPECIAL.BUGGY.MIN_SPEED ? 0 : this.you.sinceRunT + dt;
         this.drainStamina(this.you, moved);
       } else {
         this.you.vx = 0;
         this.you.vz = 0;
         this.you.speed = 0;
         this.you.fwd = 0;
+        this.you.sinceRunT += dt;
       }
 
       if (this.doubles) this.moveDoublesTeams(dt);
@@ -3295,7 +3310,8 @@
       const owner = this.ball.last;
       if (owner !== this.lastBallOwnerSeen) {
         // 能力値「リーチ・読み」が高い選手ほど反応遅延が短い（attr.react）。
-        // コースが読みにくい1打（ツイーナー／読み負けたドロップ）は、その分だけ反応の出足を遅らせる。
+        // コースが読みにくい1打（ツイーナー／バギーホイップ／読み負けたドロップ）は、
+        // その分だけ反応の出足を遅らせる。
         const bonus = this.ball.reactBonus || 0;
         if (owner === 'you') {
           this.reactTimers.cpu = PLAYER.CPU_REACT * this.cpu.attr.react + bonus;

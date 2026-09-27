@@ -5692,12 +5692,13 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const rushingIn = (g) => { g.you.fwd = SPECIAL.DUNK.MIN_FWD + 1; };
   /**
    * 「フォア側（画面の右＝world -x）へ大きく振り回されて、まだ走っている」状態にする。
-   * バギーホイップの条件（走った距離 runX・立ち位置 you.x・速度）をすべて満たす。
+   * バギーホイップの条件（走った距離 runX・立ち位置 you.x・直前まで走っていたか）をすべて満たす。
    */
   const draggedWide = (g) => {
     g.you.x = -(SPECIAL.BUGGY.MIN_X + 0.6);
     g.you.runX = -(SPECIAL.BUGGY.MIN_RUN_X + 0.5);
     g.you.speed = 5;
+    g.you.sinceRunT = 0; // いま走っている最中
     g.you.chargeSpin = 'top'; // V（トップスピン）で溜めている＝バギーホイップの条件
   };
 
@@ -6843,7 +6844,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 
     // 走ってはいるが、まだコートの中央寄り＝出ない
     const middle = rally(['buggyWhip']);
-    middle.you.z = -9; middle.you.speed = 5; middle.you.chargeSpin = 'top';
+    middle.you.z = -9; middle.you.speed = 5; middle.you.sinceRunT = 0; middle.you.chargeSpin = 'top';
     middle.you.x = -(MIN_X - 0.5);
     middle.you.runX = -(MIN_RUN_X + 1);
     ballAt(middle, 1.0);
@@ -6852,7 +6853,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 
     // 右サイドにはいるが、そこまで走ってきていない（最初からそこに立っていた）＝出ない
     const parked = rally(['buggyWhip']);
-    parked.you.z = -9; parked.you.speed = 5; parked.you.chargeSpin = 'top';
+    parked.you.z = -9; parked.you.speed = 5; parked.you.sinceRunT = 0; parked.you.chargeSpin = 'top';
     parked.you.x = -(MIN_X + 1);
     parked.you.runX = -(MIN_RUN_X - 0.5);
     ballAt(parked, 1.0);
@@ -6861,7 +6862,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 
     // 逆サイド（左）へ走っていても出ない（符号が逆）
     const wrongWay = rally(['buggyWhip']);
-    wrongWay.you.z = -9; wrongWay.you.speed = 5; wrongWay.you.chargeSpin = 'top';
+    wrongWay.you.z = -9; wrongWay.you.speed = 5; wrongWay.you.sinceRunT = 0; wrongWay.you.chargeSpin = 'top';
     wrongWay.you.x = MIN_X + 1;
     wrongWay.you.runX = MIN_RUN_X + 1;
     ballAt(wrongWay, 1.0);
@@ -6887,6 +6888,52 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       ok(g.pickSpecial() === null,
         `the same situation with ${spin} does not: got ${g.pickSpecial()}`);
     }
+
+    // 追いついて止まってから振っても、直前（RECENT_RUN_T 以内）まで走っていれば出る
+    // (報告: 自分のバギーホイップがあまり狙って発動できない。離した瞬間の速さだけを
+    //  見ていたので、止まって構えた時点で条件から外れていた)
+    const { RECENT_RUN_T } = SPECIAL.BUGGY;
+    const planted = rally(['buggyWhip']);
+    planted.you.z = -9;
+    draggedWide(planted);
+    planted.you.speed = 0;
+    planted.you.sinceRunT = RECENT_RUN_T - 0.05;
+    ballAt(planted, 1.0);
+    ok(planted.pickSpecial() === 'buggyWhip',
+      `planted right after the sprint: still a buggy whip, got ${planted.pickSpecial()}`);
+
+    // 止まってから時間が経っていれば、もう「走らされた1打」ではない
+    const settled = rally(['buggyWhip']);
+    settled.you.z = -9;
+    draggedWide(settled);
+    settled.you.speed = 0;
+    settled.you.sinceRunT = RECENT_RUN_T + 0.05;
+    ballAt(settled, 1.0);
+    ok(settled.pickSpecial() === null,
+      `set and waiting for a while: no buggy whip, got ${settled.pickSpecial()}`);
+  }
+
+  // --- 「直前まで走っていたか」は実際の移動から測る ---
+  {
+    const input = { moveX: 1, moveZ: 0, lob: false }; // 画面の右（world -x）へ走る
+    const g = new R.Game({ input, hooks: noHooks });
+    g.start();
+    g.setSpecials(['buggyWhip']);
+    g.phase = 'rally';
+    g.you.x = 0; g.you.z = -9;
+    for (let i = 0; i < 40; i++) g.movePlayers(1 / 60);
+    ok(g.you.sinceRunT === 0, `while sprinting it stays at 0, got ${g.you.sinceRunT}`);
+    input.moveX = 0; // キーを離して止まる
+    for (let i = 0; i < 30; i++) g.movePlayers(1 / 60);
+    ok(g.you.speed === 0, `precondition: stopped, speed=${g.you.speed}`);
+    // 減速のぶん（最高速から MIN_SPEED を切るまで）だけ 0.5 秒より短い
+    ok(g.you.sinceRunT > SPECIAL.BUGGY.RECENT_RUN_T && g.you.sinceRunT < 0.5,
+      `and it counts the time since the last running frame: ${g.you.sinceRunT.toFixed(3)}s`);
+    // 次のポイントには持ち越さない
+    g.you.sinceRunT = 0;
+    g.newPoint();
+    ok(g.you.sinceRunT > SPECIAL.BUGGY.RECENT_RUN_T,
+      `a new point forgets the last point's sprint, got ${g.you.sinceRunT}`);
   }
 
   // --- 走った量（runX）は実際の移動から積まれる ---
@@ -7119,6 +7166,10 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
           `precondition: that is the AI's forehand side, got ${g.aiSpecialContext('cpu').stroke}`);
       }
       ok(pick(draggedCpu) === 'buggyWhip', 'dragged wide to the forehand side picks the buggy whip');
+      // AI は当たった瞬間の速さで見る（人間の猶予 RECENT_RUN_T は持たない）：同じ場面でも
+      // 追いついて止まって待てていれば出ない＝ AI が打ってくる回数は増えない
+      ok(pick((g) => { draggedCpu(g); g.cpu.speed = 0; }) === '',
+        'but not once the AI has got there and stopped');
       // 走ってもいない・止まってもいない普通の1打 → 何も出ない
       ok(pick((g) => { g.cpu.z = 9; g.cpu.speed = 1; cpuBallAt(g, 1.0); }) === '',
         'an ordinary groundstroke picks nothing');
@@ -7176,6 +7227,119 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       human.hit('you');
       ok(human.ball.curve === -g.ball.curve,
         `and is the exact mirror of the human's: ${human.ball.curve} vs ${g.ball.curve}`);
+    });
+
+    // AI のクロスのバギーホイップは、読んで走れば人間にも届く（読み負ければ決まる）
+    // (報告: 相手が放つクロスのバギーホイップショットが強力すぎる)
+    // 以前はダウン・ザ・ラインに見える球が空中で 7.5m 曲がって逆サイドへ落ち、バウンド後も
+    // 横へ 14.5m/s で逃げていくので、ベースライン中央から走っても1本も届かなかった。
+    // 人間の足（PLAYER.SPEED / ACCEL）で、打たれてから 0.25 秒遅れて最短に走る、という
+    // 見積もりで「届く打点があるか」を数える。
+    onHard(() => {
+      const { PLAYER: P, PHYSICS: PH } = R.config;
+      const REACT_T = 0.25;
+      /** 打たれてから t 秒で走れる距離（反応してから加速して最高速へ） */
+      const runnable = (t) => {
+        const T = Math.max(0, t - REACT_T);
+        const tTop = P.SPEED / P.ACCEL;
+        return T < tTop ? 0.5 * P.ACCEL * T * T : 0.5 * P.ACCEL * tTop * tTop + P.SPEED * (T - tTop);
+      };
+      /** (fromX, ベースラインの少し後ろ) から、バウンド後の打点のどれかに届くか */
+      const reachable = (ball, fromX) => {
+        const s = Object.assign({}, ball);
+        const fromZ = -(L + 0.5);
+        let bounces = 0;
+        for (let t = 0; t < 3; t += PH.STEP) {
+          R.physics.integrate(s, PH.STEP);
+          if (R.physics.hitsNet(s)) return false;
+          if (s.y <= PH.BALL_R && s.vy < 0) {
+            R.physics.reflectBounce(s);
+            if (++bounces >= 2) return false;
+          }
+          if (bounces === 1 && s.y < P.REACH_Y
+            && Math.hypot(s.x - fromX, s.z - fromZ) - P.REACH <= runnable(t)) return true;
+        }
+        return false;
+      };
+      // CPU が自分のフォア側（world +x）へ振り回されて打つ場面を並べる。
+      // AI のクロスは人間のフォア側（world -x）へ曲がり落ちる。
+      const fromCenter = [];
+      const guessedWrong = [];
+      for (let xi = 0; xi <= 4; xi++) {
+        for (let zi = 0; zi <= 2; zi++) {
+          for (let yi = 0; yi <= 1; yi++) {
+            const g = rally(ALL);
+            g.cpu.x = SP.BUGGY.MIN_X + xi * 0.5;
+            g.cpu.z = 10 + zi;
+            cpuBallAt(g, 0.6 + yi * 0.5);
+            aiHitWith(g, 'buggyWhip');
+            fromCenter.push(reachable(g.ball, 0));
+            guessedWrong.push(reachable(g.ball, 1)); // バック側へ1m寄っていた＝読み負け
+          }
+        }
+      }
+      const rate = (a) => a.filter(Boolean).length / a.length;
+      ok(rate(fromCenter) >= 0.25,
+        `from the middle of the baseline the AI's cross whip is reachable often enough: ${(rate(fromCenter) * 100).toFixed(0)}%`);
+      ok(rate(guessedWrong) <= 0.2,
+        `but it still wins the point when you lean the wrong way: ${(rate(guessedWrong) * 100).toFixed(0)}% reachable`);
+    });
+
+    // バギーホイップは曲がる球なので、相手の CPU/AI は読みきるまで出足が遅れる
+    // (要望: CPU がバギーホイップの曲がりを読むのが遅れるようにしてほしい)
+    // 以前は CPU が打たれた瞬間に曲がった後の着地点へ走り出せたので、人間のクロスは
+    // Hard の CPU に中央で待たれると1本も決まらなかった。
+    onHard(() => {
+      // 打球そのものに「読みにくさ」が乗る（人間・AI どちらが打っても。クロスでもストレートでも）
+      {
+        const g = rally(ALL);
+        g.you.z = -9;
+        ballAt(g, 1.0);
+        g.you.special = 'buggyWhip';
+        g.hit('you');
+        ok(g.ball.reactBonus === SP.BUGGY.REACT_BONUS,
+          `the human's whip delays the reply by ${SP.BUGGY.REACT_BONUS}s, got ${g.ball.reactBonus}`);
+        g.update(1 / 60);
+        ok(g.reactTimers.cpu > PLAYER.CPU_REACT * g.cpu.attr.react + SP.BUGGY.REACT_BONUS - 0.05,
+          `and the CPU really starts late: ${g.reactTimers.cpu.toFixed(3)}s`);
+        const ai = rally(ALL);
+        ai.cpu.z = 6; ai.cpu.x = 1;
+        cpuBallAt(ai, 1.0);
+        aiHitWith(ai, 'buggyWhip');
+        ok(ai.ball.reactBonus === SP.BUGGY.REACT_BONUS, `so does the AI's, got ${ai.ball.reactBonus}`);
+      }
+
+      // フォア側の隅から打つクロスが、中央で待つ CPU から実際に決まるか
+      /** @returns {number} 決まった割合（CPU が返せずに人間のポイントになった本数の比） */
+      const winRate = (cpuX) => {
+        let wins = 0;
+        let n = 0;
+        for (let xi = 0; xi <= 4; xi++) {
+          for (let zi = 0; zi <= 2; zi++) {
+            for (let yi = 0; yi <= 1; yi++) {
+              const g = rally(ALL);
+              g.ball.last = 'cpu';
+              g.you.x = -(SP.BUGGY.MIN_X + xi * 0.5);
+              g.you.z = -(10 + zi);
+              ballAt(g, 0.6 + yi * 0.5);
+              g.cpu.x = cpuX; g.cpu.z = L + 0.5;
+              g.you.special = 'buggyWhip';
+              const before = g.stats.you.points;
+              g.hit('you');
+              for (let i = 0; i < 240 && g.ball.last !== 'cpu' && g.phase === 'rally'; i++) g.update(1 / 60);
+              if (g.stats.you.points > before) wins++;
+              n++;
+            }
+          }
+        }
+        return wins / n;
+      };
+      const center = winRate(0);
+      ok(center >= 0.25,
+        `the human's cross whip now beats a CPU waiting in the middle: ${(center * 100).toFixed(0)}%`);
+      // 曲がる先（world +x）へ先に寄られていれば返される＝読まれたら決まらない、は残る
+      const read = winRate(1);
+      ok(read <= 0.2, `but a CPU already leaning that way still gets it back: ${(read * 100).toFixed(0)}% won`);
     });
 
     // AI のキックサーブ：技として乗り、回数を使い、1バウンド目で跳ね上がる目印がつく
