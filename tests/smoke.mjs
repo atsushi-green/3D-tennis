@@ -3309,6 +3309,9 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     g.youMate.x = -youX; g.youMate.z = DOUBLES.NET_Z_YOU;
     g.cpu.x = 3; g.cpu.z = 10.5;
     g.cpuMate.x = 0; g.cpuMate.z = DOUBLES.NET_Z_CPU;
+    // 前衛・後衛はポイントごとに決まる（開幕ポイントは cpuMate がレシーバー＝後衛）ので、
+    // 上の立ち位置どおり cpuMate を前衛にしておく
+    g.frontOf.cpu = 'cpuMate';
     g.poachCommit.cpuMate = false;
     for (let i = 0; i < 240; i++) {
       g.poachCommit.cpuMate = false; // ここで見たいのは「仕掛けない」ときの構え
@@ -3328,6 +3331,83 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `cross rally: it moves over to guard the line instead, x=${cross.x.toFixed(2)}`);
   ok(straight.z < cross.z,
     `and stands closer to the net on the straight pattern, z=${straight.z.toFixed(2)} vs ${cross.z.toFixed(2)}`);
+}
+
+// --- ダブルス雁行陣：CPU の前衛・後衛はポイントの途中で入れ替わらない ---
+// (退行テスト／ユーザー報告: 以前は cpu＝後衛・cpuMate＝前衛で固定だったため、cpuMate が
+//  サーブ／レシーブする番では、ベースラインから始めた cpuMate がネットへ上がり、ネット際で
+//  構えていた cpu がベースラインへ下がる＝ポイントの途中で2人がすれ違っていた)
+{
+  const { DOUBLES } = R.config;
+  /** cpu チームの誰がサーブ／レシーブするかを決めてポイントを始める */
+  const pointWith = (cpuServes, mateTakesIt) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(true);
+    g.server = cpuServes ? 'cpu' : 'you';
+    if (cpuServes) g.serverPartner.cpu = mateTakesIt ? 'cpuMate' : 'cpu';
+    // レシーブはサイドで決まる（side=+1 は主力、-1 は相方）
+    else g.match.points.you = mateTakesIt ? 0 : 1;
+    g.newPoint();
+    return g;
+  };
+  for (const cpuServes of [true, false]) {
+    for (const mateTakesIt of [true, false]) {
+      const g = pointWith(cpuServes, mateTakesIt);
+      const label = `${mateTakesIt ? 'cpuMate' : 'cpu'} ${cpuServes ? 'serves' : 'receives'}`;
+      const taker = mateTakesIt ? 'cpuMate' : 'cpu';
+      ok(cpuServes ? g.servingPlayer() === taker : g.receivingPlayer('cpu', g.match.serveSide) === taker,
+        `precondition: ${label}`);
+      const netMan = mateTakesIt ? 'cpu' : 'cpuMate';
+      ok(Math.abs(g[netMan].z - DOUBLES.NET_Z_CPU) < 0.01,
+        `precondition (${label}): ${netMan} starts at the net, z=${g[netMan].z}`);
+      ok(g.frontOf.cpu === netMan, `${label}: the one at the net plays front, got ${g.frontOf.cpu}`);
+    }
+  }
+
+  // cpuMate がサーブした後のラリー：cpuMate は後衛のまま深く、cpu は前衛のままネット際に残る
+  {
+    const g = pointWith(true, true);
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.ball.last = 'cpu'; // cpu チームが打った直後＝2人とも構えに戻るだけ
+    Object.assign(g.ball, { x: 0, y: 1.2, z: -2, vx: 0, vy: 1, vz: -6, bounces: 0, age: 0.2, live: true });
+    for (let i = 0; i < 240; i++) g.moveDoublesTeams(1 / 60);
+    ok(g.cpu.z <= DOUBLES.FRONT_MAX_Z, `the server's partner (cpu) stays at the net, z=${g.cpu.z.toFixed(2)}`);
+    ok(g.cpuMate.z > HALF_L - 2, `the server (cpuMate) stays back, z=${g.cpuMate.z.toFixed(2)}`);
+  }
+
+  // 実際の試合の流れの中でも、前衛だった方が後衛より深くまで下がることがない
+  {
+    const input = { moveX: 0, moveZ: 0, lob: false };
+    const g = new R.Game({ input, hooks: noHooks });
+    g.start(true);
+    let points = 0; let mateTook = 0; let swapped = 0;
+    let startFront = null; let swappedThisPoint = false;
+    for (let i = 0; i < 60 * 600; i++) {
+      input.moveX = Math.sin(i / 37) > 0 ? 1 : -1;
+      input.moveZ = Math.sin(i / 53) > 0 ? 1 : -1;
+      if (g.phase === 'serve' && g.servingPlayer() === 'you') tap(g);
+      if (g.phase === 'rally' && i % 6 === 0) tap(g);
+      g.update(1 / 60);
+      if (g.phase === 'rally') {
+        if (!startFront) {
+          // ラリーの開始時点で、ネットに近かった方
+          startFront = Math.abs(g.cpu.z) < Math.abs(g.cpuMate.z) ? 'cpu' : 'cpuMate';
+          if (startFront === 'cpu') mateTook++;
+        }
+        const back = startFront === 'cpu' ? 'cpuMate' : 'cpu';
+        if (Math.abs(g[startFront].z) > Math.abs(g[back].z) + 2) swappedThisPoint = true;
+      } else if (startFront) {
+        points++;
+        if (swappedThisPoint) swapped++;
+        startFront = null;
+        swappedThisPoint = false;
+      }
+    }
+    ok(points > 50 && mateTook > 10,
+      `precondition: enough points where cpuMate served/received, got ${mateTook}/${points}`);
+    ok(swapped === 0, `the CPU pair never swaps front and back mid-point, got ${swapped}/${points} points`);
+  }
 }
 
 // --- ダブルス雁行陣：CPU の後衛は相手の前衛を避けて打つ ---

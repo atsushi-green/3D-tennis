@@ -71,6 +71,9 @@
   /** 個々の選手が、チームとしてはどちら側か（ダブルスの味方はチームメイトと同じチーム） */
   const TEAM_OF = { you: 'you', youMate: 'you', cpu: 'cpu', cpuMate: 'cpu' };
 
+  /** ダブルスで、その選手の相方 */
+  const MATE_OF = { you: 'youMate', youMate: 'you', cpu: 'cpuMate', cpuMate: 'cpu' };
+
   /** 4人ぶんまとめて同じ処理をしたいとき用（スタミナの回復など） */
   const ACTORS = Object.keys(TEAM_OF);
 
@@ -700,6 +703,16 @@
       this.swingGuide = null;
       /** ダブルスの AI パートナー(youMate)に指示する定位置。'net'（前へ）か 'back'（下がれ）。 */
       this.youMateFormation = 'net';
+      /**
+       * ダブルスで、いまのポイントの前衛（個人キー）。後衛はその相方（MATE_OF）。
+       * cpu チームはポイントごとに決め直す（beginServe）：サーバー／レシーバーが後衛、
+       * その相方（positionDoublesMates() がネット際に置いた方）が前衛で、ポイントの間は
+       * 入れ替えない。以前は cpu＝後衛・cpuMate＝前衛で固定だったため、cpuMate が
+       * サーブ／レシーブする番では、ベースラインから始めた cpuMate がネットへ、ネット際から
+       * 始めた cpu がベースラインへとポイント中にすれ違っていた（ユーザー報告）。
+       * you チームは人間が自由に動くので、相方(youMate)を前衛のまま固定する。
+       */
+      this.frontOf = { you: 'youMate', cpu: 'cpuMate' };
       /** true の間、ボールはトス中（重力で上下するだけ）。溜めキーを離して打つまで待つ。 */
       this.tossActive = false;
       /**
@@ -752,7 +765,7 @@
        * 相手が打った瞬間に球ごと1回だけ抽選し（updateReactTimers）、次の球まで持ち越さない。
        * true の間だけ、前衛は構え位置ではなく ai.poachRun() の迎撃点へ全力で走る。
        */
-      this.poachCommit = { cpuMate: false, youMate: false };
+      this.poachCommit = { cpu: false, cpuMate: false, youMate: false };
       /**
        * AI の「救済技」（縮地・飛びつきボレー。Extreme のみ）を、いま飛んできている1球に
        * 対して出す気でいるか。ポーチ（poachCommit）と同じく相手が打った瞬間に球ごと1回だけ
@@ -813,7 +826,7 @@
      * レシーバーが固定：落下点に近くても、レシーブ側でない相方（ネット際で構えている方）は
      * 手を出さない。
      *
-     * 一度でも返球された後は、雁行陣（後衛＝you/cpu、前衛＝相方）の役割で決める
+     * 一度でも返球された後は、雁行陣（前衛＝frontOf、後衛＝その相方）の役割で決める
      * （ai.pairResponder）：前衛がポーチできるならポーチ優先、そうでなければ落下点が
      * どちらの持ち場かで決まる。単に「落下点に近い方」だと中途半端な深さの球のたびに
      * 前衛が下がって雁行が崩れていた。
@@ -823,8 +836,8 @@
      */
     doublesResponder(team) {
       if (this.serveInFlight) return this.receivingPlayer(team, this.match.serveSide);
-      const backKey = team === 'you' ? 'you' : 'cpu';
-      const frontKey = team === 'you' ? 'youMate' : 'cpuMate';
+      const frontKey = this.frontOf[team];
+      const backKey = MATE_OF[frontKey];
       if (!this.hasFrontPlayer(team)) {
         return isResponder(this[backKey], this[frontKey], this.ball) ? backKey : frontKey;
       }
@@ -1698,10 +1711,9 @@
       this.recoverTimers.youMate = 0;
       this.recoverTimers.you = 0;
       this.lastBallOwnerSeen = null;
-      this.poachCommit.cpuMate = false;
-      this.poachCommit.youMate = false;
       ACTORS.forEach((w) => {
         if (w === 'you') return;
+        this.poachCommit[w] = false;
         this.dashCommit[w] = false;
         this.diveCommit[w] = false;
       });
@@ -1728,6 +1740,8 @@
 
       if (this.doubles) {
         this.positionDoublesMates(server, serverActor, serverTeam, receiver, receiverActor, receiverTeam);
+        // cpu チームの前衛は、いまネット際に置いた方（サーバー／レシーバーの相方）。
+        this.frontOf.cpu = MATE_OF[serverTeam === 'cpu' ? server : receiver];
       }
 
       if (server === 'you') {
@@ -1769,19 +1783,16 @@
      * 相方の反対サイドへ寄る（本格的なフォーメーション戦略ではない簡易版、ai.coverPosition と同じ考え方）。
      */
     positionDoublesMates(server, serverActor, serverTeam, receiver, receiverActor, receiverTeam) {
-      const mateOf = (individual) => (TEAM_OF[individual] === 'you'
-        ? (individual === 'you' ? 'youMate' : 'you')
-        : (individual === 'cpu' ? 'cpuMate' : 'cpu'));
       // you 側だけ、指示されたフォーメーション（前へ／下がれ）を定位置に反映する
       const netZ = (team) => (team === 'you'
         ? (this.youMateFormation === 'back' ? DOUBLES.BACK_Z_YOU : DOUBLES.NET_Z_YOU)
         : DOUBLES.NET_Z_CPU);
 
-      const serverMateActor = this.actor(mateOf(server));
+      const serverMateActor = this.actor(MATE_OF[server]);
       serverMateActor.x = clamp(-serverActor.x * DOUBLES.MIRROR, -DOUBLES.SLOT_X, DOUBLES.SLOT_X);
       serverMateActor.z = netZ(serverTeam);
 
-      const receiverMateActor = this.actor(mateOf(receiver));
+      const receiverMateActor = this.actor(MATE_OF[receiver]);
       receiverMateActor.x = clamp(-receiverActor.x * DOUBLES.MIRROR, -DOUBLES.SLOT_X, DOUBLES.SLOT_X);
       receiverMateActor.z = netZ(receiverTeam);
     }
@@ -3289,7 +3300,7 @@
         if (owner === 'you') {
           this.reactTimers.cpu = PLAYER.CPU_REACT * this.cpu.attr.react + bonus;
           this.reactTimers.cpuMate = PLAYER.CPU_REACT * this.cpuMate.attr.react + bonus;
-          this.rollPoach('cpuMate', 'cpu');
+          this.rollPoach(this.frontOf.cpu, 'cpu');
           this.rollAiRescue('cpu');
           this.rollAiRescue('cpuMate');
         } else if (owner === 'cpu') {
@@ -3306,7 +3317,7 @@
      * 立っていれば触れる球（ai.poachSpot）は担当の判定で自然に拾うので、ここで決めるのは
      * 「ストレートを守る位置を捨てて中央へ仕掛けにいくか」だけ。能力値「ネット志向」
      * （attr.net）が高い選手ほどよく仕掛ける。
-     * @param {'cpuMate'|'youMate'} mate 前衛
+     * @param {'cpu'|'cpuMate'|'youMate'} mate 前衛（frontOf）
      * @param {'cpu'|'you'} team その前衛のチーム
      */
     rollPoach(mate, team) {
@@ -3335,7 +3346,7 @@
     /**
      * ポーチに出ると決めている前衛の、いまの迎撃点。出ると決めていない／どこにも
      * 間に合わない（＝仕掛けても届かない）なら null で、通常どおり構え位置に戻る。
-     * @param {'cpuMate'|'youMate'} mate
+     * @param {'cpu'|'cpuMate'|'youMate'} mate 前衛（frontOf）
      * @param {1|-1} side その前衛がいる陣地
      */
     poachTarget(mate, side) {
@@ -3383,7 +3394,7 @@
     }
 
     /**
-     * ダブルスの4人の移動。ソフトテニスの雁行陣（後衛＝you/cpu、前衛＝相方）を敷き、
+     * ダブルスの4人の移動。ソフトテニスの雁行陣（前衛＝frontOf、後衛＝その相方）を敷き、
      * 取りにいく側（doublesResponder）が返球に向かい、もう一方は役割どおりの位置で構える：
      * - 後衛が追っている間、前衛は展開（クロス／ストレート）に応じた構え（ai.frontPosition）。
      * - 前衛がポーチに出ている間、後衛はベースライン付近で逆サイドを開ける（ai.backPosition）。
@@ -3407,38 +3418,43 @@
       }
 
       const ball = this.ball;
-      const cpuBefore = { x: this.cpu.x, z: this.cpu.z };
-      const cpuMateBefore = { x: this.cpuMate.x, z: this.cpuMate.z };
+      // cpu チームの前衛・後衛（このポイントの間は入れ替わらない。frontOf 参照）
+      const frontKey = this.frontOf.cpu;
+      const backKey = MATE_OF[frontKey];
+      const front = this.actor(frontKey);
+      const back = this.actor(backKey);
+      const frontBefore = { x: front.x, z: front.z };
+      const backBefore = { x: back.x, z: back.z };
       const youMateBefore = { x: this.youMate.x, z: this.youMate.z };
 
-      // cpu チーム：you 側の打球が向かってくる番なら、cpu/cpuMate のうち応答すべき方が追う
-      // （doublesResponder：サーブリターン中はレシーバー固定、それ以外は近い方）。
+      // cpu チーム：you 側の打球が向かってくる番なら、前衛・後衛のうち応答すべき方が追う
+      // （doublesResponder：サーブリターン中はレシーバー固定、それ以外は持ち場で決める）。
       // 反応遅延タイマーが残っている間は、担当側でも静止したまま（＝逆を突かれる余地）。
       const cpuTeamChasing = this.phase === 'rally' && ball.last === 'you';
-      // cpu 陣地の前衛（cpuMate）の構え。相手の後衛（you チームの深い方）と味方後衛(cpu)の
+      // cpu 陣地の前衛の構え。相手の後衛（you チームの深い方）と味方後衛の
       // 位置関係＝展開で、ストレートを守るか・真ん中を越えて攻めに出るかが決まる。
-      const cpuFront = () => frontPosition(this.doublesFoes('cpuMate').back, this.cpu, DOUBLES.NET_Z_CPU);
-      if (cpuTeamChasing && this.doublesResponder('cpu') === 'cpu') {
-        if (this.reactTimers.cpu <= 0) {
-          this.moveIfRecovered('cpu', this.cpu, cpuBefore, chasePosition(ball, 1, this.cpu), PLAYER.CPU_CHASE, dt);
+      const cpuFront = () => frontPosition(this.doublesFoes(frontKey).back, back, DOUBLES.NET_Z_CPU);
+      if (cpuTeamChasing && this.doublesResponder('cpu') === backKey) {
+        if (this.reactTimers[backKey] <= 0) {
+          this.moveIfRecovered(backKey, back, backBefore, chasePosition(ball, 1, back), PLAYER.CPU_CHASE, dt);
         } else {
-          this.cpu.speed = 0;
+          back.speed = 0;
         }
         // 後衛が追っている間、前衛は「仕掛ける」と決めていれば迎撃点へ全力で出て
         // （＝ポーチ）、そうでなければ展開に応じた構え位置へ寄る。
-        const poach = this.reactTimers.cpuMate <= 0 ? this.poachTarget('cpuMate', 1) : null;
-        this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore,
+        const poach = this.reactTimers[frontKey] <= 0 ? this.poachTarget(frontKey, 1) : null;
+        this.moveIfRecovered(frontKey, front, frontBefore,
           poach || cpuFront(), poach ? PLAYER.CPU_CHASE : DOUBLES.FRONT_MOVE, dt);
       } else if (cpuTeamChasing) {
-        if (this.reactTimers.cpuMate <= 0) {
-          this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore, chasePosition(ball, 1, this.cpuMate), PLAYER.CPU_CHASE, dt);
+        if (this.reactTimers[frontKey] <= 0) {
+          this.moveIfRecovered(frontKey, front, frontBefore, chasePosition(ball, 1, front), PLAYER.CPU_CHASE, dt);
         } else {
-          this.cpuMate.speed = 0;
+          front.speed = 0;
         }
-        this.moveIfRecovered('cpu', this.cpu, cpuBefore, backPosition(this.cpuMate.x, 1), PLAYER.CPU_RECOVER, dt);
+        this.moveIfRecovered(backKey, back, backBefore, backPosition(front.x, 1), PLAYER.CPU_RECOVER, dt);
       } else {
-        this.moveIfRecovered('cpu', this.cpu, cpuBefore, homePosition(), PLAYER.CPU_RECOVER, dt);
-        this.moveIfRecovered('cpuMate', this.cpuMate, cpuMateBefore, cpuFront(), DOUBLES.FRONT_MOVE, dt);
+        this.moveIfRecovered(backKey, back, backBefore, homePosition(), PLAYER.CPU_RECOVER, dt);
+        this.moveIfRecovered(frontKey, front, frontBefore, cpuFront(), DOUBLES.FRONT_MOVE, dt);
       }
 
       // youMate：人間（you）の打球が向かってくる番で、自分が応答すべき側なら追う
