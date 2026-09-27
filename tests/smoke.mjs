@@ -4975,9 +4975,9 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   // （サイドへ大きく角度をつけた浅いドロップは、ネットの高い側＝ポスト寄りを越える必要が
   //  あるぶんリスクが高い＝仕様どおり）。ここで見たいのは「弾道と球質」なので、風を無風に
   // 固定し、狙いのランダム要素も Math.random を固定して毎回同じ1本にする。
-  const shoot = (spin, charge, fromZ) => {
+  const shoot = (spin, charge, fromZ, roll = 0.5) => {
     const origRandom = Math.random;
-    Math.random = () => 0.5;
+    Math.random = () => roll;
     try {
       const g = new R.Game({ input: fakeInput, hooks: noHooks });
       g.start();
@@ -5033,6 +5033,78 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `the drop dies after the bounce: ${dropSpan.toFixed(2)}m vs the slice's ${sliceSpan.toFixed(2)}m`);
   ok(dropRun[1] < COURT.SERVICE,
     `the drop's second bounce is still inside the service box, got z=${dropRun[1]}`);
+
+  // 読み負け：抽選（CPU.DROP_MISREAD_CHANCE）に当たった1本だけ、相手の出足が DROP.MISREAD_T 遅れる
+  const { CPU } = R.config;
+  ok(drop.reactBonus === 0,
+    `a drop the CPU reads (roll 0.5 > ${CPU.DROP_MISREAD_CHANCE}) carries no extra delay, got ${drop.reactBonus}`);
+  const misread = shoot('slice', 0, -HALF_L, 0);
+  ok(misread.spin === 'drop' && misread.reactBonus === DROP.MISREAD_T,
+    `a misread drop delays the CPU by DROP.MISREAD_T, got ${misread.reactBonus}`);
+  ok(shoot('slice', 1, -HALF_L, 0).reactBonus === 0, 'a charged slice is never "misread" (it is not a drop)');
+  {
+    // ガイド表示（プレビュー）は毎フレーム呼ばれるので、抽選を引かない（乱数を消費しない）
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.you.chargeSpin = 'slice';
+    g.you.swingCharge = 0;
+    const origRandom = Math.random;
+    let draws = 0;
+    Math.random = () => { draws++; return 0; };
+    try {
+      const shot = g.playerShot('forehand', undefined, true);
+      ok(shot.spin === 'drop' && shot.reactBonus === 0 && draws === 0,
+        `the guide preview never rolls the misread, got bonus=${shot.reactBonus} draws=${draws}`);
+    } finally {
+      Math.random = origRandom;
+    }
+  }
+}
+
+// --- ドロップは「たまに決まる」：定位置の CPU に対して、決まる割合が難易度と場面でなだらかに変わる ---
+{
+  const { CPU, applyCpuLevel } = R.config;
+  // ベースライン（または z=fromZ）から、定位置付近の CPU へ溜めなしのスライス（＝ドロップ）を
+  // N 本打ち、CPU が触れずに2バウンドした（＝ウィナー）割合を返す。
+  const winnerRate = (level, fromZ, N = 300) => {
+    applyCpuLevel(level);
+    let winners = 0;
+    for (let i = 0; i < N; i++) {
+      const g = new R.Game({ input: fakeInput, hooks: noHooks });
+      g.start();
+      g.phase = 'rally';
+      g.serveInFlight = false;
+      const x = (Math.random() * 2 - 1) * 3;
+      g.you.x = x; g.you.z = fromZ;
+      g.cpu.x = (Math.random() * 2 - 1) * 2.5;
+      g.cpu.z = CPU.HOME_Z + (Math.random() - 0.5);
+      g.recoverTimers.cpu = 0;
+      Object.assign(g.ball, { x: x + 0.6, y: 0.8, z: fromZ, live: true, bounces: 1, last: 'cpu' });
+      g.lastBallOwnerSeen = 'cpu';
+      g.you.chargeSpin = 'slice';
+      g.you.swingCharge = 0;
+      g.you.chargeStroke = 'forehand';
+      g.hit('you');
+      let result = null;
+      g.endPoint = (winner, reason) => { result = { winner, reason }; };
+      for (let f = 0; f < 60 * 4 && !result && g.ball.last === 'you'; f++) g.update(1 / 60);
+      if (result && result.winner === 'you' && result.reason === 'ツーバウンド') winners++;
+    }
+    return winners / N;
+  };
+  try {
+    const normalBase = winnerRate('normal', -HALF_L + 0.5);
+    const normalIn = winnerRate('normal', -5);
+    const hardBase = winnerRate('hard', -HALF_L + 0.5);
+    // 以前は normal 5% / hard 0%（CPU が打たれた瞬間に走り出して必ず間に合う）だった。
+    ok(normalBase > 0.1 && normalBase < 0.35,
+      `on normal, a drop from the baseline wins now and then (not never, not always), got ${(normalBase * 100).toFixed(1)}%`);
+    ok(normalIn > normalBase + 0.05 && normalIn < 0.6,
+      `from inside the court it works more often, but is still no sure thing, got ${(normalIn * 100).toFixed(1)}%`);
+    ok(hardBase > 0.02 && hardBase < normalBase,
+      `hard reads drops better than normal but can still be caught, got ${(hardBase * 100).toFixed(1)}%`);
+  } finally {
+    applyCpuLevel('normal');
+  }
 }
 
 // --- CPU/AI：ネット際でノーバウンドに捕まえた球はボレーになり、高い打点ほど鋭く決めにいく ---

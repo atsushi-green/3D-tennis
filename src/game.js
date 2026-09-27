@@ -2190,8 +2190,8 @@
       Object.assign(ball, solveShot(from, shot.target, shot.flight, shot.clearance, spin, curve));
       ball.spin = spin;
       ball.curve = curve;
-      // 背を向けたまま打つツイーナーだけ、相手の反応がこの秒数ぶん余計に遅れる
-      // （updateReactTimers）。他の1打では 0 に戻す＝前の技を持ち越さない。
+      // 背を向けたまま打つツイーナーと、相手が読み負けたドロップだけ、相手の反応が
+      // この秒数ぶん余計に遅れる（updateReactTimers）。他の1打では 0 に戻す＝前の1打を持ち越さない。
       ball.reactBonus = shot.reactBonus || 0;
       // サーブの返球も含め、ここで打たれた球は以降このポイントの風(this.wind)にさらされる
       // （サーブ自体の飛翔だけは beginServe() が ball.wind=0 にしているので無風のまま）。
@@ -2497,6 +2497,10 @@
       // 入れるのと同じ値なので、弾道の計算と実際の飛翔がずれない）。
       if (!lob && this.you.chargeSpin === 'slice' && charge <= DROP.MAX_CHARGE) {
         const dir = aim !== 0 ? Math.sign(aim) : -signOr(this.you.x, 1);
+        // 相手が読み負けた1本だけ出足が遅れる（DROP.MISREAD_T 参照）。抽選は1球に1回で、
+        // ダブルスでも読むのは相手の主力（cpu）の能力値で代表させる。プレビューでは引かない。
+        const misread = !preview
+          && Math.random() < CPU.DROP_MISREAD_CHANCE * this.cpu.attr.react;
         return {
           target: {
             x: dir * spread(DROP.X_MIN, DROP.X_MAX), y: BALL_R, z: spread(DROP.Z_MIN, DROP.Z_MAX),
@@ -2504,6 +2508,7 @@
           flight: DROP.T * attr[stroke === 'backhand' ? 'backhand' : 'forehand'],
           clearance: DROP.CLEARANCE,
           spin: 'drop',
+          reactBonus: misread ? DROP.MISREAD_T : 0,
         };
       }
 
@@ -3279,7 +3284,7 @@
       const owner = this.ball.last;
       if (owner !== this.lastBallOwnerSeen) {
         // 能力値「リーチ・読み」が高い選手ほど反応遅延が短い（attr.react）。
-        // コースが読みにくい1打（ツイーナー）は、その分だけ反応の出足を遅らせる。
+        // コースが読みにくい1打（ツイーナー／読み負けたドロップ）は、その分だけ反応の出足を遅らせる。
         const bonus = this.ball.reactBonus || 0;
         if (owner === 'you') {
           this.reactTimers.cpu = PLAYER.CPU_REACT * this.cpu.attr.react + bonus;
