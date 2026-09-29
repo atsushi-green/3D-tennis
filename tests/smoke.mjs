@@ -429,7 +429,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   for (let f = 0; f < SWEET_FRAMES; f++) g.update(1 / 60);
   ok(g.ball.y > SERVE.CONTACT_Y + 0.3, `precondition: at the gauge line the toss is well above the racket, y=${g.ball.y}`);
   g.chargeRelease();
-  ok(g.phase === 'serve' && g.serveSwing && g.serveSwing.jump, 'releasing at the line swings, but the ball is out of reach yet');
+  ok(g.phase === 'serve' && g.serveSwing && Math.abs(g.serveSwing.y - SERVE.CONTACT_Y) < 1e-6,
+    'releasing at the line swings, and will meet the ball at the top of the reach');
   g.chargeStart(); // 待っている間に押し直しても、2回目のスイングにはならない
   ok(g.you.charging === false && g.serveSwing.who === 'you', 'pressing again while the swing waits is ignored');
   let frames = 0;
@@ -440,14 +441,15 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `the trail starts at the racket's reach (CONTACT_Y), y=${g.trail[0].y}`);
   // 跳躍の頂点がちょうど当たる瞬間に来る（頂点を過ぎてから当たると、ラケットが球の下を通って見える）
   const L = g.you.leap;
-  ok(L && L.kind === 'serve' && L.reach === SERVE.CONTACT_Y, `the server jumps into the ball, leap=${JSON.stringify(L)}`);
+  ok(L && L.kind === 'serve' && Math.abs(L.reach - SERVE.CONTACT_Y) < 1e-6,
+    `the server jumps into the ball, leap=${JSON.stringify(L)}`);
   const pastPeak = L && (L.span - L.t) - L.rise * L.span;
   ok(L && pastPeak >= -1e-9 && pastPeak <= 1 / 60 + 1e-9,
     `the jump peaks at the moment of contact (within the contact frame), ${pastPeak}s past the peak`);
   ok(L.rise * L.span <= P.SERVE_LEAP_RISE_T + 1e-9, 'the take-off is no longer than SERVE_LEAP_RISE_T');
 }
 
-// --- 離すのが遅すぎて、トスがもう打点より下へ落ちていたら、跳ばずに届く高さで打つ ---
+// --- 振り終わる前にトスが跳ばずに届く高さより下へ落ちる（離すのが遅すぎた）なら、その高さで打つ ---
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start();
@@ -456,12 +458,48 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(g.tossActive && g.ball.vy < 0 && g.ball.y < SERVE.CONTACT_Y && g.ball.y > SERVE.STAND_CONTACT_Y,
     `precondition: the toss is falling between the two reach heights, y=${g.ball.y}`);
   g.chargeRelease();
-  ok(g.serveSwing && g.serveSwing.jump === false, 'a late swing does not jump');
+  ok(g.serveSwing && g.serveSwing.t < SERVE.SWING_T, 'a very late swing meets the ball before the swing is complete');
   for (let f = 0; f < 60 && g.phase === 'serve'; f++) g.update(1 / 60);
   ok(g.phase === 'rally', 'the late swing still connects');
   ok(Math.abs(g.trail[0].y - SERVE.STAND_CONTACT_Y) < 0.03,
     `it is hit at the standing reach (STAND_CONTACT_Y), y=${g.trail[0].y}`);
-  ok(g.you.leap === null, 'without a jump');
+  // 跳ぶ高さは打点の高さで決まる（見た目側：SWING.SERVE_JUMP_H + reach − CONTACT_Y）。
+  // 跳ばずに届く高さなら跳ばない＝腕を振り上げるだけ。
+  ok(g.you.leap && Math.abs(g.you.leap.reach - SERVE.STAND_CONTACT_Y) < 1e-6,
+    `the jump is sized for the standing reach (no lift), leap=${JSON.stringify(g.you.leap)}`);
+}
+
+// --- 人間のサーブは、離したタイミングで打点が変わる（遅いほど落ちてきた球を低く打つ） ---
+// 振り出してから当たるまでは SERVE.SWING_T。そのときトスがある高さで打つ（上限 CONTACT_Y）。
+{
+  const SWEET_FRAMES = Math.round(SERVE.CHARGE_SWEET_T * 60);
+  const g0 = Math.abs(R.config.PHYSICS.GRAVITY);
+  const vy0 = Math.sqrt(2 * g0 * (SERVE.TOSS_PEAK - SERVE.BALL_Y)); // tossBall() と同じ初速
+  const tossY = (t) => SERVE.BALL_Y + vy0 * t - 0.5 * g0 * t * t;
+  /** holdFrames 押して離したときの打点の高さと、離してから当たるまでの秒数 */
+  const contactFor = (holdFrames) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.chargeStart();
+    for (let f = 0; f < holdFrames; f++) g.update(1 / 60);
+    g.chargeRelease();
+    let frames = 0;
+    for (; frames < 120 && g.phase === 'serve'; frames++) g.update(1 / 60);
+    return { y: g.trail[0].y, wait: frames / 60 };
+  };
+  const early = contactFor(SWEET_FRAMES - 9); // 線より0.15秒早い
+  const line = contactFor(SWEET_FRAMES);
+  const late1 = contactFor(SWEET_FRAMES + 3); // 0.05秒遅い
+  const late2 = contactFor(SWEET_FRAMES + 6); // 0.1秒遅い
+  ok(Math.abs(early.y - SERVE.CONTACT_Y) < 0.03, `an early release is still hit at the top of the reach, y=${early.y}`);
+  ok(Math.abs(line.y - SERVE.CONTACT_Y) < 0.03, `a release on the line is hit at the top of the reach, y=${line.y}`);
+  ok(late1.y < line.y - 0.05 && late2.y < late1.y - 0.1,
+    `the later the release, the lower the contact: ${line.y.toFixed(2)} > ${late1.y.toFixed(2)} > ${late2.y.toFixed(2)}`);
+  const want = (holdFrames) => tossY(holdFrames / 60 + SERVE.SWING_T);
+  ok(Math.abs(late1.y - want(SWEET_FRAMES + 3)) < 0.03 && Math.abs(late2.y - want(SWEET_FRAMES + 6)) < 0.03,
+    `a late release is hit where the toss is SWING_T later: ${late1.y.toFixed(3)}/${want(SWEET_FRAMES + 3).toFixed(3)}, `
+    + `${late2.y.toFixed(3)}/${want(SWEET_FRAMES + 6).toFixed(3)}`);
+  ok(Math.abs(late1.wait - SERVE.SWING_T) <= 1 / 60 + 1e-9, `and SWING_T after releasing: ${late1.wait.toFixed(3)}s`);
 }
 
 // --- Space を離さずに待ちすぎると、トスが落ちてきて自動でリセットされる（フォルト扱いにはしない） ---

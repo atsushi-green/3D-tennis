@@ -777,9 +777,9 @@
        */
       this.aiTossActive = false;
       /**
-       * サーブを振り出したが、トスがまだラケットの届く高さに来ていなくて当たっていない間だけ
-       * { who: 振り出した選手, y: 当たる高さ, jump: 跳んで打つか } が入る。それ以外は null。
-       * swingServe() 参照。
+       * サーブを振り出して、まだ当たっていない間だけ
+       * { who: 振り出した選手, t: 当たるまでの残り秒数, y: 当たる高さ } が入る。
+       * それ以外は null。swingServe() 参照。
        */
       this.serveSwing = null;
       /** true の間はサーブがまだ一度も返球されていない＝ノーバウンドで打ち返してはいけない。 */
@@ -1845,13 +1845,15 @@
 
     /**
      * サーブを振り出す（人間は溜めを離した瞬間、CPU/AI は scheduleAiServe() の予定どおり）。
-     * ラケットが球に届く高さでしか当たらない（跳んで届くのは人間が SERVE.CONTACT_Y、
-     * CPU/AI が SERVE.AI_CONTACT_Y）：
-     * - トスがこれからその高さを通る（まだ上にある／下から上がってくる）なら、
-     *   跳び上がりながら（tickServeSwing()）待ち、球がその高さを通った瞬間に打つ。
-     * - もうそれより下へ落ちてきている（離すのが遅すぎた）なら、跳ばずに届く
-     *   SERVE.STAND_CONTACT_Y まで落ちてくるのを待って打つ（既にそれより下ならその場で）。
-     * 当たる瞬間は stepBall() が物理の刻みで見て serve() を呼ぶ。
+     * 振り出してから当たるまでは SERVE.SWING_T（跳び上がってラケットを振り上げる時間）。
+     * そのときトスがある高さが打点になる＝**離すのが遅いほど、落ちてきた球を低い打点で打つ**。
+     * ただしラケットが届く高さには限りがある：
+     * - 上限は跳んで届く高さ（人間 SERVE.CONTACT_Y、CPU/AI SERVE.AI_CONTACT_Y）。振り終わる
+     *   時点でトスがまだそれより上なら、その高さまで落ちてくるのを待って打つ（早く離しても
+     *   打点はそれ以上高くならない。早すぎたぶんは威力が弱くなるだけ）。
+     * - 下限は跳ばずに届く SERVE.STAND_CONTACT_Y。振り終わる前にトスがそれより下へ
+     *   落ちてしまう（離すのが遅すぎた）なら、その高さを通ったところで打つ。
+     * 当たる瞬間は stepBall() が物理の刻みで数えて serve() を呼ぶ。
      * 以前は離した瞬間のトスの高さ（ゲージの線ちょうどなら頂点近くの 3.3m、すぐ離せば
      * 手元の 1.45m）で打っていて、ラケット（約2m）から大きく離れたところから球が
      * 飛び出していた（ユーザー報告：軌跡の始点が選手の頭上高くに浮いて見える）。
@@ -1861,42 +1863,49 @@
     swingServe(who) {
       const ball = this.ball;
       const reach = who === 'you' ? SERVE.CONTACT_Y : SERVE.AI_CONTACT_Y;
-      const jump = ball.y > reach || ball.vy > 0;
-      const y = jump ? reach : SERVE.STAND_CONTACT_Y;
-      if (!jump && ball.y <= y) {
+      // トスは重力だけで動く（beginServe() がスピン・風・曲がりを消している）ので、
+      // 何秒後にどの高さにあるかは放物線の式からそのまま解ける。
+      const g = Math.abs(PHYSICS.GRAVITY);
+      const heightAt = (t) => ball.y + ball.vy * t - 0.5 * g * t * t;
+      /** 高さ h を落ちながら通るまでの秒数（既にそれより下なら 0） */
+      const fallTo = (h) => Math.max(0,
+        (ball.vy + Math.sqrt(Math.max(ball.vy * ball.vy + 2 * g * (ball.y - h), 0))) / g);
+      const swingY = heightAt(SERVE.SWING_T);
+      let t = SERVE.SWING_T;
+      if (swingY > reach) t = fallTo(reach);
+      else if (swingY < SERVE.STAND_CONTACT_Y) t = fallTo(SERVE.STAND_CONTACT_Y);
+      if (t <= 0) {
         this.serve(who);
         return;
       }
-      this.serveSwing = { who, y, jump };
-      this.tickServeSwing(); // もう打点のすぐ近くなら、この場で踏み切る
-    }
-
-    /** 振り出して待っているサーブの打点の高さを、トスがこの1ステップで通り過ぎたか。 */
-    tossReachedSwing() {
-      const swing = this.serveSwing;
-      if (!swing) return false;
-      const ball = this.ball;
-      return (ball.py - swing.y) * (ball.y - swing.y) <= 0;
+      // y（当たる高さ）はジャンプの高さを決めるのに見た目側が使う（tickServeSwing()）
+      this.serveSwing = { who, t, y: heightAt(t) };
+      this.tickServeSwing(); // もう当たる寸前なら、この場で踏み切る
     }
 
     /**
-     * 跳んで打つサーブ（swingServe()）で球を待っている間、「あと SERVE_LEAP_RISE_T 秒で
-     * 打点に届く」ところで跳び始める（表示専用）。跳躍の頂点がちょうど当たる瞬間に来るよう、
-     * 上昇にかける時間を「打点に届くまでの残り時間」に合わせる。
+     * 振り出して待っているサーブの時計を、物理の1ステップぶん進める。当たる瞬間が来たら true。
+     * @param {number} dt
+     */
+    tickServeClock(dt) {
+      const swing = this.serveSwing;
+      if (!swing) return false;
+      swing.t -= dt;
+      return swing.t <= 1e-9;
+    }
+
+    /**
+     * サーブを振り出して当たるのを待っている間、「あと SERVE_LEAP_RISE_T 秒で当たる」
+     * ところで跳び始める（表示専用）。跳躍の頂点がちょうど当たる瞬間に来るよう、上昇に
+     * かける時間を当たるまでの残り時間に合わせる。跳ぶ高さは打点の高さで決まる
+     * （reach。低い打点ほど低く、跳ばずに届く高さなら跳ばずに腕だけ振り上げる）。
      */
     tickServeSwing() {
       const swing = this.serveSwing;
-      if (!swing || !swing.jump || this.actor(swing.who).leap) return;
-      const ball = this.ball;
-      // トスは重力だけで動く（beginServe() がスピン・風・曲がりを消している）ので、
-      // 打点の高さを通るまでの時間は放物線の式からそのまま解ける。上にあれば落ちてくる側の
-      // 解、下から上がってくるなら上がっていく側の解。
-      const g = Math.abs(PHYSICS.GRAVITY);
-      const root = Math.sqrt(Math.max(ball.vy * ball.vy + 2 * g * (ball.y - swing.y), 0));
-      const until = Math.max(0, (ball.vy + (ball.y > swing.y ? root : -root)) / g);
+      if (!swing || this.actor(swing.who).leap) return;
+      const until = swing.t;
       if (until > PLAYER.SERVE_LEAP_RISE_T) return;
       const span = until + PLAYER.SERVE_LEAP_FALL_T;
-      // reach（打点の高さ）はジャンプの高さを決めるのに見た目側が使う（applyServeJump）
       this.startLeap('serve', swing.who, { span, rise: until / span, reach: swing.y });
     }
 
@@ -1971,8 +1980,8 @@
       // ここでは切り替えない。
       const second = who !== 'you' && this.serveNumber === 2;
       const { dir, targetSign } = serveAim(team, side);
-      // 打点はラケットが届く高さ。swingServe() がトスがそこを通るのを待ってから呼ぶので、
-      // 人間はボールの今の高さがそのまま打点になる（上限の CONTACT_Y は保険）。
+      // 打点はラケットが届く高さ。swingServe() が届く高さに来るのを待ってから呼ぶので、
+      // 人間はボールの今の高さがそのまま打点になる（離すのが遅いほど低い。上限は保険）。
       // CPU/AI は常に AI_CONTACT_Y（トスは物理の刻みの分だけずれうるが、2cm 未満）。
       const contactY = who === 'you'
         ? clamp(ball.y, SERVE.BALL_Y, SERVE.CONTACT_Y)
@@ -3716,11 +3725,11 @@
     stepBall(dt) {
       const ball = this.ball;
 
-      // トス中に振り出して待っていたサーブ（swingServe()）は、球が打点の高さを通った
-      // ステップで打つ。物理の刻み（1/240秒）で見るので、打点のずれは 2cm 未満に収まる。
+      // トス中に振り出して待っていたサーブ（swingServe()）は、当たる時刻が来たステップで
+      // 打つ。物理の刻み（1/240秒）で数えるので、打点のずれは 2cm 未満に収まる。
       if (this.tossActive) {
         integrate(ball, dt); // 重力だけで自然に上下させる（ラリーの当たり判定は通さない）
-        if (this.tossReachedSwing()) {
+        if (this.tickServeClock(dt)) {
           this.serve(this.serveSwing.who);
           return;
         }
@@ -3735,7 +3744,7 @@
 
       if (this.aiTossActive) {
         integrate(ball, dt); // tossActive と同じく重力だけで上下させる
-        if (this.tossReachedSwing()) {
+        if (this.tickServeClock(dt)) {
           this.serve(this.serveSwing.who);
           return;
         }
