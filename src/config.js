@@ -967,7 +967,12 @@
     // 最大威力（＝ゲージの線まで溜めた）のサーブの飛翔時間。短いほど速い。
     // ユーザー要望で 0.38→0.33 に短く（＝速く）した。線のすぐ先はフォールトの
     // 確率が上がっていく危険域（CHARGE_FAULT_T）なので、そのリスクに見合う威力にしてある。
-    CHARGE_T: 0.33,
+    // さらに「Hard 以上だとエースが出にくい」というユーザー報告で 0.33→0.32（線ちょうどの
+    // フラットで約200→206km/h）。これ以上速くすると、Normal の角度サーブがほぼ全部
+    // エースになる（0.31 で 96〜100%）。エースの出やすさの本体はレシーブ側
+    // （CPU.SERVE_REACT_MIN/MAX）で調整してある。打点 CONTACT_Y=2.8m からは、0.32 でも
+    // 全球種がサービスラインから 1.0m 手前まで減速せずに入る（DEPTH_FULL_MAX と整合）。
+    CHARGE_T: 0.32,
     // CPU/AI（cpu・cpuMate・youMate）のサーブの威力は CPU.SERVE_T（難易度で変わる）を使う。
     // トスの演出を挟まず打点も固定なので、プレイヤーの「絶妙なタイミングで離す」リスクなしに
     // その威力を毎回出せる。
@@ -1350,6 +1355,20 @@
     // ネット回避ループが滞空時間を勝手に伸ばし戻してしまい、狙った威力にならない
     // （AI_CONTACT_Y=2.6 ならこの範囲まで単調に速くなることを確認済み）。
     SERVE_T: 0.42,
+    // CPU/AI（相手チーム：cpu・cpuMate）が、人間側のサーブに反応して動き出すまでの秒数。
+    // サーブのたびにこの範囲から引き直す（Game#updateReactTimers）。ラリー中の反応
+    // （PLAYER.CPU_REACT。Hard 0.05秒・Extreme 0.025秒）をそのまま使っていた頃は、
+    // 線ちょうどの全力サーブでも Hard 以上ではどのコースにも触られ、エースが1本も
+    // 出なかった（ユーザー報告。実測：センター・ワイド・角度とも 0%）。実際のレシーバーは
+    // 球を見てから動くのでは間に合わず、打たれる前の読みで出足が決まる。
+    // 強い CPU ほど最短は短い（読みが当たれば速い）が、読みに賭けるぶん外れたときの
+    // 遅れ（最長）も大きい。難易度ごとの値は CPU_LEVELS で上書きする。
+    // 実測（線ちょうどのフル溜めフラット、入ったサーブのうち触られなかった割合）：
+    //   Normal センター29% ワイド7% 角度77% ／ Hard 15% 3% 49% ／ Extreme 9% 2% 35%
+    //   （変更前は Normal 7% 0% 45% ／ Hard・Extreme はすべて 0%）。
+    //   ボディ（レシーバーめがけて飛ぶ）はどの難易度でも 0%。
+    SERVE_REACT_MIN: 0.08,
+    SERVE_REACT_MAX: 0.20,
     // CPU/AI のスピン選択（サーブ・グラウンドストローク共通）。以前は常にフラット固定で
     // 単調だったというユーザー報告を受け、一定確率でトップスピン／スライスを混ぜる
     // （ボレー・スマッシュは対象外のまま。ai.js#aiSpin() 参照）。
@@ -2345,6 +2364,7 @@
         OUT_LONG: 0.28, OUT_WIDE: 0.20, CHASE_X_LIMIT: 5.4,
         STRETCH_OUT_LONG: 0.46, STRETCH_OUT_WIDE: 0.36,
         SERVE_T: 0.60, // 弱め。人間の無溜め(SERVE.T=0.72)よりは少し速い程度
+        SERVE_REACT_MIN: 0.32, SERVE_REACT_MAX: 0.44, // ラリー中の反応（CPU_REACT 0.38）と同程度
         // 決め球（ボレー・スマッシュ）も弱い：角度が甘く、速度も出ない
         VOLLEY_ANGLE_T: 0.46, VOLLEY_ANGLE_X: 2.6, SMASH_T: 0.46,
         APPROACH_CHANCE: 0.15, // ネットへもあまり出てこない
@@ -2361,6 +2381,7 @@
         OUT_LONG: 0.012, OUT_WIDE: 0.008, CHASE_X_LIMIT: 7.0,
         STRETCH_OUT_LONG: 0.05, STRETCH_OUT_WIDE: 0.035,
         SERVE_T: 0.36, // 強め。AI_CONTACT_Y=2.6の下でsolveShot()が素直に収束する範囲の下限付近
+        SERVE_REACT_MIN: 0.06, SERVE_REACT_MAX: 0.22, // CPU.SERVE_REACT_* のコメント参照
         // 決め球（ボレー・スマッシュ）は容赦がない：深く鋭く、速い
         VOLLEY_ANGLE_T: 0.30, VOLLEY_ANGLE_X: 3.7, SMASH_T: 0.29,
         APPROACH_CHANCE: 0.50, // 隙あらばネットへ詰めてくる
@@ -2409,6 +2430,7 @@
         OUT_LONG: 0.004, OUT_WIDE: 0.003, CHASE_X_LIMIT: 8.2,
         STRETCH_OUT_LONG: 0.018, STRETCH_OUT_WIDE: 0.012,
         SERVE_T: 0.33, // hard(0.36)よりさらに速い。AI_CONTACT_Y=2.6 で solveShot() が収束する範囲内
+        SERVE_REACT_MIN: 0.04, SERVE_REACT_MAX: 0.24, // CPU.SERVE_REACT_* のコメント参照
         // 決め球はさらに鋭く・速く（hard は 0.30 / 3.7 / 0.29）
         VOLLEY_ANGLE_T: 0.27, VOLLEY_ANGLE_X: 3.85, SMASH_T: 0.26,
         APPROACH_CHANCE: 0.62, // hard(0.50)より積極的にネットへ出てくる

@@ -3503,8 +3503,13 @@
         // その分だけ反応の出足を遅らせる。
         const bonus = this.ball.reactBonus || 0;
         if (owner === 'you') {
-          this.reactTimers.cpu = PLAYER.CPU_REACT * this.cpu.attr.react + bonus;
-          this.reactTimers.cpuMate = PLAYER.CPU_REACT * this.cpuMate.attr.react + bonus;
+          // 人間側のサーブ（serveInFlight）だけは、ラリー中の反応ではなく「サーブの読み」の
+          // 範囲から毎回引き直す（CPU.SERVE_REACT_MIN/MAX のコメント参照）。
+          const react = this.serveInFlight
+            ? rand(CPU.SERVE_REACT_MIN, CPU.SERVE_REACT_MAX)
+            : PLAYER.CPU_REACT;
+          this.reactTimers.cpu = react * this.cpu.attr.react + bonus;
+          this.reactTimers.cpuMate = react * this.cpuMate.attr.react + bonus;
           this.rollPoach(this.frontOf.cpu, 'cpu');
           this.rollAiRescue('cpu');
           this.rollAiRescue('cpuMate');

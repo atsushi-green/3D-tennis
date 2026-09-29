@@ -2663,13 +2663,16 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     g.update(1 / 60);
     return g;
   };
-  const want = CPU_REACT * R.config.ATTRS.cpu.react;
+  // 人間のサーブへの反応は「サーブの読み」の範囲（CPU.SERVE_REACT_MIN/MAX）から引く
+  const { SERVE_REACT_MIN, SERVE_REACT_MAX } = R.config.CPU;
+  const reactMult = R.config.ATTRS.cpu.react;
+  const inServeRange = (t) => t >= SERVE_REACT_MIN * reactMult - 1e-9 && t <= SERVE_REACT_MAX * reactMult + 1e-9;
   const after = serveWith('you');
   ok(after.phase === 'rally', `precondition: the serve went out, phase=${after.phase}`);
-  ok(Math.abs(after.reactTimers.cpu - want) < 1e-9,
+  ok(inServeRange(after.reactTimers.cpu),
     `the previous point ending on a "you" shot still gives the CPU its reaction delay: `
-    + `${after.reactTimers.cpu} (want ${want})`);
-  ok(Math.abs(serveWith('cpu').reactTimers.cpu - want) < 1e-9,
+    + `${after.reactTimers.cpu} (want ${SERVE_REACT_MIN * reactMult}〜${SERVE_REACT_MAX * reactMult})`);
+  ok(inServeRange(serveWith('cpu').reactTimers.cpu),
     'and so does a previous point that ended on a "cpu" shot (unchanged)');
 
   // ダブルスも同じ：cpu チームがサーブするとき youMate に反応遅延が掛かる
@@ -2688,6 +2691,72 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `doubles: the receiving partner reacts late even when the serving team hit last, `
     + `got ${doublesServe('cpu')} (want ${wantMate})`);
   ok(Math.abs(doublesServe('you') - wantMate) < 1e-9, 'doubles: unchanged the other way round');
+}
+
+// --- CPU の人間のサーブへの反応は、サーブのたびに「読み」の範囲から引く（ラリーは従来どおり） ---
+{
+  const { SERVE_REACT_MIN, SERVE_REACT_MAX } = R.config.CPU;
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(false, 'you');
+  const reactMult = g.cpu.attr.react;
+  const reactTo = (serve) => {
+    g.phase = 'rally';
+    g.serveInFlight = serve;
+    g.ball.last = 'you';
+    g.ball.reactBonus = 0;
+    g.lastBallOwnerSeen = 'cpu';
+    g.updateReactTimers(0);
+    return g.reactTimers.cpu / reactMult;
+  };
+  const serves = Array.from({ length: 40 }, () => reactTo(true));
+  ok(serves.every((t) => t >= SERVE_REACT_MIN - 1e-9 && t <= SERVE_REACT_MAX + 1e-9),
+    `the reaction to a serve stays within SERVE_REACT_MIN..MAX: ${Math.min(...serves).toFixed(3)}〜${Math.max(...serves).toFixed(3)}`);
+  ok(Math.max(...serves) - Math.min(...serves) > (SERVE_REACT_MAX - SERVE_REACT_MIN) / 2,
+    'and it is drawn afresh for each serve (sometimes read early, sometimes late)');
+  ok(Math.abs(reactTo(false) - PLAYER.CPU_REACT) < 1e-9, 'a rally shot still uses the rally reaction (CPU_REACT)');
+}
+
+// --- Hard でも、線ちょうどの全力サーブをセンターへ打てばときどきエースになる ---
+// （退行テスト：CPU のサーブへの反応がラリーと同じ Hard 0.05秒だった頃は、センター・
+//  ワイド・角度のどこへ打っても1本もエースにならなかった＝ユーザー報告）
+{
+  const { SERVE } = R.config;
+  const saved = SERVE.NET_CHANCE;
+  SERVE.NET_CHANCE = 0; // ネットに掛かった1本は数えたくない（入ったサーブの中の割合を見る）
+  R.config.applyCpuLevel('hard');
+  const SWEET_FRAMES = Math.round(SERVE.CHARGE_SWEET_T * 60);
+  const count = { center: 0, centerAces: 0, body: 0, bodyAces: 0 };
+  try {
+    for (let i = 0; i < 400 && (count.center < 150 || count.body < 80); i++) {
+      // ←→ のどちらがセンターになるかはサイドで入れ替わるので、両方打って呼び名で振り分ける
+      const input = { moveX: [1, -1, 0][i % 3], moveZ: 0, lob: false };
+      const g = new R.Game({ input, hooks: noHooks });
+      g.start(false, 'you');
+      if (i % 2) { g.match.awardPoint('you'); g.newPoint(); }
+      g.chargeStart('flat');
+      for (let f = 0; f < SWEET_FRAMES; f++) g.update(1 / 60);
+      g.chargeRelease();
+      for (let f = 0; f < 60 && g.phase === 'serve'; f++) g.update(1 / 60);
+      input.moveX = 0;
+      const label = g.lastShotBy.you || '';
+      const course = label.includes('センター') ? 'center' : label.includes('ボディ') ? 'body' : null;
+      let ace = false;
+      for (let f = 0; f < 300 && g.phase === 'rally' && g.serveInFlight; f++) g.update(1 / 60);
+      if (g.phase === 'fault') continue;
+      ace = g.stats.you.aces === 1;
+      if (!course) continue;
+      count[course]++;
+      if (ace) count[`${course}Aces`]++;
+    }
+  } finally {
+    R.config.applyCpuLevel('normal');
+    SERVE.NET_CHANCE = saved;
+  }
+  const rate = (k) => count[`${k}Aces`] / Math.max(count[k], 1);
+  ok(count.center >= 100 && rate('center') > 0.03 && rate('center') < 0.5,
+    `hard: a line-perfect serve down the T is sometimes an ace, ${count.centerAces}/${count.center}`);
+  ok(count.body >= 50 && rate('body') < 0.05,
+    `hard: a serve straight at the receiver (body) is still returned, ${count.bodyAces}/${count.body}`);
 }
 
 // --- タイブレーク：Game#endPoint() 経由でも、1本目はサーバーそのまま・以降は2ポイントごとに交代する ---
