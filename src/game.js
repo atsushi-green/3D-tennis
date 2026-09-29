@@ -773,10 +773,15 @@
        * true の間、CPU/AI（cpu・cpuMate・youMate）のサーブ前トスを重力任せで上下させる。
        * tossActive は「自分（人間）が離すまで待つ」入力待ちの意味も兼ねる（movePlayers()の
        * 動作停止やchargeStart()の分岐に使われる）ため、AIのサーブでも流用すると人間側の
-       * 移動まで止まってしまう。見た目だけのトスなので別フラグにする（実際の打点・威力は
-       * serve() が SERVE.TOSS_Y 固定で計算するため、この演出の値には影響されない）。
+       * 移動まで止まってしまう。AI 専用のトスなので別フラグにする。
        */
       this.aiTossActive = false;
+      /**
+       * サーブを振り出したが、トスがまだラケットの届く高さに来ていなくて当たっていない間だけ
+       * { who: 振り出した選手, y: 当たる高さ, jump: 跳んで打つか } が入る。それ以外は null。
+       * swingServe() 参照。
+       */
+      this.serveSwing = null;
       /** true の間はサーブがまだ一度も返球されていない＝ノーバウンドで打ち返してはいけない。 */
       this.serveInFlight = false;
       /**
@@ -973,6 +978,9 @@
     chargeStart(spin = 'flat') {
       // 自分がサーブする番（＝ダブルスで味方が回ってきているときは対象外）のときだけ反応する
       const myServe = this.phase === 'serve' && this.servingPlayer() === 'you';
+      // もう振り出していて、トスが落ちてくるのを待っているだけ（swingServe()）。押し直しても
+      // 2回目のスイングにはならない。
+      if (myServe && this.serveSwing) return;
       if (myServe && !this.tossActive) {
         this.tossBall();
         this.you.charging = true;
@@ -1044,7 +1052,7 @@
       }
 
       if (myServe && this.tossActive) {
-        this.serve('you');
+        this.swingServe('you'); // トスがまだ高ければ、落ちてきて届いたところで当たる
       } else if (this.phase === 'rally') {
         this.you.swingConnected = false; // この1振りはまだ当たっていない
         // 縮地だけは打点まで瞬間移動するぶん、届くまでスイングの有効時間を伸ばす
@@ -1714,6 +1722,7 @@
       this.phase = 'serve';
       this.tossActive = false;
       this.aiTossActive = false;
+      this.serveSwing = null;
       this.serveInFlight = false;
       this.cpuNetRush = false;
       this.rallyShots = 0; // このサーブ（フォールトからのやり直しも含む）から数え直す
@@ -1818,7 +1827,8 @@
     /**
      * CPU/AI（cpu・cpuMate・youMate）のサーブ動作を予約する。構えてから
      * TIMING.CPU_SERVE_READY だけ一拍おいてトスを上げ、そこからさらに
-     * TIMING.CPU_SERVE_DELAY 後に打つ。以前は一拍が無く、ポイントが始まった瞬間にトスが
+     * TIMING.CPU_SERVE_DELAY 後に振り出す（当たるのはトスが打点まで落ちてきたとき。
+     * swingServe() 参照）。以前は一拍が無く、ポイントが始まった瞬間にトスが
      * 上がって 0.9秒後には球が飛んできていた＝レシーバー（人間）が構える間がなかった。
      * トスは placeServeBall() の後に上げる必要がある（先に上げるとボール位置をトス前の
      * 手元に戻されてしまう）が、ここは必ずタイマー経由なので順序は自動的に満たされる。
@@ -1828,9 +1838,66 @@
         if (this.phase !== 'serve') return;
         this.aiTossBall();
         this.after(TIMING.CPU_SERVE_DELAY, () => {
-          if (this.phase === 'serve') this.serve(who);
+          if (this.phase === 'serve') this.swingServe(who);
         });
       });
+    }
+
+    /**
+     * サーブを振り出す（人間は溜めを離した瞬間、CPU/AI は scheduleAiServe() の予定どおり）。
+     * ラケットが球に届く高さでしか当たらない（跳んで届くのは人間が SERVE.CONTACT_Y、
+     * CPU/AI が SERVE.AI_CONTACT_Y）：
+     * - トスがこれからその高さを通る（まだ上にある／下から上がってくる）なら、
+     *   跳び上がりながら（tickServeSwing()）待ち、球がその高さを通った瞬間に打つ。
+     * - もうそれより下へ落ちてきている（離すのが遅すぎた）なら、跳ばずに届く
+     *   SERVE.STAND_CONTACT_Y まで落ちてくるのを待って打つ（既にそれより下ならその場で）。
+     * 当たる瞬間は stepBall() が物理の刻みで見て serve() を呼ぶ。
+     * 以前は離した瞬間のトスの高さ（ゲージの線ちょうどなら頂点近くの 3.3m、すぐ離せば
+     * 手元の 1.45m）で打っていて、ラケット（約2m）から大きく離れたところから球が
+     * 飛び出していた（ユーザー報告：軌跡の始点が選手の頭上高くに浮いて見える）。
+     * 威力・フォールトの抽選は chargeRelease() が離した瞬間に決めてあるので、待つ間に
+     * 変わるのは狙い（serve() がその時点の ←→↑↓ を読む）だけ。
+     */
+    swingServe(who) {
+      const ball = this.ball;
+      const reach = who === 'you' ? SERVE.CONTACT_Y : SERVE.AI_CONTACT_Y;
+      const jump = ball.y > reach || ball.vy > 0;
+      const y = jump ? reach : SERVE.STAND_CONTACT_Y;
+      if (!jump && ball.y <= y) {
+        this.serve(who);
+        return;
+      }
+      this.serveSwing = { who, y, jump };
+      this.tickServeSwing(); // もう打点のすぐ近くなら、この場で踏み切る
+    }
+
+    /** 振り出して待っているサーブの打点の高さを、トスがこの1ステップで通り過ぎたか。 */
+    tossReachedSwing() {
+      const swing = this.serveSwing;
+      if (!swing) return false;
+      const ball = this.ball;
+      return (ball.py - swing.y) * (ball.y - swing.y) <= 0;
+    }
+
+    /**
+     * 跳んで打つサーブ（swingServe()）で球を待っている間、「あと SERVE_LEAP_RISE_T 秒で
+     * 打点に届く」ところで跳び始める（表示専用）。跳躍の頂点がちょうど当たる瞬間に来るよう、
+     * 上昇にかける時間を「打点に届くまでの残り時間」に合わせる。
+     */
+    tickServeSwing() {
+      const swing = this.serveSwing;
+      if (!swing || !swing.jump || this.actor(swing.who).leap) return;
+      const ball = this.ball;
+      // トスは重力だけで動く（beginServe() がスピン・風・曲がりを消している）ので、
+      // 打点の高さを通るまでの時間は放物線の式からそのまま解ける。上にあれば落ちてくる側の
+      // 解、下から上がってくるなら上がっていく側の解。
+      const g = Math.abs(PHYSICS.GRAVITY);
+      const root = Math.sqrt(Math.max(ball.vy * ball.vy + 2 * g * (ball.y - swing.y), 0));
+      const until = Math.max(0, (ball.vy + (ball.y > swing.y ? root : -root)) / g);
+      if (until > PLAYER.SERVE_LEAP_RISE_T) return;
+      const span = until + PLAYER.SERVE_LEAP_FALL_T;
+      // reach（打点の高さ）はジャンプの高さを決めるのに見た目側が使う（applyServeJump）
+      this.startLeap('serve', swing.who, { span, rise: until / span, reach: swing.y });
     }
 
     /**
@@ -1874,11 +1941,10 @@
     }
 
     /**
-     * CPU/AI（cpu・cpuMate・youMate）のサーブ前トス。tossBall() と同じ弾道を見た目だけ
-     * 再現する（人間の入力待ちを表す tossActive とは別に aiTossActive を立てる。理由は
-     * aiTossActive のコメント参照）。実際の打点・威力は serve() が SERVE.TOSS_Y 固定で
-     * 計算するので、ここでの軌道そのものは結果に影響しない。TIMING.CPU_SERVE_DELAY の間に
-     * 上がって落ちてくるので、リプレイでもちゃんとトスが見える。呼ぶのは scheduleAiServe()
+     * CPU/AI（cpu・cpuMate・youMate）のサーブ前トス。tossBall() と同じ弾道で上げる
+     * （人間の入力待ちを表す tossActive とは別に aiTossActive を立てる。理由は
+     * aiTossActive のコメント参照）。振り出したあと（swingServe()）、このトスが打点
+     * （SERVE.AI_CONTACT_Y）まで落ちてきたところで当たる。呼ぶのは scheduleAiServe()
      * だけ（構えてから一拍おいて上げる）。
      */
     aiTossBall() {
@@ -1905,8 +1971,13 @@
       // ここでは切り替えない。
       const second = who !== 'you' && this.serveNumber === 2;
       const { dir, targetSign } = serveAim(team, side);
-      // プレイヤーはトス中の実際の高さで打つ。CPU はトス演出を挟まないので固定の打点高さを使う。
-      const contactY = who === 'you' ? Math.max(ball.y, SERVE.BALL_Y) : SERVE.TOSS_Y;
+      // 打点はラケットが届く高さ。swingServe() がトスがそこを通るのを待ってから呼ぶので、
+      // 人間はボールの今の高さがそのまま打点になる（上限の CONTACT_Y は保険）。
+      // CPU/AI は常に AI_CONTACT_Y（トスは物理の刻みの分だけずれうるが、2cm 未満）。
+      const contactY = who === 'you'
+        ? clamp(ball.y, SERVE.BALL_Y, SERVE.CONTACT_Y)
+        : SERVE.AI_CONTACT_Y;
+      this.serveSwing = null; // 振り出して待っていた1本が、いま当たった
       const from = { x: ball.x, y: contactY, z: ball.z };
       // サービスはコートの対角へ入れる。狙う横位置（コース）はプレイヤーが ←→ で選び、
       // CPU/AI はランダムに選ぶ（どちらも T／ボディ／ワイドの3コース）
@@ -3022,6 +3093,10 @@
       this.updatePrep();
       this.tickLeap(); // 跳んで打つ1打は、離す前（球が届く少し前）から跳び始める
       this.tickSpecial(dt);
+      // 振り出したサーブは、トスが打点に届く少し前から跳び始める。跳躍の時計を進める
+      // tickSpecial() の後に置く：前に置くと、踏み切ったフレームにもう1フレームぶん
+      // 時計が進み、頂点が当たる瞬間より1フレーム早く来てしまう。
+      this.tickServeSwing();
 
       // トスの自動リセットなど、このフレームの stepBall() の結果を見てから
       // 溜めを継続してよいか判定する（先に判定すると1フレーム遅れてしまう）。
@@ -3052,13 +3127,17 @@
 
     /**
      * 跳び始める（表示専用）。既に跳んでいる最中なら何もしない＝1回の振りで一度だけ跳ぶ。
-     * @param {'smash'|'jackknife'|null} kind
+     * 跳躍の長さ(span)と踏み切りの割合(rise)は leap に持たせる：サーブの跳躍は、球が打点に
+     * 届くまでの残り時間から毎回決まる（tickServeSwing()）ので定数で引き当てられない。
+     * @param {'smash'|'jackknife'|'serve'|null} kind
+     * @param {{span:number, rise:number, reach?:number}} [timing] 省略時は leapTiming(kind)。
+     *   サーブだけ reach（打点の高さ）も持たせる
      */
-    startLeap(kind, who = 'you') {
+    startLeap(kind, who = 'you', timing = kind && this.leapTiming(kind)) {
       if (!kind) return;
       const actor = this.actor(who);
       if (actor.leap) return;
-      actor.leap = { t: this.leapTiming(kind).span, kind };
+      actor.leap = { ...timing, t: timing.span, kind };
     }
 
     /**
@@ -3637,8 +3716,14 @@
     stepBall(dt) {
       const ball = this.ball;
 
+      // トス中に振り出して待っていたサーブ（swingServe()）は、球が打点の高さを通った
+      // ステップで打つ。物理の刻み（1/240秒）で見るので、打点のずれは 2cm 未満に収まる。
       if (this.tossActive) {
         integrate(ball, dt); // 重力だけで自然に上下させる（ラリーの当たり判定は通さない）
+        if (this.tossReachedSwing()) {
+          this.serve(this.serveSwing.who);
+          return;
+        }
         if (ball.y <= SERVE.BALL_Y) {
           // 打たずに落ちてきた。トスをやり直せるようにリセットする（フォルトにはしない）
           this.tossActive = false;
@@ -3649,9 +3734,13 @@
       }
 
       if (this.aiTossActive) {
-        integrate(ball, dt); // tossActive と同じく重力だけで上下させる（見た目のみ）
-        // 通常は serve() が TIMING.CPU_SERVE_DELAY 経過時に打って aiTossActive を落とすが、
-        // 難易度設定などで間に合わなかった場合の保険として、人間のトスと同じく自然に
+        integrate(ball, dt); // tossActive と同じく重力だけで上下させる
+        if (this.tossReachedSwing()) {
+          this.serve(this.serveSwing.who);
+          return;
+        }
+        // 通常は TIMING.CPU_SERVE_DELAY 後に振り出し、打点まで落ちてきたところで serve() が
+        // aiTossActive を落とすが、間に合わなかった場合の保険として、人間のトスと同じく自然に
         // 落ちきったら手元へ戻す（フォルト扱いにはしない＝サーブは after() 側の予定通り来る）。
         if (ball.y <= SERVE.BALL_Y) {
           this.aiTossActive = false;

@@ -86,14 +86,15 @@
       mesh.position.set(state.x, 0, state.z);
       scene3d.setSwingPose(mesh, state, !!tossing);
       scene3d.setGaitPose(mesh, state.speed, maxSpeed, dt);
-      // スマッシュのジャンプ・飛びつきボレーの倒れ込み・ツイーナーの跳躍は歩行の後
+      // スマッシュ・サーブのジャンプ・飛びつきボレーの倒れ込み・ツイーナーの跳躍は歩行の後
       // （同じ関節を上書きするため）。同時に起きることはないので、浮いた高さは
       // 足し合わせて影に渡す。飛びつきボレーはツイーナーより後：どちらも股関節の
       // rotation.z（脚の開き）を使い、ツイーナーは技が出ていない間それを0へ戻すため。
       const lift = scene3d.applySmashJump(mesh, state)
         + scene3d.applyTweenerHop(mesh, state)
         + scene3d.applyDiveLean(mesh, state)
-        + scene3d.applyJackknifeLeap(mesh, state);
+        + scene3d.applyJackknifeLeap(mesh, state)
+        + scene3d.applyServeJump(mesh, state);
       scene3d.placeGroundShadow(shadow, state, lift);
     }
 
@@ -152,8 +153,10 @@
         chargeFrac: p.chargeFrac, swingCharge: p.swingCharge, speed: p.speed,
         // 必殺技（フォーム・ジャンプの高さ・倒れ込みに効く）と、縮地の残像。
         special: p.special || null,
-        // 跳躍（打球のモーションとは別の時計。スマッシュ／ジャックナイフ）
-        leap: p.leap ? { t: p.leap.t, kind: p.leap.kind } : null,
+        // 跳躍（打球のモーションとは別の時計。スマッシュ／ジャックナイフ／サーブ）
+        leap: p.leap ? {
+          t: p.leap.t, kind: p.leap.kind, span: p.leap.span, rise: p.leap.rise, reach: p.leap.reach,
+        } : null,
         dash: p.dash ? { x: p.dash.x, z: p.dash.z, t: p.dash.t } : null,
       };
     }

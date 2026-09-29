@@ -8,7 +8,9 @@
 (function (RallyOne) {
   'use strict';
 
-  const { GAIT, PLAYER, SPECIAL, SWING, THEME } = RallyOne.config;
+  const {
+    GAIT, PLAYER, SERVE, SPECIAL, SWING, THEME,
+  } = RallyOne.config;
   const { clamp, lerp } = RallyOne.math;
   const scene3d = RallyOne.scene = RallyOne.scene || {};
 
@@ -22,6 +24,8 @@
    * （ずれると「フォアと判定された球を逆の手で振る」ことになる）。
    */
   const HAND = -1;
+  /** 肩（両腕の付け根）の高さ。体幹（torso）のローカル座標 */
+  const SHOULDER_Y = 0.46;
 
   function createRacketArm(shirt, mat) {
     const arm = new THREE.Group();
@@ -114,11 +118,11 @@
     torso.add(body, head);
 
     const arm = createRacketArm(shirt, mat);
-    arm.position.set(0, 0.46, 0);
+    arm.position.set(0, SHOULDER_Y, 0);
     torso.add(arm);
 
     const offArm = createOffArm(shirt, mat);
-    offArm.position.set(0, 0.46, 0);
+    offArm.position.set(0, SHOULDER_Y, 0);
     torso.add(offArm);
 
     group.userData.arm = arm;
@@ -258,6 +262,20 @@
     };
   }
 
+  /**
+   * サーブの打点で、ラケット側の肩を上げて外へ出す（0＝ふだんの位置、1＝上げきり）。
+   * 腕の付け根はふだん胸の中心にあるので、真上へ伸ばしても頭の高さ程度にしか届かない。
+   * 実際のサーブでも打つ側の肩は大きく持ち上がる。位置は鏡映し（mirrorHanded）されない
+   * ので、ここで利き手の側（HAND）へ直接出す。
+   */
+  function raiseShoulder(arm, amount) {
+    arm.position.set(
+      HAND * SWING.SERVE_SHOULDER_X * amount,
+      SHOULDER_Y + SWING.SERVE_SHOULDER_UP * amount,
+      0,
+    );
+  }
+
   function poseArm(player, state, tossing) {
     const { anim, stroke, prep, spin, chargeFrac, swingCharge } = state;
     const arm = player.userData.arm;
@@ -266,9 +284,19 @@
     // ローカル +x 側に作られているので、向きを反転させればそのまま「背中側の球を
     // 股の下から打つ」形になる（普段の向きは userData.facing に控えてある）。
     player.rotation.y = (player.userData.facing || 0) + tweenerTurn(anim, stroke);
+    raiseShoulder(arm, 0); // 肩を上げるのはサーブの打点まわりだけ（下の 'serve' 系で上書き）
 
     if (anim <= 0) {
-      if (tossing) {
+      const rise = serveRise(state);
+      if (rise !== null) {
+        // サーブで跳び上がっている間：トスの構え（後ろへ引いた腕）から、頂点（＝打点）で
+        // 真上・前へ伸ばしきった形へ振り上げる。打った瞬間からは下の 'serve' の振り下ろし。
+        const up = ease(rise);
+        raiseShoulder(arm, up);
+        arm.rotation.y = 0;
+        arm.rotation.z = lerp(SWING.SERVE_READY_Z, SWING.SERVE_START_Z, up);
+        arm.rotation.x = SWING.SERVE_REACH_X * up;
+      } else if (tossing) {
         arm.rotation.y = 0;
         arm.rotation.z = SWING.SERVE_READY_Z;
         arm.rotation.x = 0;
@@ -305,9 +333,11 @@
     const progress = clamp((span - anim) / span, 0, 1);
 
     if (stroke === 'serve') {
+      raiseShoulder(arm, 1 - ease(progress)); // 打点で上げきった肩を、振り下ろしながら戻す
       arm.rotation.y = 0;
       arm.rotation.z = SWING.SERVE_START_Z + progress * (SWING.SERVE_FOLLOW_Z - SWING.SERVE_START_Z);
-      arm.rotation.x = 0;
+      // 打点では前へ倒して伸ばしきっている（トスは体の前に上げる）。振り下ろしながら戻す。
+      arm.rotation.x = SWING.SERVE_REACH_X * (1 - progress);
       torso.rotation.y = 0;
       return;
     }
@@ -436,8 +466,19 @@
   function leapProgress(state, kind) {
     const leap = state.leap;
     if (!leap || leap.kind !== kind || leap.t <= 0) return null;
-    const span = kind === 'jackknife' ? SPECIAL.JACK.LEAP_T : PLAYER.SMASH_LEAP_T;
-    return clamp((span - leap.t) / span, 0, 1);
+    // 長さは leap 自身が持つ（サーブの跳躍は毎回、球が打点に届くまでの時間から決まる）
+    return clamp((leap.span - leap.t) / leap.span, 0, 1);
+  }
+
+  /**
+   * サーブの跳躍の上昇の進み具合(0〜1)。1 で頂点＝球に当たる瞬間。跳んでいなければ null。
+   * 腕の振り上げ（poseArm）はこれに合わせる＝頂点でラケットが伸びきる。
+   */
+  function serveRise(state) {
+    const u = leapProgress(state, 'serve');
+    if (u === null) return null;
+    const rise = state.leap.rise;
+    return rise > 0 ? clamp(u / rise, 0, 1) : 1;
   }
 
   /**
@@ -626,6 +667,44 @@
     });
     gait.offArm.rotation.x = lerp(gait.offArm.rotation.x, -J.LEG_FOLD * 0.4, air);
     gait.torso.rotation.x = lerp(gait.torso.rotation.x, J.TORSO_X, air);
+    return lift;
+  };
+
+  /**
+   * サーブのジャンプ。applySmashJump() と同じく歩行ポーズの後に上から重ねる。
+   * トスが打点（state.leap.reach）まで落ちてくるのに合わせて跳び、頂点でラケットを
+   * 伸ばしきって当てる（頂点＝当たる瞬間になるよう game.js#tickServeSwing が踏み切る）。
+   * - 上がる間は両脚をそろえて伸ばし、体を反らせる
+   * - 打ったあとは振り下ろしに合わせて体を前へ折り、ラケット側の脚を後ろへ蹴り上げる
+   * @param {object} state その選手の見た目に関わる状態（setSwingPose と同じもの）
+   * @returns {number} 浮いた高さ(m)。影を小さくするのに使う（world.js 参照）
+   */
+  scene3d.applyServeJump = function applyServeJump(player, state) {
+    const u = leapProgress(state, 'serve');
+    if (u === null) return 0;
+    // SERVE_JUMP_H は人間の打点（SERVE.CONTACT_Y）に届く高さ。打点が低い CPU/AI
+    // （SERVE.AI_CONTACT_Y）はその差だけ低く跳ぶ＝同じ伸ばしきった腕で球に届く。
+    const peak = Math.max(0, SWING.SERVE_JUMP_H + state.leap.reach - SERVE.CONTACT_Y);
+    const lift = peak * leapArc(u, state.leap.rise);
+    player.position.y = lift;
+    if (peak <= 0) return 0;
+
+    const gait = player.userData.gait;
+    const air = clamp(lift / peak, 0, 1);
+    // 打ってからの振り下ろしの進み具合（当たる前は 0）
+    const progress = state.stroke === 'serve' && state.anim > 0
+      ? clamp((PLAYER.SERVE_ANIM - state.anim) / PLAYER.SERVE_ANIM, 0, 1)
+      : 0;
+    gait.legs.forEach(({ hip, knee }) => {
+      hip.rotation.x = lerp(hip.rotation.x, 0, air);
+      knee.rotation.x = lerp(knee.rotation.x, 0, air);
+    });
+    const back = gait.legs[HAND < 0 ? 0 : 1];
+    const kick = air * progress;
+    back.hip.rotation.x = lerp(back.hip.rotation.x, SWING.SERVE_LEG_KICK, kick);
+    back.knee.rotation.x = lerp(back.knee.rotation.x, -SWING.SERVE_KNEE_TUCK, kick);
+    const torsoX = lerp(SWING.SERVE_TORSO_ARCH, SWING.SERVE_TORSO_X, progress * progress);
+    gait.torso.rotation.x = lerp(gait.torso.rotation.x, torsoX, air);
     return lift;
   };
 

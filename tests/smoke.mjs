@@ -248,14 +248,25 @@ function tap(g) {
 }
 
 /**
+ * 振り出したサーブ（Game#swingServe()）が実際に当たるまで、トスの球だけを物理の刻みで
+ * 進める。ラケットは打点（SERVE.CONTACT_Y）にしか届かないので、離した瞬間にはまだ
+ * 当たらない。当たった瞬間（serve() が serveSwing を消す）で止める＝球は打った直後の状態。
+ */
+function untilServed(g) {
+  for (let i = 0; i < 2000 && g.serveSwing; i++) g.stepBall(R.config.PHYSICS.STEP);
+}
+
+/**
  * 溜めキーを押しっぱなしにしてサーブする、を模した実際のフロー。
- * 押下と同時にトス＋テイクバックの溜めが始まり、holdFrames ぶん待ってから離す＝打つ。
+ * 押下と同時にトス＋テイクバックの溜めが始まり、holdFrames ぶん待ってから離す＝振り出す。
+ * トスが打点まで来たところで当たる（untilServed()）。
  * @param {'flat'|'top'|'slice'} [spin] 押したキーに対応するスピン。省略時はフラット。
  */
 function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   g.chargeStart(spin); // トスとチャージを同時に開始
   for (let f = 0; f < holdFrames; f++) g.update(1 / 60);
-  g.chargeRelease(); // 離した瞬間に打つ
+  g.chargeRelease(); // 離した瞬間に振り出す
+  untilServed(g);
 }
 
 // --- serve lands in the service box（Space を押しっぱなしにして離す、を通す） ---
@@ -394,10 +405,63 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(g.ball.vy > 0, 'toss ball moves upward');
   ok(g.phase === 'serve', 'still in serve phase during the toss');
 
+  // 即離しでは球はまだ手元（ラケットの届く CONTACT_Y より下）を上がっている途中なので、
+  // 振り出しただけで当たらない。上がってきて打点を通った瞬間に打つ。
   g.chargeRelease();
-  ok(g.tossActive === false, 'releasing Space ends the toss');
-  ok(g.ball.live === true, 'ball becomes live after releasing');
-  ok(g.phase === 'rally', 'phase moves to rally after releasing');
+  ok(g.serveSwing && g.serveSwing.who === 'you', 'releasing Space swings (waits for the toss to reach the racket)');
+  ok(g.tossActive === true && g.ball.live === false, 'the ball is not hit yet while still below the racket');
+  untilServed(g);
+  ok(g.tossActive === false, 'the toss ends once the racket meets the ball');
+  ok(g.ball.live === true, 'ball becomes live once hit');
+  ok(g.phase === 'rally', 'phase moves to rally once hit');
+}
+
+// --- サーブはラケットが届く高さで当たる（軌跡の始点＝打点が選手の頭上高くに浮かない） ---
+// 以前は離した瞬間のトスの高さで打っていて、ゲージの線ちょうどで離すと打点がトス頂点近くの
+// 3.3m になり、ラケット（約2m）よりはるか上から球が飛び出していた（ユーザー報告：ポイント後に
+// 残る軌跡の始点が高すぎる）。トスは高いまま、落ちてきて届いたところで打つ。
+{
+  const { PLAYER: P } = R.config;
+  const SWEET_FRAMES = Math.round(SERVE.CHARGE_SWEET_T * 60);
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.chargeStart();
+  for (let f = 0; f < SWEET_FRAMES; f++) g.update(1 / 60);
+  ok(g.ball.y > SERVE.CONTACT_Y + 0.3, `precondition: at the gauge line the toss is well above the racket, y=${g.ball.y}`);
+  g.chargeRelease();
+  ok(g.phase === 'serve' && g.serveSwing && g.serveSwing.jump, 'releasing at the line swings, but the ball is out of reach yet');
+  g.chargeStart(); // 待っている間に押し直しても、2回目のスイングにはならない
+  ok(g.you.charging === false && g.serveSwing.who === 'you', 'pressing again while the swing waits is ignored');
+  let frames = 0;
+  for (; frames < 120 && g.phase === 'serve'; frames++) g.update(1 / 60);
+  ok(g.phase === 'rally', 'the ball is hit once it falls to the racket');
+  ok(frames * (1 / 60) < 0.35, `and that comes soon after releasing: ${(frames / 60).toFixed(2)}s`);
+  ok(g.trail[0].y <= SERVE.CONTACT_Y + 1e-9 && g.trail[0].y > SERVE.CONTACT_Y - 0.03,
+    `the trail starts at the racket's reach (CONTACT_Y), y=${g.trail[0].y}`);
+  // 跳躍の頂点がちょうど当たる瞬間に来る（頂点を過ぎてから当たると、ラケットが球の下を通って見える）
+  const L = g.you.leap;
+  ok(L && L.kind === 'serve' && L.reach === SERVE.CONTACT_Y, `the server jumps into the ball, leap=${JSON.stringify(L)}`);
+  const pastPeak = L && (L.span - L.t) - L.rise * L.span;
+  ok(L && pastPeak >= -1e-9 && pastPeak <= 1 / 60 + 1e-9,
+    `the jump peaks at the moment of contact (within the contact frame), ${pastPeak}s past the peak`);
+  ok(L.rise * L.span <= P.SERVE_LEAP_RISE_T + 1e-9, 'the take-off is no longer than SERVE_LEAP_RISE_T');
+}
+
+// --- 離すのが遅すぎて、トスがもう打点より下へ落ちていたら、跳ばずに届く高さで打つ ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.chargeStart();
+  for (let f = 0; f < 120 && !(g.ball.vy < 0 && g.ball.y < SERVE.CONTACT_Y - 0.1); f++) g.update(1 / 60);
+  ok(g.tossActive && g.ball.vy < 0 && g.ball.y < SERVE.CONTACT_Y && g.ball.y > SERVE.STAND_CONTACT_Y,
+    `precondition: the toss is falling between the two reach heights, y=${g.ball.y}`);
+  g.chargeRelease();
+  ok(g.serveSwing && g.serveSwing.jump === false, 'a late swing does not jump');
+  for (let f = 0; f < 60 && g.phase === 'serve'; f++) g.update(1 / 60);
+  ok(g.phase === 'rally', 'the late swing still connects');
+  ok(Math.abs(g.trail[0].y - SERVE.STAND_CONTACT_Y) < 0.03,
+    `it is hit at the standing reach (STAND_CONTACT_Y), y=${g.trail[0].y}`);
+  ok(g.you.leap === null, 'without a jump');
 }
 
 // --- Space を離さずに待ちすぎると、トスが落ちてきて自動でリセットされる（フォルト扱いにはしない） ---
@@ -462,8 +526,9 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   for (let i = 0; i < 20; i++) g.movePlayers(1 / 60);
   ok(g.you.x === before.x && g.you.z === before.z, 'still frozen after several frames of held input');
 
-  // 離した瞬間から通常どおり動ける
+  // 打った瞬間から通常どおり動ける
   g.chargeRelease();
+  untilServed(g);
   ok(g.tossActive === false, 'precondition: served');
   g.movePlayers(1 / 60);
   ok(g.you.x !== before.x || g.you.z !== before.z, 'player can move again once the toss has been hit');
@@ -605,7 +670,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start();
-  tap(g); // Space 押して即離す＝トスして打つ
+  tap(g); // Space 押して即離す＝トスして振り出す
+  untilServed(g);
   ok(g.serveInFlight === true, 'serve sets serveInFlight');
   ok(g.ball.last === 'you', 'precondition: served by team you');
 
@@ -819,10 +885,19 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(g.aiTossActive === true, 'the toss goes up after CPU_SERVE_READY');
   ok(g.phase === 'serve', 'the ball has not been hit yet');
 
-  g.tickTimers(TIMING.CPU_SERVE_DELAY - 0.1);
-  ok(g.phase === 'serve', 'still on the toss just before CPU_SERVE_DELAY');
-  g.tickTimers(0.2);
-  ok(g.phase === 'rally', 'the serve is struck CPU_SERVE_DELAY after the toss');
+  // 振り出す（跳び始める）のは CPU_SERVE_DELAY 後。当たるのはそこから、トスがラケットの
+  // 届く AI_CONTACT_Y まで落ちてきたとき（トスの球を実際に動かすので update() で進める）。
+  let t = 0;
+  for (; t < TIMING.CPU_SERVE_DELAY - 0.1; t += 1 / 60) g.update(1 / 60);
+  ok(g.phase === 'serve' && !g.serveSwing, 'still on the toss just before CPU_SERVE_DELAY');
+  for (; t < TIMING.CPU_SERVE_DELAY + 0.05; t += 1 / 60) g.update(1 / 60);
+  ok(g.serveSwing && g.serveSwing.who === 'cpu', 'the AI swings CPU_SERVE_DELAY after the toss');
+  ok(g.phase === 'serve', 'but the toss is still above the racket, so it has not been hit yet');
+  for (let i = 0; i < 120 && g.phase === 'serve'; i++) g.update(1 / 60);
+  ok(g.phase === 'rally', 'the serve is struck once the toss falls to the racket');
+  ok(Math.abs(g.trail[0].y - SERVE.AI_CONTACT_Y) < 0.03,
+    `the AI hits from its racket height (the trail starts there), y=${g.trail[0].y}`);
+  ok(g.cpu.leap && g.cpu.leap.kind === 'serve', 'the AI jumps into its serve');
 
   // 打つのはトスが手元へ落ちきる前でなければならない（でないとトスが2回上がって見える）
   const tossAir = 2 * Math.sqrt(2 * (SERVE.TOSS_PEAK - SERVE.BALL_Y) / Math.abs(PHYSICS.GRAVITY));
@@ -2521,6 +2596,9 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     g.you.chargeTime = 0.5;
     for (let i = 0; i < 5; i++) g.update(1 / 60); // トスが上がる
     g.chargeRelease();
+    // 当たるのはトスがラケットの届く高さに来たとき（物理の刻みの中）。反応遅延はその次の
+    // フレームの movePlayers() が掛ける（ラリー中の打球と同じ順序）。
+    for (let guard = 0; g.phase === 'serve' && guard < 120; guard++) g.update(1 / 60);
     g.update(1 / 60);
     return g;
   };
@@ -2541,6 +2619,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     g.lastBallOwnerSeen = null;
     for (let i = 0; i < 10; i++) g.update(1 / 60);
     for (let guard = 0; g.phase === 'serve' && guard < 600; guard++) g.update(1 / 60);
+    g.update(1 / 60); // 打った次のフレームで反応遅延が掛かる（上の serveWith() と同じ）
     return g.reactTimers.youMate;
   };
   const wantMate = CPU_REACT * R.config.ATTRS.youMate.react;
@@ -4226,7 +4305,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   g.phase = 'rally';
   g.serveInFlight = true;
   g.serveNumber = 1;
-  const from = { x: 0, y: SERVE.TOSS_Y, z: -HALF_L };
+  const from = { x: 0, y: SERVE.CONTACT_Y, z: -HALF_L };
   // サービスラインより1m深く（サーバーは'you'なので dir=+1）＝コースに関わらず明確にフォルト
   const target = { x: 0, y: R.config.PHYSICS.BALL_R, z: COURT.SERVICE + 1 };
   const v = R.physics.solveShot(from, target, 0.3, SERVE.CLEARANCE, 'flat'); // 速い球
@@ -4734,7 +4813,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       g.start();
       g.chargeStart(spin);   // トス
       g.chargeStart(spin);   // 溜め始め
-      g.chargeRelease();     // 打つ
+      g.chargeRelease();     // 振り出す
+      untilServed(g);        // トスが打点に来て当たる
       return g.lastShotBy.you;
     };
     // 無入力（moveX=0）はボディ狙い。スピンの呼び分けがそのまま出る
@@ -4870,7 +4950,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   const { BALL_R, STEP } = R.config.PHYSICS;
   // フル溜めのフラットサーブ相当。バウンド後も水平40m/s近くで飛ぶので、打点（頂点）は
   // ベースラインの遥か後方＝CPUがどう頑張っても立てない場所になる。
-  const from = { x: -SERVE.STANCE_X, y: SERVE.TOSS_Y, z: -HALF_L };
+  const from = { x: -SERVE.STANCE_X, y: SERVE.CONTACT_Y, z: -HALF_L };
   const v = solveShot(from, { x: 2.0, y: BALL_R, z: COURT.SERVICE - 1.4 }, SERVE.CHARGE_T, SERVE.CLEARANCE, 'flat');
   const ball = { ...from, px: from.x, py: from.y, pz: from.z, ...v, spin: 'flat', wind: 0, bounces: 0 };
   for (let t = 0; t < 3; t += STEP) { // バウンドの直後まで進める
@@ -5690,6 +5770,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   g.start();
   // 1本目を打って、フォールトせずに入るまで進める
   tap(g);
+  untilServed(g);
   ok(g.stats.you.firstServes === 1, `hitting a first serve counts it: ${g.stats.you.firstServes}`);
   ok(g.stats.you.maxServeKmh > 0, `the serve speed is recorded: ${g.stats.you.maxServeKmh}`);
   for (let i = 0; i < 240 && g.ball.bounces === 0 && g.phase !== 'serve'; i++) g.update(1 / 60);
@@ -5701,6 +5782,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   g2.start();
   g2.serveNumber = 2;
   tap(g2);
+  untilServed(g2);
   ok(g2.stats.you.firstServes === 0, 'a second serve is not counted as a first serve');
 }
 
