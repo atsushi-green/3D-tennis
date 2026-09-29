@@ -299,6 +299,25 @@
   }
 
   /**
+   * その打点は「ベースライン付近で、弾んだ直後の上がりばな」か＝ライジングの場面か。
+   * 見るのは3つ：打つ本人がベースラインの近く（内側 BASE_IN〜後ろ BASE_OUT）に立っている、
+   * 球がバウンド済みでまだ上昇中、弾んでから MAX_SINCE 秒以内。
+   * 立ち位置は深さ（|z|＝ネットからの距離）で見るので、手前と奥のどちらの選手にもそのまま
+   * 使える。人間（打点の先読み／当たった瞬間）と AI（当たった瞬間）の両方から使う。
+   * @param {{z:number}} player 打つ本人
+   * @param {{bounces:number, vy:number, sinceBounce:number|null}|null} at 打点
+   *   （predictContact の結果、または実際のボール）
+   */
+  function risingContact(player, at) {
+    if (!at || !(at.bounces > 0) || !(at.vy > 0)) return false;
+    const { RISING } = SPECIAL;
+    // 弾んでからの時間が分からない球（null）は数えない＝上がりばなとは言えない
+    if (!(at.sinceBounce <= RISING.MAX_SINCE)) return false;
+    const depth = Math.abs(player.z);
+    return depth >= HALF_L - RISING.BASE_IN && depth <= HALF_L + RISING.BASE_OUT;
+  }
+
+  /**
    * 技が乗った1打が、実際に当たった時点でもまだその技の場面かどうか。
    * 技が乗るのは「溜めを離した瞬間」（chargeRelease）で、実際に当たるのはその少し後
    * なので、その間に前へ詰めた・バウンドを待ったなどで場面が変わることがある。
@@ -323,6 +342,11 @@
     // 弾んだ高い球を叩く技なので、ノーバウンドで触ってしまった／落ちてくるのを待って
     // しまった（打点が下がった）1打では下ろす。跳んで叩く専用モーションに切り替わるため。
     jackknife: (g, ball) => ball.bounces > 0 && ball.y >= SPECIAL.JACK.MIN_Y,
+    // 上がりばなを叩く技なので、離した後に引きつけすぎた（弾んでから時間が経った／もう頂点を
+    // 越えた）1打や、下がって・前へ出て打った1打では下ろす。ジャックナイフの逆で、
+    // こちらは「待ちすぎると技にならない」。
+    rising: (g, ball) => risingContact(g.you, ball)
+      && !naturalStroke(g, 'you', ball, g.you, g.you.swingCharge).smash,
   };
 
   /**
@@ -331,7 +355,7 @@
    * （Game#pickSpecial）。条件が重ならないよう、技ごとに担当する場面を分けてある：
    * サーブ／前に詰めながらの高いノーバウンド／抜かれた球／届かない球／
    * 届かないノーバウンド／浮いたノーバウンド／
-   * 走らされているフォアハンド／足を止めて溜めたグラウンドストローク。
+   * 走らされているフォアハンド／ベースライン付近の上がりばな／足を止めて溜めたグラウンドストローク。
    * @type {{[key:string]: (g: Game, c: object) => boolean}}
    */
   const SPECIAL_MATCH = {
@@ -426,6 +450,21 @@
         && g.you.runX * side >= BUGGY.MIN_RUN_X
         && g.you.x * side >= BUGGY.MIN_X;
     },
+    // 「ベースライン付近で下がらずに、弾んだ直後の上がりばなを捉える」場面だけ。
+    // ・判定は「最初に届く点」（predictContact）で見る。弾んで上がってくる球では、そこが
+    //   ちょうど上がりばな＝この技の打点になる（ジャックナイフが最高点を見るのと逆）。
+    // ・**溜めは見ない**。相手の球威を使ってコンパクトに合わせる打ち方なので、溜めが
+    //   浅くても速い球になる（specialShot 参照）。
+    // ・ただし**ロブ（Shift）とドロップショット（C をほとんど溜めずに離す）では出さない**。
+    //   どちらも「叩かない」ことを選んだ1打で、溜めを見ない技がそこまで拾うと、
+    //   ベースラインでつなぎのロブ／ドロップを打つたびに強打へ化けてしまう。
+    rising: (g, c) => {
+      if (c.serving || g.input.lob) return false;
+      if (c.spin === 'slice' && c.charge <= DROP.MAX_CHARGE) return false;
+      const at = c.contact('rising');
+      return risingContact(g.you, at)
+        && !naturalStroke(g, 'you', at, g.you, c.charge).smash;
+    },
     // 「足を止めて狙い澄ますグラウンドストローク」だけ。**ノーバウンドを触る1打（ボレー）
     // と、頭上から叩く1打（スマッシュ）では出さない。** hit() は技が乗った1打の打ち方を
     // 技に決めさせる（isSmash / isVolley）ので、場面を見ずに乗せるとボレーが
@@ -517,6 +556,9 @@
         && c.player.runX * side >= BUGGY.MIN_RUN_X
         && c.player.x * side >= BUGGY.MIN_X;
     },
+    // ベースライン付近で、弾んだ直後の上がりばなを叩く。条件は人間とまったく同じ
+    // （人間にもともと溜めの条件が無いので、置き換えるものがない）。
+    rising: (g, c) => !c.natural.smash && !c.natural.volley && risingContact(c.player, c.ball),
     // 足を止めて構えられた1打を、狙い澄ましてライン際へ。人間の「溜め5割以上」に
     // 当たるのが settleT（目標地点に着いてから動かずに待てている秒数）。
     hawkEye: (g, c) => !c.natural.smash && !c.natural.volley && c.bounces > 0
@@ -570,6 +612,9 @@
         spin: 'flat',   // 'flat'|'top'|'slice'。飛翔中の実効重力とバウンドの弾み方に効く
         curve: 0,       // 横方向の加速度(m/s²)。バギーホイップ（必殺技）だけが使い、バウンドで消える
         age: 0,         // 最後に打たれてからの経過時間(秒)。CPU/AIが「反応する時間」に使う（ai.reactReach）
+        // 最後にバウンドしてからの経過時間(秒)。bounces>0 のときだけ意味を持つ。必殺技ライジング
+        // の「弾んだ直後の上がりばなか」の判定に使う（physics.predictWindow も同じ数え方をする）。
+        sinceBounce: 0,
         wind: 0,        // 横風（m/s²、vxに継続的に加算）。サーブの飛翔中は常に0、返球後だけ this.wind になる
       };
       this.you = {
@@ -1117,8 +1162,8 @@
 
     /**
      * いまの難易度で AI が使える技の一覧（＝回数を配る対象でもある）。
-     * Hard は守備範囲を広げない7種（SPECIAL.AI.MOVES）、Extreme は飛びつきボレー・縮地を
-     * 含む全9種（MOVES_ALL）。どちらを使うかは難易度プリセットの CPU.SPECIAL_ALL_MOVES。
+     * Hard は守備範囲を広げない8種（SPECIAL.AI.MOVES）、Extreme は飛びつきボレー・縮地を
+     * 含む全10種（MOVES_ALL）。どちらを使うかは難易度プリセットの CPU.SPECIAL_ALL_MOVES。
      * @returns {string[]}
      */
     aiMoves() {
@@ -2026,7 +2071,7 @@
     hit(who) {
       const ball = this.ball;
       const player = this.actor(who);
-      const from = { x: ball.x, y: Math.max(ball.y, 0.5), z: ball.z };
+      const from = { x: ball.x, y: Math.max(ball.y, SHOT.SOLVE_MIN_Y), z: ball.z };
       this.serveInFlight = false; // 一度でも打ち返されたら「ノーバウンド禁止」の制約は解除
       this.rallyShots++; // 観客の歓声・実況の盛り上がりに使う（ラリーが長いほど盛り上がる）
 
@@ -2300,8 +2345,10 @@
      * 打てば多少ずれる）。
      * @param {number} [reachMult] 必殺技でリーチが広がるぶんの倍率（既定1＝通常）
      * @param {number} [reachYBonus] 必殺技で打点の高さの上限が上がるぶん(m)（既定0）
-     * @returns {{t:number, x:number, y:number, z:number, bounces:number}|null}
+     * @returns {{t:number, x:number, y:number, z:number, bounces:number, vy:number,
+     *   sinceBounce:number|null}|null}
      *   すでに届く位置なら t=0。スイングの有効時間内に届かないなら null（＝いま離すと空振り）。
+     *   vy／sinceBounce はその打点での縦の速さと、弾んでからの経過時間（ライジングの判定用）。
      */
     predictContact(reachMult = 1, reachYBonus = 0) {
       const ball = this.ball;
@@ -2314,7 +2361,13 @@
         && Math.hypot(at.x - you.x, at.z - you.z) < reach;
       if (canHit(ball, ball.bounces)) {
         return {
-          t: 0, x: ball.x, y: ball.y, z: ball.z, bounces: ball.bounces,
+          t: 0,
+          x: ball.x,
+          y: ball.y,
+          z: ball.z,
+          bounces: ball.bounces,
+          vy: ball.vy,
+          sinceBounce: ball.bounces > 0 ? ball.sinceBounce : null,
         };
       }
       // predictWindow() は上限を越えた次の1コマまでサンプルを返しうる（刻みは
@@ -2721,6 +2774,28 @@
           reactBonus: BUGGY.REACT_BONUS,
           // ポールを回れたときだけ呼び名を変える（何が起きたのかが分かるように）
           label: curve * sign > BUGGY.LINE_CURVE ? `${SPECIAL_LABEL.buggyWhip}（ポール回し）` : undefined,
+        };
+      }
+
+      if (move === 'rising') {
+        const { RISING } = SPECIAL;
+        // 溜めは見ない（相手の球威を使ってコンパクトに合わせる）。狙いは ←→ の入力が最優先、
+        // 無入力なら相手のいない側（オープンコート）へ：早いタイミングで打ち返すので、相手は
+        // まだ前の1打から戻りきっていない。
+        const foe = this.doubles
+          ? this.doublesFoes(who).back
+          : this.actor(TEAM_OF[who] === 'you' ? 'cpu' : 'you');
+        const away = aim !== 0 ? Math.sign(aim) : -signOr(foe.x, 1);
+        return {
+          target: { x: away * RISING.X, y: BALL_R, z: zDir * spread(RISING.Z_MIN, RISING.Z_MAX) },
+          flight: RISING.T * ground,
+          // 上がりばなの打点は低い（0.2〜0.4m）。hit() は SHOT.SOLVE_MIN_Y の高さから打った
+          // として弾道を解くので、その差だけ実際の球は低く飛ぶ——足し戻さないと余裕を
+          // 食い潰してネットに掛かる（実測：足し戻す前はライジングの1割強がネット）。
+          clearance: RISING.CLEARANCE + Math.max(0, SHOT.SOLVE_MIN_Y - this.ball.y),
+          spin: RISING.SPIN,
+          risk: 0,
+          reactBonus: RISING.REACT_BONUS, // 時間を奪われて、相手の出足が遅れる
         };
       }
 
@@ -3592,6 +3667,7 @@
 
       integrate(ball, dt);
       ball.age += dt;
+      ball.sinceBounce += dt;
 
       if (hitsNet(ball)) {
         // サーブは対象外（実際のルールのレットと混同しないよう常にフォールトのまま。
@@ -3646,6 +3722,7 @@
       // 摩擦の実装は physics.js の reflectBounce() に一本化してあり（predictBounceApex() も
       // 同じ実装を使う）、ここではその結果の座標を読むだけ。
       reflectBounce(ball);
+      ball.sinceBounce = 0;
       // 軌跡は通常 update() が1フレームに1点ずつ記録するだけなので、速い球ほど着地の瞬間を
       // 挟む2点の間隔が開き、IN/OUT判定に実際に使うこの着地座標（x,z）と、直線で結んだ軌跡が
       // 見せる「着地したように見える位置」がずれることがあった（＝軌跡ではINに見えるのに

@@ -4364,6 +4364,34 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(band(20, 30) === null, 'a band the ball never reaches yields null');
 }
 
+// --- physics.predictWindow()：サンプルは縦の速さと「弾んでからの時間」も持つ（ライジングの判定用） ---
+{
+  const { predictWindow } = R.physics;
+  const { STEP } = R.config.PHYSICS;
+  // 目の前の地面へ落ちてきて、弾んで上がる球
+  const falling = {
+    x: 0, y: 0.4, z: -5, vx: 0, vy: -4, vz: -10, spin: 'flat', wind: 0, bounces: 0,
+  };
+  const before = predictWindow(falling, () => true, 0.02, 1);
+  ok(before && before.enter.sinceBounce === null && before.enter.vy < 0,
+    `before the bounce there is no time since it: ${before && before.enter.sinceBounce}`);
+  const after = predictWindow(falling, (at) => at.bounces === 1, 1, 1);
+  ok(after && after.enter.sinceBounce === 0 && after.enter.vy > 0,
+    `the bounce step starts the clock at 0 with the ball going up, got ${after && after.enter.sinceBounce}/${after && after.enter.vy}`);
+  ok(after && Math.abs(after.exit.sinceBounce - (after.exit.t - after.enter.t)) < 1e-9,
+    'and it counts up with the flight after that');
+  // 予測を始めた時点で既に弾んでいる球は、その球の sinceBounce から数え続ける
+  const rising = { ...falling, y: 0.3, vy: 3, bounces: 1, sinceBounce: 0.1 };
+  const next = predictWindow(rising, () => true, 0.1, 1);
+  ok(next && Math.abs(next.enter.sinceBounce - (0.1 + STEP)) < 1e-9,
+    `an already-bounced ball keeps its clock, got ${next && next.enter.sinceBounce}`);
+  // いつ弾んだか分からない球（sinceBounce を持たない）は null のまま
+  const unknown = { ...rising };
+  delete unknown.sinceBounce;
+  ok(predictWindow(unknown, () => true, 0.1, 1).enter.sinceBounce === null,
+    'a bounced ball with no clock stays unknown');
+}
+
 // --- スマッシュの先回りヒント：ロブが来たとき「立つべき地点」を返す ---
 {
   const { solveShot, predictLanding } = R.physics;
@@ -5701,6 +5729,30 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     g.you.sinceRunT = 0; // いま走っている最中
     g.you.chargeSpin = 'top'; // V（トップスピン）で溜めている＝バギーホイップの条件
   };
+  /**
+   * 「ベースライン上に立っていて、目の前で弾んだばかりの球が上がってくる」状態にする
+   * （ライジングの条件）。球はもう届く位置（フォア側）にある＝いま振ればこの打点で当たる。
+   * @param {{since?:number, vy?:number, y?:number, youZ?:number}} [opt]
+   *   since＝弾んでからの秒数、vy＝縦の速さ、y＝打点の高さ、youZ＝立ち位置
+   */
+  const onTheRise = (g, opt = {}) => {
+    g.you.x = 0;
+    g.you.z = opt.youZ === undefined ? -HL : opt.youZ;
+    g.you.speed = 0;
+    Object.assign(g.ball, {
+      x: g.you.x + RACKET_SIDE_YOU * 0.5,
+      y: opt.y === undefined ? 0.3 : opt.y,
+      z: g.you.z + 1.0,
+      vx: 0,
+      vy: opt.vy === undefined ? 3 : opt.vy,
+      vz: -15,
+      bounces: 1,
+      sinceBounce: 'since' in opt ? opt.since : 0.05,
+      spin: 'flat',
+      wind: 0,
+      curve: 0,
+    });
+  };
 
   /** ラリー中（相手が打った球が飛んできている）状態のゲームを作る */
   const rally = (specials, input = idle) => {
@@ -6063,6 +6115,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       ['buggyWhip', (g) => { g.you.z = -9; ballAt(g, 1.0); }],
       ['hawkEye', (g) => { g.you.z = -9; ballAt(g, 1.0); }],
       ['tweener', (g) => { g.you.z = -10.5; ballAt(g, 1.0, -1.2); }],
+      ['rising', (g) => onTheRise(g)],
     ];
     cases.forEach(([move, place]) => {
       let outs = 0;
@@ -7057,6 +7110,209 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     g.you.special = 'hawkEye';
     g.hit('you');
     ok(g.lastShotBy.you === '鷹の目', `the winning shot is named after the move, got ${g.lastShotBy.you}`);
+  }
+
+  // --- ライジング：ベースライン付近で、弾んだ直後の上がりばなを叩く ---
+  // (要望: 必殺技「ライジング」。ベースライン付近で、ボールのあがりっぱなを打ち返す技)
+  {
+    const { RISING } = SPECIAL;
+    /** 上がりばなの場面で溜め始めたところ（opt は onTheRise と、charge／spin／input） */
+    const scene = (opt = {}, specials = ['rising']) => {
+      const g = rally(specials, opt.input || idle);
+      onTheRise(g, opt);
+      g.chargeStart(opt.spin || 'flat');
+      g.you.chargeTime = CHARGE.MAX_TIME * (opt.charge || 0);
+      return g;
+    };
+    const picked = (opt, specials) => scene(opt, specials).pickSpecial();
+
+    // 出る場面：溜めていなくても出る（相手の球威を使う打ち方なので、溜めは条件にしない）
+    ok(picked() === 'rising', `a ball just off the bounce, taken on the baseline, picks the rising shot, got ${picked()}`);
+    ok(picked({ charge: 1, spin: 'top' }) === 'rising', 'charged or with topspin it is the same shot');
+    // 立ち位置はベースラインの内側 BASE_IN 〜 後ろ BASE_OUT の帯
+    ok(picked({ youZ: -(HL - RISING.BASE_IN + 0.1) }) === 'rising'
+      && picked({ youZ: -(HL + RISING.BASE_OUT - 0.1) }) === 'rising',
+      'anywhere in the band around the baseline');
+    ok(picked({ youZ: -(HL - RISING.BASE_IN - 0.5) }) === null,
+      `not from well inside the court, got ${picked({ youZ: -(HL - RISING.BASE_IN - 0.5) })}`);
+    ok(picked({ youZ: -(HL + RISING.BASE_OUT + 0.5) }) === null,
+      `nor after backing off behind the baseline, got ${picked({ youZ: -(HL + RISING.BASE_OUT + 0.5) })}`);
+    // 打点のタイミング：弾んでから MAX_SINCE 秒以内で、まだ上昇中
+    ok(picked({ since: RISING.MAX_SINCE + 0.05 }) === null, 'not once the ball has been up for a while');
+    ok(picked({ vy: -0.5 }) === null, 'nor once it has topped out and is dropping');
+    ok(picked({ since: undefined }) === null, 'nor when it is unknown when the ball bounced');
+    {
+      const g = scene();
+      g.ball.bounces = 0;
+      ok(g.pickSpecial() === null, `nor on a ball that has not bounced, got ${g.pickSpecial()}`);
+    }
+    // つなぎのロブ／ドロップショットは「叩かない」ことを選んだ1打なので、化けさせない
+    ok(picked({ input: { moveX: 0, moveZ: 0, lob: true } }) === null, 'a lob is left alone');
+    ok(picked({ spin: 'slice', charge: 0 }) === null, 'so is a drop shot (C released at once)');
+    ok(picked({ spin: 'slice', charge: 0.6 }) === 'rising', 'but a driven slice is still a rising shot');
+    // 優先度：鷹の目より上（溜めてから上がりばなを捉えた1打は、鷹の目ではなくこちら）
+    ok(picked({ charge: 1 }, ['rising', 'hawkEye']) === 'rising'
+      && picked({ charge: 1 }, ['hawkEye']) === 'hawkEye',
+      'it outranks the hawk eye, which still takes the same ball when rising is not equipped');
+    ok(picked({ charge: 1 }, ALL) === 'rising', `with everything equipped it is the rising shot, got ${picked({ charge: 1 }, ALL)}`);
+
+    // 実際の流れ：弾む前の球でも、打点の先読みが「弾んだ直後」なら離した瞬間に乗り、
+    // 当たって回数を使い、技名でコールされる
+    {
+      const g = rally(['rising']);
+      g.you.x = 0; g.you.z = -HL;
+      Object.assign(g.ball, {
+        x: -0.5, y: 0.4, z: -HL + 3.5, vx: 0, vy: -4, vz: -16, bounces: 0, spin: 'flat', wind: 0, curve: 0,
+      });
+      g.chargeStart();
+      const c = g.predictContact();
+      ok(c && c.bounces === 1 && c.vy > 0 && c.sinceBounce <= RISING.MAX_SINCE,
+        `precondition: the first reachable point is just off the bounce, got ${JSON.stringify(c)}`);
+      g.chargeRelease();
+      ok(g.you.special === 'rising', `releasing arms it, got ${g.you.special}`);
+      let hitAt = null;
+      const hit = g.hit.bind(g);
+      g.hit = (who) => { if (who === 'you') hitAt = { ...g.ball }; hit(who); };
+      for (let i = 0; i < 30 && g.ball.last !== 'you'; i++) g.update(1 / 60);
+      ok(hitAt && hitAt.bounces === 1 && hitAt.vy > 0 && hitAt.sinceBounce <= RISING.MAX_SINCE,
+        `the ball really is met on the rise, got ${hitAt && hitAt.sinceBounce}`);
+      ok(g.lastShotBy.you === 'ライジング' && g.usesLeft('rising') === SPECIAL.USES_PER_GAME - 1,
+        `it connects as the rising shot, got ${g.lastShotBy.you} (left ${g.usesLeft('rising')})`);
+      ok(g.you.stroke === 'forehand', `with the ordinary forehand swing, got ${g.you.stroke}`);
+    }
+    // 弾んでからの時間は実際のボールも同じ数え方（バウンドで0に戻り、そこから進む）
+    {
+      const g = rally([]);
+      Object.assign(g.ball, {
+        x: 0, y: 0.4, z: -5, vx: 0, vy: -4, vz: -10, bounces: 0, sinceBounce: 3, spin: 'flat', wind: 0, curve: 0,
+      });
+      for (let i = 0; i < 30 && g.ball.bounces === 0; i++) g.update(1 / 60);
+      const first = g.ball.sinceBounce;
+      ok(g.ball.bounces === 1 && first < 1 / 60, `the bounce resets the clock, got ${first}`);
+      g.update(1 / 60);
+      ok(Math.abs(g.ball.sinceBounce - first - 1 / 60) < 1e-6, 'and it runs with the ball after that');
+    }
+
+    // 離した後に引きつけすぎた（弾んでから時間が経った）1打では技を下ろす（回数も減らない）
+    {
+      const g = scene();
+      g.you.special = 'rising';
+      g.ball.sinceBounce = RISING.MAX_SINCE + 0.1;
+      g.hit('you');
+      ok(g.you.special === null && g.usesLeft('rising') === SPECIAL.USES_PER_GAME
+        && g.lastShotBy.you !== 'ライジング',
+        `waiting too long turns it back into a normal shot: ${g.lastShotBy.you}`);
+    }
+
+    /** 上がりばなを1本打ち、打球を調べる */
+    const hitRising = (opt = {}) => {
+      const g = rally(['rising'], opt.input || idle);
+      onTheRise(g, opt);
+      if (opt.cpuX !== undefined) g.cpu.x = opt.cpuX;
+      g.you.swingCharge = opt.charge || 0;
+      g.you.chargeSpin = 'flat';
+      g.you.special = opt.special === undefined ? 'rising' : opt.special;
+      g.hit('you');
+      return {
+        g,
+        land: R.physics.predictLanding(g.ball),
+        trace: trace(g),
+        kmh: R.math.mpsToKmh(Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz)),
+      };
+    };
+    const median = (f, n = 15) => {
+      const v = [];
+      for (let i = 0; i < n; i++) v.push(f());
+      return v.sort((a, b) => a - b)[Math.floor(n / 2)];
+    };
+    // 溜めていなくても、フル溜めの通常打と同じくらい速い（同じ溜めの通常打よりずっと速い）。
+    // 低い打点では球速はネットの余裕で頭打ちになるので、フル溜めを「上回る」とまでは言えない
+    // （0.3m で同じくらい、0.5m 以上で1割ほど上回る。SPECIAL.RISING のコメント参照）。
+    [0.3, 0.6].forEach((y) => {
+      const rising = median(() => hitRising({ y }).kmh);
+      const tap = median(() => hitRising({ y, special: null }).kmh);
+      const full = median(() => hitRising({ y, special: null, charge: 1 }).kmh);
+      ok(rising > tap * 1.5, `met at ${y}m with no charge it is far faster than a plain tap: ${rising.toFixed(0)} vs ${tap.toFixed(0)}km/h`);
+      ok(rising >= full * 0.97, `and as fast as a fully charged normal shot: ${rising.toFixed(0)} vs ${full.toFixed(0)}km/h`);
+    });
+    // 打点が低くてもネットに掛からない。hit() は打点を SHOT.SOLVE_MIN_Y の高さとして
+    // 弾道を解くので、その差を余裕に足し戻していないと実際の球は1割強がネットになっていた
+    [0.12, 0.2, 0.3, 0.45].forEach((y) => {
+      for (let i = 0; i < 10; i++) {
+        const { trace: t, land } = hitRising({ y });
+        ok(t.cross && !t.cross.hitsNet && inOpponentCourt(land),
+          `a rising shot met at ${y}m clears the net and lands in: ${JSON.stringify(t.cross)} ${JSON.stringify(land)}`);
+      }
+    });
+    // 深く、相手のいない側へ。←→ を入れればそちらが優先
+    {
+      const right = hitRising({ cpuX: 2 }).land;
+      const left = hitRising({ cpuX: -2 }).land;
+      ok(right.x < 0 && left.x > 0, `with no input it goes away from the opponent: ${right.x.toFixed(2)} / ${left.x.toFixed(2)}`);
+      ok(right.z > COURT.SERVICE + 2 && left.z > COURT.SERVICE + 2,
+        `and deep: z ${right.z.toFixed(2)} / ${left.z.toFixed(2)}`);
+      const aimed = hitRising({ cpuX: -2, input: { moveX: 1, moveZ: 0, lob: false } }).land; // → ＝ world -x
+      ok(aimed.x < 0, `the arrow keys still choose the side, got ${aimed.x.toFixed(2)}`);
+    }
+    // 時間を奪う：CPU の出足がこの秒数遅れる
+    {
+      const { g } = hitRising();
+      ok(g.ball.reactBonus === RISING.REACT_BONUS, `the rising shot delays the reply, got ${g.ball.reactBonus}`);
+      g.update(1 / 60);
+      ok(g.reactTimers.cpu > PLAYER.CPU_REACT * g.cpu.attr.react + RISING.REACT_BONUS - 0.05,
+        `and the CPU really starts late: ${g.reactTimers.cpu.toFixed(3)}s`);
+    }
+
+    // CPU/AI（Hard 以上）も同じ条件で出す
+    R.config.applyCpuLevel('hard');
+    try {
+      const RACKET_SIDE_CPU = 1; // cpu は向かい側を向いた右利き＝フォア側は world +x
+      /** cpu がベースライン上で、目の前で弾んだばかりの球を上がりばなで捉える場面 */
+      const aiScene = (opt = {}) => {
+        const g = rally(ALL);
+        g.ball.last = 'you';
+        g.cpu.x = 0;
+        g.cpu.z = opt.cpuZ === undefined ? HL : opt.cpuZ;
+        g.cpu.speed = 0;
+        g.cpu.settleT = 0; // 待てていない（鷹の目の場面ではない）
+        Object.assign(g.ball, {
+          x: g.cpu.x + RACKET_SIDE_CPU * 0.5,
+          y: 0.3,
+          z: g.cpu.z - 1.0,
+          vx: 0,
+          vy: opt.vy === undefined ? 3 : opt.vy,
+          vz: 15,
+          bounces: 1,
+          sinceBounce: opt.since === undefined ? 0.05 : opt.since,
+        });
+        return g;
+      };
+      /** CHANCE で外れることがあるので、何度か引いて「その場面で出うる技」を集める */
+      const aiPicks = (g) => {
+        const seen = [];
+        for (let i = 0; i < 300; i++) {
+          const move = g.pickAiSpecial('cpu', g.aiSpecialContext('cpu'));
+          if (move && seen.indexOf(move) === -1) seen.push(move);
+        }
+        return seen.join(',');
+      };
+      ok(rally(ALL).aiMoves().indexOf('rising') !== -1, 'hard gives the AI the rising shot');
+      ok(aiPicks(aiScene()) === 'rising', `the AI takes the ball on the rise, got ${aiPicks(aiScene())}`);
+      ok(aiPicks(aiScene({ since: RISING.MAX_SINCE + 0.1 })) === '', 'but not a ball that has been up a while');
+      ok(aiPicks(aiScene({ vy: -1 })) === '', 'nor one that is dropping');
+      ok(aiPicks(aiScene({ cpuZ: HL - RISING.BASE_IN - 1 })) === '', 'nor from well inside the court');
+      // AI の打球も鏡になって、人間コートの深いところ・人間のいない側へ飛ぶ
+      const g = aiScene();
+      g.you.x = 2;
+      g.pickAiSpecial = () => 'rising';
+      g.hit('cpu');
+      const land = R.physics.predictLanding(g.ball);
+      ok(!land.net && land.z < -(COURT.SERVICE + 2) && land.z >= -(HL + COURT.LINE_SLACK) && land.x < 0,
+        `the AI rising shot goes deep, away from you: ${JSON.stringify(land)}`);
+      ok(g.lastShotBy.cpu === 'ライジング', `and is called by name, got ${g.lastShotBy.cpu}`);
+    } finally {
+      R.config.applyCpuLevel('normal');
+    }
   }
 
   // --- Hard の CPU/AI も必殺技を使う ---

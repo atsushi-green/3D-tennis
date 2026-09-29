@@ -244,8 +244,14 @@
    * （スマッシュの先回り地点＝「打てる高さの帯を通り、かつ人間が立てる場所」のように、
    * 物理だけでは決まらない条件を game.js 側に書けるようにするため）。
    * バウンドも maxBounces 回まで跨いで追う（高く弾んだ球をスマッシュする場合があるため）。
-   * @param {object} b ボール（{x,y,z,vx,vy,vz,spin,wind}）
-   * @param {(sample:{x:number,y:number,z:number,t:number,bounces:number}) => boolean} accept
+   * サンプルには縦の速さ（vy）と、最後にバウンドしてからの経過時間（sinceBounce）も
+   * 載せる。「弾んで上がってくる途中か」を見る技（ライジング）が、打点の先読みの結果
+   * だけで判定できるようにするため。sinceBounce はまだ一度も弾んでいなければ null で、
+   * 予測を始めた時点で既に弾んでいる球は b.sinceBounce から数え始める（持っていない
+   * ＝いつ弾んだか分からない球も null）。
+   * @param {object} b ボール（{x,y,z,vx,vy,vz,spin,wind,bounces,sinceBounce}）
+   * @param {(sample:{x:number,y:number,z:number,t:number,bounces:number,
+   *   vy:number,sinceBounce:number|null}) => boolean} accept
    * @param {number} [maxT] 何秒先まで探すか（既定3秒）
    * @param {number} [maxBounces] この回数までのバウンドを跨いで追い続ける（既定1）
    * @returns {{enter:object, exit:object, mid:{x:number,y:number,z:number,t:number}}|null}
@@ -263,18 +269,22 @@
     };
     const dt = PHYSICS.STEP;
     let bounces = b.bounces || 0;
+    // game.js の stepBall()/bounce() と同じ数え方（進めてから足し、弾んだステップで0に戻す）
+    let since = bounces > 0 && Number.isFinite(b.sinceBounce) ? b.sinceBounce : null;
     let enter = null;
     let exit = null;
     for (let t = 0; t < limit; t += dt) {
       integrate(s, dt);
+      if (since !== null) since += dt;
       if (hitsNet(s)) break;
       if (s.y <= BALL_R && s.vy < 0) {
         if (bounces - (b.bounces || 0) >= allowed) break; // これ以上は追わない
         reflectBounce(s);
         bounces++;
+        since = 0;
       }
       const sample = {
-        x: s.x, y: s.y, z: s.z, t: t + dt, bounces,
+        x: s.x, y: s.y, z: s.z, t: t + dt, bounces, vy: s.vy, sinceBounce: since,
       };
       if (accept(sample)) {
         if (!enter) enter = sample;
