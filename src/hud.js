@@ -692,12 +692,14 @@
     /**
      * 溜めゲージ。サーブのときだけ「最大威力になる位置」の線を出す
      * （SERVE.CHARGE_SWEET_MARK＝9割の位置。game.serveTimingPower() と同じ基準）。
-     * 線を越えた分は赤く塗って、フォールトの確率が上がっていることを示す。
+     * 線より長く押している間は赤く塗って、フォールトの確率が上がっていることを示す
+     * （満タンの後は溜めが抜けて線より下へ戻るが、危険なのは変わらないので赤いまま）。
      * @param {number} fraction 溜め量 0〜1。0以下なら非表示。
      * @param {boolean} [serve] サーブの溜め中か（game.isServeCharging()）
      * @param {boolean} [special] いま離すと必殺技が出る状態か（バーを金色にする）
+     * @param {boolean} [over] サーブを線より長く押しているか（game.isServeOvercharged()）
      */
-    setCharge(fraction, serve = false, special = false) {
+    setCharge(fraction, serve = false, special = false, over = false) {
       const on = fraction > 0;
       this.el.charge.classList.toggle('on', on);
       this.el.charge.classList.toggle('serve', serve);
@@ -709,7 +711,7 @@
       // （そこから先は威力は増えずフォールトの危険だけが増える）ので、光る条件も線に合わせる。
       const sweet = serve ? SERVE.CHARGE_SWEET_MARK : 1;
       this.el.chargeFill.classList.toggle('full', fraction >= sweet);
-      this.el.chargeFill.classList.toggle('over', serve && fraction > SERVE.CHARGE_SWEET_MARK);
+      this.el.chargeFill.classList.toggle('over', serve && over);
     }
   }
 

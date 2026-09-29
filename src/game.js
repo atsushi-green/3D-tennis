@@ -1507,13 +1507,27 @@
     }
 
     /**
+     * サーブの溜め量（溜め秒）。ゲージが満タンになる（CHARGE_SWEET_T / CHARGE_SWEET_MARK）
+     * までは押している時間そのもの。満タンの後も押し続けると SERVE.CHARGE_DRAIN の速さで
+     * 抜けていく（0 で止まる）。ゲージ（chargeMeter()）も威力（serveTimingPower()）もこれを読む。
+     * @param {number} heldTime 溜めキーを押してからの実経過時間(秒)
+     */
+    serveCharge(heldTime) {
+      const fullT = SERVE.CHARGE_SWEET_T / SERVE.CHARGE_SWEET_MARK;
+      if (heldTime <= fullT) return heldTime;
+      return Math.max(0, fullT - (heldTime - fullT) * SERVE.CHARGE_DRAIN);
+    }
+
+    /**
      * サーブの威力(0〜1)。ゲージの線（＝SERVE.CHARGE_SWEET_T まで溜めた地点。ゲージの
      * 9割の位置に出る）までは溜めるほど強くなり、線に届いたところで最大になる。
      * 線を超えて溜めても威力はもう増えず、代わりに serveFaultChance() が上がっていく。
+     * 満タンの後も押し続けると溜めが抜けていき（serveCharge()）、ゲージが線より下へ
+     * 戻ったところから威力も落ちる。
      * @param {number} heldTime 溜めキーを押してから離すまでの実経過時間(秒)
      */
     serveTimingPower(heldTime) {
-      return clamp(heldTime / SERVE.CHARGE_SWEET_T, 0, 1);
+      return clamp(this.serveCharge(heldTime) / SERVE.CHARGE_SWEET_T, 0, 1);
     }
 
     /**
@@ -1533,15 +1547,15 @@
 
     /**
      * HUD のゲージ表示用。溜まり具合を 0〜1 で返す。溜めていなければ0。
-     * サーブは「ゲージが満タンになるまでの保持時間」に対する割合（線は
-     * SERVE.CHARGE_SWEET_MARK の位置＝9割に出る。満タンまでの時間はそこから逆算する）。
-     * ラリーは従来どおり溜め時間の割合。
+     * サーブは「ゲージが満タンになるまでの保持時間」に対する溜め量（serveCharge()）の割合
+     * （線は SERVE.CHARGE_SWEET_MARK の位置＝9割に出る。満タンまでの時間はそこから逆算する）。
+     * 満タンの後も押し続けると減っていく。ラリーは従来どおり溜め時間の割合。
      */
     chargeMeter() {
       if (!this.you.charging) return 0;
       if (this.isServeCharging()) {
         const fullT = SERVE.CHARGE_SWEET_T / SERVE.CHARGE_SWEET_MARK;
-        return clamp(this.you.chargeTime / fullT, 0, 1);
+        return clamp(this.serveCharge(this.you.chargeTime) / fullT, 0, 1);
       }
       return clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1);
     }
@@ -1549,6 +1563,16 @@
     /** 今この瞬間、自分のサーブを溜めている最中か（HUD がゲージの線を出すかの判定に使う）。 */
     isServeCharging() {
       return this.you.charging && this.phase === 'serve' && this.servingPlayer() === 'you';
+    }
+
+    /**
+     * 自分のサーブを線より長く押している最中か（HUD がゲージを赤くするのに使う）。
+     * ゲージの位置ではなく押している時間で見る：満タンの後は溜めが抜けてゲージが線より
+     * 下へ戻るが、フォールトの確率（serveFaultChance()）は押している時間で決まるので、
+     * 戻っても危険なままであることを見せ続ける。
+     */
+    isServeOvercharged() {
+      return this.isServeCharging() && this.you.chargeTime > SERVE.CHARGE_SWEET_T;
     }
 
     /**

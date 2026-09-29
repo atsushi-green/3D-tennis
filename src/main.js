@@ -256,7 +256,9 @@
       // いま Space を押していて技が出る状態なら、溜めバーも金色にする（＝離した瞬間に
       // 何が起きるかが、視線を動かさずにバーだけで分かる）。
       const armed = game.specialArmed;
-      hud.setCharge(game.chargeMeter(), game.isServeCharging(), !!(armed && armed.move));
+      hud.setCharge(
+        game.chargeMeter(), game.isServeCharging(), !!(armed && armed.move), game.isServeOvercharged(),
+      );
       hud.setSpecialTip(armed);
       hud.setSpecialUses(game.specials, game.specialUses);
       hud.setStakes(game.stakes);

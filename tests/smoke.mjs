@@ -1867,8 +1867,18 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
       && g.serveTimingPower(CHARGE_SWEET_T / 2) < 1, 'power grows with the hold time up to the line');
     ok(g.serveTimingPower(CHARGE_SWEET_T * 0.4) < g.serveTimingPower(CHARGE_SWEET_T * 0.8),
       'holding longer (but still short of the line) is stronger');
-    ok(g.serveTimingPower(CHARGE_SWEET_T + CHARGE_FAULT_T * 5) === 1,
-      'holding past the line does not add power (the risk goes up instead, not the power)');
+    const fullT = CHARGE_SWEET_T / CHARGE_SWEET_MARK;
+    ok(g.serveTimingPower((CHARGE_SWEET_T + fullT) / 2) === 1 && g.serveTimingPower(fullT) === 1,
+      'holding past the line (up to a full gauge) does not add power (the risk goes up instead, not the power)');
+    // 満タンの後も押し続けると溜めが抜けていき、ゲージが線より下へ戻ったところから威力も落ちる
+    const { CHARGE_DRAIN } = R.config.SERVE;
+    const backToLine = fullT + (fullT - CHARGE_SWEET_T) / CHARGE_DRAIN;
+    ok(Math.abs(g.serveTimingPower(backToLine) - 1) < 1e-9,
+      'the power holds while the draining gauge is still above the line');
+    const p1 = g.serveTimingPower(backToLine + 0.05);
+    const p2 = g.serveTimingPower(backToLine + 0.15);
+    ok(p1 < 1 && p2 < p1, `keeping on holding after a full gauge weakens the serve: ${p1.toFixed(2)} > ${p2.toFixed(2)}`);
+    ok(g.serveTimingPower(fullT + fullT / CHARGE_DRAIN + 0.1) === 0, 'held long enough, the charge drains away completely');
   }
 
   // フォールト確率のカーブ
@@ -2123,10 +2133,23 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
   ok(Math.abs(g.chargeMeter() - CHARGE_SWEET_MARK) < 0.03,
     `serve meter sits at the line (${CHARGE_SWEET_MARK}) when the power peaks, got ${g.chargeMeter()}`);
   ok(g.serveTimingPower(g.you.chargeTime) === 1, 'and that is indeed max power');
-  // さらに保持し続けるとゲージは満タンまで伸びる（トスの滞空 約1.03秒より内側で確認する。
-  // それを過ぎるとトスが自動リセットされて溜め自体がキャンセルされる）。
-  for (let i = 0; i < 10; i++) g.update(1 / 60);
-  ok(g.chargeMeter() === 1, `holding past the line fills the gauge the rest of the way, got ${g.chargeMeter()}`);
+  // さらに保持し続けるとゲージは満タンまで伸び、そこからは減っていく（トスの滞空 約1.03秒より
+  // 内側で確認する。それを過ぎるとトスが自動リセットされて溜め自体がキャンセルされる）。
+  let peak = 0;
+  let peakFrame = 0;
+  for (let i = 1; i <= 10; i++) {
+    g.update(1 / 60);
+    if (g.chargeMeter() > peak) { peak = g.chargeMeter(); peakFrame = i; }
+  }
+  ok(peak > 0.98, `holding past the line fills the gauge the rest of the way, peak=${peak}`);
+  ok(g.isServeOvercharged(), 'past the line the gauge shows the overcharge (red)');
+  ok(peakFrame < 10 && g.chargeMeter() < peak, `holding on after a full gauge drains it, ${peak.toFixed(2)} -> ${g.chargeMeter().toFixed(2)}`);
+  const drainedAt = [];
+  for (let i = 0; i < 8; i++) { g.update(1 / 60); drainedAt.push(g.chargeMeter()); }
+  ok(drainedAt.every((m, i) => i === 0 || m < drainedAt[i - 1]), `and keeps draining while held: ${drainedAt.map((m) => m.toFixed(2)).join(' ')}`);
+  ok(g.chargeMeter() < CHARGE_SWEET_MARK && g.isServeOvercharged(),
+    'even once drained below the line it stays red (the fault risk comes from how long it was held)');
+  ok(g.serveTimingPower(g.you.chargeTime) < 1, 'and releasing now gives a weaker serve');
   g.chargeRelease();
 
   const g2 = new R.Game({ input: fakeInput, hooks: noHooks });
