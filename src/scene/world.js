@@ -88,10 +88,11 @@
       scene3d.setGaitPose(mesh, state.speed, maxSpeed, dt);
       // スマッシュのジャンプ・飛びつきボレーの倒れ込み・ツイーナーの跳躍は歩行の後
       // （同じ関節を上書きするため）。同時に起きることはないので、浮いた高さは
-      // 足し合わせて影に渡す。
+      // 足し合わせて影に渡す。飛びつきボレーはツイーナーより後：どちらも股関節の
+      // rotation.z（脚の開き）を使い、ツイーナーは技が出ていない間それを0へ戻すため。
       const lift = scene3d.applySmashJump(mesh, state)
-        + scene3d.applyDiveLean(mesh, state)
         + scene3d.applyTweenerHop(mesh, state)
+        + scene3d.applyDiveLean(mesh, state)
         + scene3d.applyJackknifeLeap(mesh, state);
       scene3d.placeGroundShadow(shadow, state, lift);
     }

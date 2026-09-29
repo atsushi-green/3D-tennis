@@ -216,6 +216,48 @@
     return Math.PI * ease(frac);
   }
 
+  /** 0→1 を「出だしが速く、終わりがゆっくり」で進める。飛び込みの踏み切りに使う */
+  function easeOut(t) {
+    const x = clamp(t, 0, 1);
+    return 1 - (1 - x) * (1 - x);
+  }
+
+  /**
+   * 飛びつきボレーのモーションの進行度（0＝打点、1＝起き上がり終わり）。それ以外は null。
+   * 空振り（missSwing）は技が乗っていてもボレーの形にならないので、ここでも拾わない。
+   */
+  function diveProgress(state) {
+    const { anim, stroke, special } = state;
+    if (special !== 'divingVolley' || anim <= 0 || String(stroke).indexOf('volley') !== 0) return null;
+    const span = SPECIAL.DIVE.RECOVER;
+    return clamp((span - anim) / span, 0, 1);
+  }
+
+  /**
+   * 飛びつきボレーの体の形。腕（poseArm）と体（applyDiveLean）が同じ形を見るよう、
+   * ここ1か所で決める。
+   * - lean: 倒れ込み(rad)／lift: 足元の高さ(m)
+   * - pose: 飛び込みのポーズの効き(0〜1)。0 なら歩行・スイングの形のまま
+   * - getup: 起き上がりの途中で膝をつく深さ(0〜1)。起き上がりの真ん中で最大
+   * 宙を飛ぶ（〜LAND）→ 地面に伏せる（〜RISE）→ 起き上がる（〜1）の3段。
+   */
+  function diveShape(p) {
+    const D = SWING.DIVE;
+    if (p < D.LAND) {
+      const s = p / D.LAND;
+      const stretch = easeOut(s / D.STRETCH);
+      // 山なりに浮いてから、伏せたときの高さ（REST）へ落ちる
+      return {
+        lean: D.LEAN * stretch, lift: D.LIFT * Math.sin(Math.PI * s) + D.REST * s, pose: stretch, getup: 0,
+      };
+    }
+    if (p < D.RISE) return { lean: D.LEAN, lift: D.REST, pose: 1, getup: 0 };
+    const g = ease((p - D.RISE) / (1 - D.RISE));
+    return {
+      lean: D.LEAN * (1 - g), lift: D.REST * (1 - g), pose: 1 - g, getup: Math.sin(Math.PI * g),
+    };
+  }
+
   function poseArm(player, state, tossing) {
     const { anim, stroke, prep, spin, chargeFrac, swingCharge } = state;
     const arm = player.userData.arm;
@@ -306,6 +348,24 @@
       arm.rotation.x = 0;
       // 跳びながら体をひねって振り抜く（通常のバックハンドより深くひねる）
       torso.rotation.y = -J.TORSO_TWIST * Math.sin(progress * Math.PI);
+      return;
+    }
+
+    const dive = diveProgress(state);
+    if (dive !== null) {
+      // 飛びつきボレー。打点では普通のボレーと同じパンチ（通常のスイングの速さで振る）を
+      // 出しつつ、腕を頭の先の方向（ARM_REACH_Z）へ伸ばしていく＝体が倒れきったとき、
+      // ラケットが地面と平行に球の方へ伸びている。起き上がりでは構えの位置へ戻す。
+      const D = SWING.DIVE;
+      const { pose } = diveShape(dive);
+      const punch = clamp(dive * SPECIAL.DIVE.RECOVER / ARM_SPAN, 0, 1);
+      const base = dive < D.RISE ? SWING.VOLLEY_START + punch * SWING.VOLLEY_SWEEP : SWING.REST_Y;
+      // 伸ばしきった形は横振り 0（体の真横）から仰角・前傾をかけたもの。バックハンドは
+      // mirrorGroundAngle() で体の逆サイドへ回る（仰角・前傾はそのままで左右対称になる）。
+      arm.rotation.y = mirrorGroundAngle(lerp(base, 0, pose), stroke === 'volley-backhand');
+      arm.rotation.z = D.ARM_REACH_Z * pose;
+      arm.rotation.x = D.ARM_REACH_X * pose;
+      torso.rotation.y = 0;
       return;
     }
 
@@ -444,33 +504,50 @@
   };
 
   /**
-   * 飛びつきボレー（必殺技）の倒れ込み。applySmashJump() と同じ考え方で、歩行ポーズの
-   * 後に上から重ねる（浮いている量ぶんだけ上書きする）。体ごと打つ側へ倒し、脚を後ろへ
-   * 流して「飛び込んだ」形にする。倒れる向きはフォア/バックで決める：フォアならラケット側
-   * （ローカルの HAND 側）、バックならその逆へ倒れ込むのが自然。
+   * 飛びつきボレー（必殺技）の飛び込み。applySmashJump() と同じ考え方で、歩行ポーズの
+   * 後に上から重ねる。打った瞬間に打つ側へ体ごと飛び出し、宙で水平に伸びきって、
+   * そのまま地面へ伏せる。硬直（SPECIAL.DIVE.RECOVER）が解ける頃に膝をついて起き上がる。
+   * 倒れる向きはフォア/バックで決める：フォアならラケット側（ローカルの HAND 側）、
+   * バックならその逆へ飛び込むのが自然。
+   * - 体は足元を支点に倒す（ゲーム側の位置は動かさない＝表示だけ）
+   * - 伏せている間は脚を開いて膝を曲げ、足先を宙へ上げる。ラケット腕は poseArm() が
+   *   頭の先へ伸ばす
+   * - 起き上がりは上体を先に起こし、膝を抱え込んでから立つ
+   * 股関節の rotation.y（ひねり）・rotation.z（開き）と体幹の rotation.z は歩行
+   * （setGaitPose）が触らない軸なので、技が終わったら自分で0へ戻す。股関節の
+   * rotation.z はツイーナーも使うので、
+   * world.js ではこちらを applyTweenerHop() より後に呼ぶ。
    * @returns {number} 浮いた高さ(m)。スマッシュのジャンプと同じく影を小さくするのに使う
    */
   scene3d.applyDiveLean = function applyDiveLean(player, state) {
-    const { anim, stroke, special } = state;
-    if (special !== 'divingVolley' || anim <= 0) {
+    const gait = player.userData.gait;
+    const p = diveProgress(state);
+    if (p === null) {
       player.rotation.z = 0; // 前の1打の倒れ込みを残さない
+      gait.torso.rotation.z = 0;
+      gait.legs.forEach(({ hip }) => { hip.rotation.y = 0; });
       return 0;
     }
-    const D = SPECIAL.DIVE;
-    // 飛び出し（0）→ 一番伸びきったところ（0.5）→ 着地（1）の山
-    const arc = Math.sin(clamp((PLAYER.SWING_ANIM - anim) / PLAYER.SWING_ANIM, 0, 1) * Math.PI);
+    const D = SWING.DIVE;
+    const { lean, lift, pose, getup } = diveShape(p);
     // 倒れ込む先（ローカルx）。rotation.z を正にすると体は -x 側へ傾くので符号を反転させる。
-    const toward = (String(stroke).indexOf('backhand') !== -1 ? -1 : 1) * HAND;
-    player.rotation.z = -toward * D.LEAN * arc;
-    const lift = D.LIFT * arc;
+    const toward = (String(state.stroke).indexOf('backhand') !== -1 ? -1 : 1) * HAND;
+    player.rotation.z = -toward * lean;
     player.position.y = lift;
+    // 起き上がりでは上体を先に起こす（体全体の倒れ込みを打ち消す向きに体幹だけ曲げる）。
+    gait.torso.rotation.z = toward * D.GETUP_TORSO * getup;
 
-    const gait = player.userData.gait;
-    gait.legs.forEach(({ hip, knee }) => {
-      hip.rotation.x = lerp(hip.rotation.x, -SWING.DIVE_LEG_TRAIL, arc);
-      knee.rotation.x = lerp(knee.rotation.x, -SWING.DIVE_KNEE_TUCK, arc);
+    // 脚のひねりは倒れ込む先と同じ符号（ローカル y まわり）＝膝が上を向く。
+    const roll = toward * D.LEG_ROLL * pose;
+    gait.legs.forEach(({ hip, knee }, i) => {
+      const outward = i === 0 ? -1 : 1; // legs[0] がローカル -x 側（applyTweenerHop 参照）
+      hip.rotation.x = lerp(hip.rotation.x, D.LEG_TRAIL, pose) + D.GETUP_HIP * getup;
+      hip.rotation.y = roll;
+      hip.rotation.z = outward * D.LEG_SPLAY * pose;
+      knee.rotation.x = lerp(knee.rotation.x, D.KNEE_TUCK, pose) + D.GETUP_KNEE * getup;
     });
-    gait.torso.rotation.x = lerp(gait.torso.rotation.x, SWING.DIVE_TORSO_X, arc);
+    gait.torso.rotation.x = lerp(gait.torso.rotation.x, D.TORSO_X, pose);
+    gait.offArm.rotation.x = lerp(gait.offArm.rotation.x, D.OFF_ARM_X, pose);
     return lift;
   };
 

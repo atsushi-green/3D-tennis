@@ -2229,10 +2229,12 @@
       this.resetTrail();
 
       // スマッシュとツイーナーは跳んで打つぶんモーションが長い（scene/player.js 参照）。
+      // 飛びつきボレーは飛び込んで伏せ、起き上がるまでが1つのモーションなので、硬直と同じ長さ。
       player.anim = stroke === 'smash' ? PLAYER.SMASH_ANIM
         : stroke === 'tweener' ? SPECIAL.TWEENER.ANIM
           : stroke === 'jackknife' ? SPECIAL.JACK.ANIM
-            : PLAYER.SWING_ANIM;
+            : special === 'divingVolley' ? SPECIAL.DIVE.RECOVER
+              : PLAYER.SWING_ANIM;
       player.stroke = stroke;
       // AI には「溜めを離す瞬間」も先読みも無いので、跳躍はここ（当たった瞬間）から。
       // 人間は tickLeap()／chargeRelease() で既に跳んでいるので、その続きをそのまま使う。

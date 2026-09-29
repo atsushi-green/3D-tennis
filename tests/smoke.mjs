@@ -7044,6 +7044,9 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     ok(g.ball.last === 'you', 'the dive actually reaches the ball');
     ok(g.recoverTimers.you === SPECIAL.DIVE.RECOVER,
       `and locks the player in place longer than a normal hit, got ${g.recoverTimers.you}`);
+    // 飛び込み→伏せる→起き上がるのモーションは硬直と同じ長さ（起き上がり終わる＝動ける）
+    ok(g.you.anim === SPECIAL.DIVE.RECOVER && g.you.stroke.indexOf('volley') === 0,
+      `the dive motion lasts as long as the lock, got ${g.you.stroke}/${g.you.anim}`);
   }
 
   // --- 必殺技で決めたポイントは、球種ではなく技名でコールされる ---
