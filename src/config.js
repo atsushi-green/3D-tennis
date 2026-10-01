@@ -179,7 +179,11 @@
     // （SERVE.SWING_T）より短くしないこと：短いと離してからしばらく棒立ちに見える。
     SERVE_LEAP_RISE_T: 0.22, // 踏み切りから頂点（＝打点）まで(秒)の上限
     SERVE_LEAP_FALL_T: 0.36, // 頂点（＝打点）から着地まで(秒)
-    X_LIMIT: 7.2,          // プレイヤーが動ける横幅
+    // プレイヤーが動ける横幅（中心からの片側）。以前の 7.2 はダブルスサイドライン（5.485）の
+    // 外 1.7m しかなく、「濃い緑の外周までしか動けない」＝ワイドに逃げる球を追えないという
+    // ユーザー報告を受けて 9.5（サイドラインの外 約4m、ITF推奨の横の余地 3.66m より少し広い）
+    // へ広げた。濃い緑の外周（COURT_PLANE.HALF_X）もこれに合わせて塗り広げる。
+    X_LIMIT: 9.5,
     Z_NEAR: -1.2,          // ネットにこれ以上寄れない
     Z_FAR_MARGIN: 3.2,     // ベースラインの後ろに下がれる距離
     // 加速度ベースの移動（急に止まる/急に方向転換しない＝コート上の滑りが自然に出る）。
@@ -1872,10 +1876,11 @@
         { x: -(PLAYER.X_LIMIT + 1.0), z: -(HALF_L + 0.9) },
         { x: (PLAYER.X_LIMIT + 1.0), z: (HALF_L + 0.9) },
       ],
-      // サービスライン付近、ダブルスサイドラインの外に立つ線審
+      // サービスライン付近、ダブルスサイドラインの外に立つ線審。BASE と同じく選手の可動域
+      // （PLAYER.X_LIMIT）の外に立たせる（内側だと、ワイドの球を追った選手が体をすり抜ける）。
       SIDE: [
-        { x: (COURT.DW / 2 + 0.6), z: -COURT.SERVICE * 0.5 },
-        { x: -(COURT.DW / 2 + 0.6), z: COURT.SERVICE * 0.5 },
+        { x: (PLAYER.X_LIMIT + 1.0), z: -COURT.SERVICE * 0.5 },
+        { x: -(PLAYER.X_LIMIT + 1.0), z: COURT.SERVICE * 0.5 },
       ],
     },
   };
@@ -2330,6 +2335,10 @@
     BACK: HALF_L + 7.0, // ベースラインの後ろ
     FOLLOW_X: 0.42,     // プレイヤーの横移動への追従率
     LOOK_X: 0.16,
+    // 選手がこれより外（ダブルスサイドラインの外）へ出たら、はみ出したぶんはカメラ（本体・
+    // 注視点とも）が 1:1 で付いていく＝選手が画面の同じ位置に留まる。追従率 FOLLOW_X のまま
+    // だと、可動域（PLAYER.X_LIMIT）の端ではベースライン付近の選手が画面の外へ切れてしまう。
+    FOLLOW_FULL_X: COURT.DW / 2,
     LOOK_AT: { y: 0.95, z: 2.2 },
     LERP: 4,
   };
@@ -2559,6 +2568,16 @@
   };
 
   /**
+   * コート面のメッシュ（court.js：サーフェス＋その外周の濃い緑）が覆う範囲（中心からの
+   * 半幅・半長, m）。濃い緑は「選手が走れる床」に見えるので、横は PLAYER.X_LIMIT に
+   * 追従させ、体の幅ぶん外まで塗る（走れる範囲の端で紺の床に踏み出さないように）。
+   */
+  const COURT_PLANE = {
+    HALF_X: PLAYER.X_LIMIT + 0.8,
+    HALF_Z: 18,
+  };
+
+  /**
    * スピン（トップスピン／スライス／フラット）。「アーケードのまま感覚チューニングする」方針
    * （2026-08-17に人間と合意済み）のため、マグヌス力の実式は使わず、飛翔中の実効重力と
    * バウンド時の反発係数・摩擦係数に体感重視の倍率を掛ける簡易モデルにした。
@@ -2758,7 +2777,7 @@
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT, GUIDE,
-    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, REPLAY, STAMINA, TOSS, OFFICIALS,
+    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, STAMINA, TOSS, OFFICIALS,
     STANDS, SPECTATORS,
     SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET,
     SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, ATTR_SPREAD, ATTRS, NEUTRAL_ATTR,

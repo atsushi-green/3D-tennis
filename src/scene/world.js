@@ -11,6 +11,16 @@
   const { lerp, clamp } = RallyOne.math;
   const scene3d = RallyOne.scene;
 
+  /**
+   * 通常カメラの横位置（本体 pos・注視点 look）。ダブルスサイドラインの内側では
+   * FOLLOW_X／LOOK_X の割合だけ追い、FOLLOW_FULL_X より外へはみ出したぶんはそのまま足す。
+   */
+  function cameraFollowX(playerX) {
+    const inner = clamp(playerX, -CAMERA.FOLLOW_FULL_X, CAMERA.FOLLOW_FULL_X);
+    const beyond = playerX - inner;
+    return { pos: inner * CAMERA.FOLLOW_X + beyond, look: inner * CAMERA.LOOK_X + beyond };
+  }
+
   scene3d.createWorld = function createWorld() {
     const stage = scene3d.createStage();
     const { scene, camera } = stage;
@@ -75,10 +85,11 @@
 
     function syncCamera(player, dt) {
       const t = Math.min(1, dt * CAMERA.LERP);
-      camera.position.x = lerp(camera.position.x, player.x * CAMERA.FOLLOW_X, t);
+      const follow = cameraFollowX(player.x);
+      camera.position.x = lerp(camera.position.x, follow.pos, t);
       camera.position.y = lerp(camera.position.y, CAMERA.HEIGHT, t);
       camera.position.z = lerp(camera.position.z, -CAMERA.BACK, t);
-      camera.lookAt(player.x * CAMERA.LOOK_X, CAMERA.LOOK_AT.y, CAMERA.LOOK_AT.z);
+      camera.lookAt(follow.look, CAMERA.LOOK_AT.y, CAMERA.LOOK_AT.z);
     }
 
     /** プレイヤー1人ぶんの位置・スイング・歩行ポーズと影をまとめて反映する */
@@ -274,8 +285,9 @@
         replaying = false; // 再生し終わったら通常表示へ戻る
         // 横視点で静止していた状態から通常カメラへは lerp させず瞬時に切り替える
         // （lerp だと数フレームかけて振れながら戻り、本編がその途中で見えてしまうため）
-        camera.position.set(state.you.x * CAMERA.FOLLOW_X, CAMERA.HEIGHT, -CAMERA.BACK);
-        camera.lookAt(state.you.x * CAMERA.LOOK_X, CAMERA.LOOK_AT.y, CAMERA.LOOK_AT.z);
+        const follow = cameraFollowX(state.you.x);
+        camera.position.set(follow.pos, CAMERA.HEIGHT, -CAMERA.BACK);
+        camera.lookAt(follow.look, CAMERA.LOOK_AT.y, CAMERA.LOOK_AT.z);
       }
 
       applyFrame(state, dt, state.tossActive === true && state.server === 'you');
