@@ -176,6 +176,8 @@
     onChargeRelease: () => game.chargeRelease(),
     onFormationNet: () => game.setYouMateFormation('net'),
     onFormationBack: () => game.setYouMateFormation('back'),
+    onStandNet: () => game.setYouFormation('net'),
+    onStandBack: () => game.setYouFormation('back'),
     onSelectDifficulty: menu.onSelectDifficulty,
     onSelectSurface: menu.onSelectSurface,
     onSelectStyle: menu.onSelectStyle,

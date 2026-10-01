@@ -758,9 +758,18 @@
       /** ダブルスの AI パートナー(youMate)に指示する定位置。'net'（前へ）か 'back'（下がれ）。 */
       this.youMateFormation = 'net';
       /**
+       * ダブルスで、人間(you)がサーブ前に立つ位置。'net'（前）か 'back'（後ろ）。
+       * 相方がサーバー／レシーバーの番にだけ効き（placeDoublesMate）、次のポイント以降も
+       * 覚えておく（youMateFormation と同じ）。ポイントが始まれば人間は自由に走れるので、
+       * ラリー中の動きには関係しない。以前は人間の立ち位置も youMateFormation で決めていた
+       * ため、パートナーに「下がれ」と言うと、パートナーがサーブする番では人間まで
+       * ベースラインに下げられていた。
+       */
+      this.youFormation = 'net';
+      /**
        * ダブルスで、いまのポイントの前衛（個人キー）。後衛はその相方（MATE_OF）。
        * cpu チームはポイントごとに決め直す（beginServe）：サーバー／レシーバーが後衛、
-       * その相方（positionDoublesMates() がネット際に置いた方）が前衛で、ポイントの間は
+       * その相方（placeDoublesMate() がネット際に置いた方）が前衛で、ポイントの間は
        * 入れ替えない。以前は cpu＝後衛・cpuMate＝前衛で固定だったため、cpuMate が
        * サーブ／レシーブする番では、ベースラインから始めた cpuMate がネットへ、ネット際から
        * 始めた cpu がベースラインへとポイント中にすれ違っていた（ユーザー報告）。
@@ -794,6 +803,8 @@
       this.cpuNetRush = false;
       /** setTimeout ではなくゲームループで数える。ポイント間で確実に破棄できる。 */
       this.timers = [];
+      /** flashCall() が最後に出したコールの番号（古いコールの消去タイマーを無効にする） */
+      this.flashCallId = 0;
       /**
        * ラリー中の直近1打の軌跡（{x,y,z}の配列）。誰か（you/cpu/youMate/cpuMate）が新しく
        * 打つ（serve()/hit()）たびに描き直す＝常に「そのポイントを決めた最後の1打」だけが
@@ -958,14 +969,75 @@
     /**
      * ダブルスのAIパートナー(youMate)に定位置を指示する。'net'＝前へ詰める、'back'＝
      * ベースライン付近まで下がる。ラリー中に構えていない側（isResponder でない側）の
-     * 定位置と、次のポイント開始時の立ち位置（positionDoublesMates）の両方に反映される。
+     * 定位置と、次のポイント開始時の立ち位置（placeDoublesMate）の両方に反映される。
+     * サーブ待ちの間は、その場で立ち位置も置き直す。ただしパートナーがサーバー／
+     * レシーバーの番は動かさない（立つ位置がルールで決まっている）：そのときの指示は
+     * ラリーの定位置にだけ効く（＝打ってから前へ出る／下がったままでいる）。
      * @param {'net'|'back'} formation
      */
     setYouMateFormation(formation) {
-      if (!this.doubles || this.youMateFormation === formation) return;
+      if (!this.doubles) return;
+      const changed = this.youMateFormation !== formation;
       this.youMateFormation = formation;
-      this.hooks.call('パートナー', formation === 'net' ? '前へ' : '下がれ');
-      this.after(0.8, () => this.hooks.clearCall());
+      const moved = this.placeBeforeServe('youMate');
+      if (!changed && !moved) return;
+      const order = formation === 'net' ? '前へ' : '下がれ';
+      const duty = this.phase === 'serve' && this.serveDuty('youMate');
+      this.flashCall('パートナー', duty ? `${order}（${duty}担当なので、打ってから）` : order);
+    }
+
+    /**
+     * ダブルスで、サーブ前の自分（人間）の立ち位置を指示する。'net'＝前（ネット際）、
+     * 'back'＝後ろ（ベースライン付近）。サーブ待ちの間（phase==='serve'）だけ効き、
+     * その場で置き直す。自分がサーバー／レシーバーの番は動かさない。
+     * 選んだ位置は覚えておき、次に相方が担当する番でもそこに立つ（youFormation）。
+     * @param {'net'|'back'} formation
+     */
+    setYouFormation(formation) {
+      if (!this.doubles || this.phase !== 'serve') return;
+      const duty = this.serveDuty('you');
+      if (duty) {
+        this.flashCall('自分', `${duty}担当は立ち位置を変えられません`);
+        return;
+      }
+      this.youFormation = formation;
+      this.placeBeforeServe('you');
+      this.flashCall('自分', formation === 'net' ? '前に立つ' : '後ろに立つ');
+    }
+
+    /**
+     * いまのポイントで who がサーバーなら 'サーブ'、レシーバーなら 'レシーブ'、
+     * どちらでもない（相方が担当している）なら null。
+     * @param {'you'|'youMate'|'cpu'|'cpuMate'} who
+     */
+    serveDuty(who) {
+      if (this.servingPlayer() === who) return 'サーブ';
+      if (this.receivingPlayer(opponent(this.server), this.match.serveSide) === who) return 'レシーブ';
+      return null;
+    }
+
+    /**
+     * サーブ待ちの間に限り、who（サーバー／レシーバーでない方）を指示どおりの構え位置へ
+     * 置き直す。ポイント開始時に beginServe() が置くのと同じ位置（placeDoublesMate）。
+     * @returns {boolean} 置き直したら true
+     */
+    placeBeforeServe(who) {
+      if (this.phase !== 'serve' || this.serveDuty(who)) return false;
+      this.placeDoublesMate(who);
+      return true;
+    }
+
+    /**
+     * 指示を受けた合図のような短いコールを、TIMING.ORDER_CALL 秒だけ出す。続けて押されたら
+     * 後のコールを出し直し、前のコールの消去タイマーでは消さない（F→E と続けて押すと、
+     * E の返事が F のタイマーで一瞬で消えていた）。
+     */
+    flashCall(big, sub) {
+      this.hooks.call(big, sub);
+      const id = ++this.flashCallId;
+      this.after(TIMING.ORDER_CALL, () => {
+        if (id === this.flashCallId) this.hooks.clearCall();
+      });
     }
 
     /**
@@ -1827,10 +1899,14 @@
       if (receiver === 'you') this.you.vx = this.you.vz = 0;
 
       if (this.doubles) {
-        this.positionDoublesMates(server, serverActor, serverTeam, receiver, receiverActor, receiverTeam);
+        // サーバー・レシーバーの相方を構えに置く
+        this.placeDoublesMate(MATE_OF[server]);
+        this.placeDoublesMate(MATE_OF[receiver]);
         // cpu チームの前衛は、いまネット際に置いた方（サーバー／レシーバーの相方）。
         this.frontOf.cpu = MATE_OF[serverTeam === 'cpu' ? server : receiver];
       }
+      // 自分がサーバーでもレシーバーでもない番（ダブルス）は、サーブ前に立ち位置を選べる
+      const standHint = this.doubles && !this.serveDuty('you') ? 'R/F で自分が前／後ろに立つ' : '';
 
       if (server === 'you') {
         this.hooks.call(
@@ -1838,11 +1914,12 @@
           faultReason ? `${faultReason} — もう一度` : '←→ コース ／ ↑↓ 深さ ／ B/V/C 押しっぱなし → ゲージの線で離す',
         );
       } else if (server === 'youMate') {
-        // 人間のチームだが、今回は相方の番。人間は何もしなくてよい
-        this.hooks.call(faultReason ? 'パートナーのセカンドサーブ' : 'パートナーのサーブ', faultReason || '');
+        // 人間のチームだが、今回は相方の番。人間は（立ち位置を選ぶ以外）何もしなくてよい
+        this.hooks.call(faultReason ? 'パートナーのセカンドサーブ' : 'パートナーのサーブ', faultReason || standHint);
         this.scheduleAiServe('youMate');
       } else {
-        this.hooks.call(faultReason ? 'セカンドサーブ' : 'リターン', faultReason ? `${faultReason}／CPU` : 'CPU のサーブ');
+        const sub = standHint ? `CPU のサーブ ／ ${standHint}` : 'CPU のサーブ';
+        this.hooks.call(faultReason ? 'セカンドサーブ' : 'リターン', faultReason ? `${faultReason}／CPU` : sub);
         this.scheduleAiServe(server);
       }
       this.placeServeBall();
@@ -1934,22 +2011,21 @@
     }
 
     /**
-     * ダブルスで、サーバー・レシーバー以外の2人（それぞれの相方）をネット際の構えに置く。
-     * 相方の反対サイドへ寄る（本格的なフォーメーション戦略ではない簡易版、ai.coverPosition と同じ考え方）。
+     * ダブルスで、サーバー・レシーバーでない方（who）をサーブ前の構えに置く。横は相方
+     * （そのチームのサーバー／レシーバー）の反対サイドへ寄り（ai.coverPosition）、深さは
+     * 前（ネット際）か後ろ（ベースライン付近）。you チームは指示された位置
+     * （人間＝youFormation、パートナー＝youMateFormation）、cpu チームは常に前。
+     * @param {'you'|'youMate'|'cpu'|'cpuMate'} who
      */
-    positionDoublesMates(server, serverActor, serverTeam, receiver, receiverActor, receiverTeam) {
-      // you 側だけ、指示されたフォーメーション（前へ／下がれ）を定位置に反映する
-      const netZ = (team) => (team === 'you'
-        ? (this.youMateFormation === 'back' ? DOUBLES.BACK_Z_YOU : DOUBLES.NET_Z_YOU)
-        : DOUBLES.NET_Z_CPU);
-
-      const serverMateActor = this.actor(MATE_OF[server]);
-      serverMateActor.x = clamp(-serverActor.x * DOUBLES.MIRROR, -DOUBLES.SLOT_X, DOUBLES.SLOT_X);
-      serverMateActor.z = netZ(serverTeam);
-
-      const receiverMateActor = this.actor(MATE_OF[receiver]);
-      receiverMateActor.x = clamp(-receiverActor.x * DOUBLES.MIRROR, -DOUBLES.SLOT_X, DOUBLES.SLOT_X);
-      receiverMateActor.z = netZ(receiverTeam);
+    placeDoublesMate(who) {
+      const formation = { you: this.youFormation, youMate: this.youMateFormation }[who] || 'net';
+      const z = TEAM_OF[who] === 'cpu' ? DOUBLES.NET_Z_CPU
+        : formation === 'back' ? DOUBLES.BACK_Z_YOU : DOUBLES.NET_Z_YOU;
+      const spot = coverPosition(this.actor(MATE_OF[who]).x, z);
+      const actor = this.actor(who);
+      actor.x = spot.x;
+      actor.z = spot.z;
+      if (who === 'you') this.you.vx = this.you.vz = 0; // 歩いていた勢いを持ち越さない
     }
 
     /** サーブ待ちの間、ボールはサーバーの手元に置いておく */

@@ -25,6 +25,12 @@
   const FORMATION_NET = ['KeyQ'];
   const FORMATION_BACK = ['KeyE'];
   /**
+   * ダブルスのサーブ前に、自分（人間）の立ち位置を指示する。R＝前（ネット際）、F＝後ろ
+   * （ベースライン付近）。W/S（前後の移動）と同じく上の段が前・下の段が後ろ。
+   */
+  const STAND_NET = ['KeyR'];
+  const STAND_BACK = ['KeyF'];
+  /**
    * スタート画面でのみ有効。CPU/AIの強さ（Easy/Normal/Hard/Extreme）を選ぶ。
    * Extreme だけ数字キーではなく X なのは、Digit1〜0 が既に難易度3段・サーフェス3種・
    * プレースタイル4種でちょうど埋まっているため（頭文字の e は KeyE＝ダブルスの
@@ -79,6 +85,7 @@
      * @param {{onStart:Function, onStartSingles:Function, onStartDoubles:Function,
      *   onChargeStart:Function,
      *   onChargeRelease:Function, onFormationNet:Function, onFormationBack:Function,
+     *   onStandNet:Function, onStandBack:Function,
      *   onSelectDifficulty:Function, onSelectSurface:Function, onSelectStyle:Function,
      *   onToggleGuide:Function, onCycleSpecials:Function,
      *   onSelectToss:Function, isAwaitingToss:Function,
@@ -122,6 +129,10 @@
           handlers.onFormationNet();
         } else if (FORMATION_BACK.indexOf(e.code) !== -1) {
           handlers.onFormationBack();
+        } else if (STAND_NET.indexOf(e.code) !== -1) {
+          handlers.onStandNet();
+        } else if (STAND_BACK.indexOf(e.code) !== -1) {
+          handlers.onStandBack();
         }
       });
 

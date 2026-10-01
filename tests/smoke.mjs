@@ -3441,6 +3441,113 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     `receiving team (youMate) is not dragged out of its stance before the serve, got x=${g2.youMate.x} z=${g2.youMate.z}`);
 }
 
+// --- ダブルス：サーブ前に自分（R/F）とパートナー（Q/E）の立ち位置を前／後ろに変えられる。
+//     サーバー／レシーバーの番の選手は動かない ---
+{
+  const { DOUBLES } = R.config;
+  const near = (a, b) => Math.abs(a - b) < 1e-6;
+  /** server: 'you' | 'youMate' | 'cpu'、side: サービスサイド。返すのはサーブ待ちの状態の Game */
+  const setup = (server, side = -1) => {
+    const calls = [];
+    const g = new R.Game({ input: fakeInput, hooks: { ...noHooks, call: (big, sub) => calls.push(`${big}:${sub}`) } });
+    g.server = server === 'cpu' ? 'cpu' : 'you';
+    g.start(true);
+    if (server === 'youMate') g.serverPartner.you = 'youMate';
+    if (side === 1) g.match.points.cpu = 1; // serveSide は得点の合計で決まる（奇数＝+1）
+    g.newPoint();
+    calls.length = 0;
+    return { g, calls };
+  };
+
+  // パートナーがサーブする番：自分は前にも後ろにも立てる。パートナー（サーバー）は動かない
+  {
+    const { g, calls } = setup('youMate');
+    ok(g.servingPlayer() === 'youMate' && g.phase === 'serve', 'precondition: youMate is about to serve');
+    ok(near(g.you.z, DOUBLES.NET_Z_YOU), `by default you wait at the net, z=${g.you.z}`);
+    g.you.vx = 3;
+    g.setYouFormation('back');
+    ok(near(g.you.z, DOUBLES.BACK_Z_YOU), `F puts you at the back, z=${g.you.z}`);
+    ok(near(g.you.x, -g.youMate.x * DOUBLES.MIRROR), `still on the side opposite the server, x=${g.you.x}`);
+    ok(g.you.vx === 0, 'and drops any momentum you were walking with');
+    ok(calls.some((c) => c.startsWith('自分:')), `the order is acknowledged, calls=${calls}`);
+    g.setYouFormation('net');
+    ok(near(g.you.z, DOUBLES.NET_Z_YOU), `R puts you back at the net, z=${g.you.z}`);
+
+    const stance = { x: g.youMate.x, z: g.youMate.z };
+    g.setYouMateFormation('back');
+    ok(near(g.youMate.x, stance.x) && near(g.youMate.z, stance.z),
+      `the partner is serving, so E does not move them, got x=${g.youMate.x} z=${g.youMate.z}`);
+    ok(g.youMateFormation === 'back', 'but the order still holds for the rally after the serve');
+  }
+
+  // 自分がサーブする番：自分は動かせない。パートナー（サーバーの相方）は前／後ろに動かせる
+  {
+    const { g, calls } = setup('you');
+    ok(g.servingPlayer() === 'you', 'precondition: you are about to serve');
+    const stance = { x: g.you.x, z: g.you.z };
+    g.setYouFormation('net');
+    ok(near(g.you.x, stance.x) && near(g.you.z, stance.z), `the server cannot be moved by R, got z=${g.you.z}`);
+    ok(g.youFormation === 'net' && calls.some((c) => c.includes('サーブ担当')),
+      `and is told why, calls=${calls}`);
+    g.setYouMateFormation('back');
+    ok(near(g.youMate.z, DOUBLES.BACK_Z_YOU), `E moves the server's partner to the back, z=${g.youMate.z}`);
+    g.setYouMateFormation('net');
+    ok(near(g.youMate.z, DOUBLES.NET_Z_YOU), `Q moves them back up to the net, z=${g.youMate.z}`);
+  }
+
+  // 自分がレシーブする番（side=+1）：自分は動かせない。パートナーは動かせる
+  {
+    const { g } = setup('cpu', 1);
+    ok(g.receivingPlayer('you', 1) === 'you', 'precondition: you are receiving');
+    const stance = { x: g.you.x, z: g.you.z };
+    g.setYouFormation('net');
+    ok(near(g.you.x, stance.x) && near(g.you.z, stance.z), `the receiver cannot be moved by R, got z=${g.you.z}`);
+    g.setYouMateFormation('back');
+    ok(near(g.youMate.z, DOUBLES.BACK_Z_YOU), `E moves the receiver's partner to the back, z=${g.youMate.z}`);
+  }
+
+  // パートナーがレシーブする番（side=-1）：自分は動かせる。パートナーは動かない
+  {
+    const { g } = setup('cpu', -1);
+    ok(g.receivingPlayer('you', -1) === 'youMate', 'precondition: youMate is receiving');
+    g.setYouFormation('back');
+    ok(near(g.you.z, DOUBLES.BACK_Z_YOU), `F puts you at the back while the partner receives, z=${g.you.z}`);
+    const stance = { x: g.youMate.x, z: g.youMate.z };
+    g.setYouMateFormation('back');
+    ok(near(g.youMate.x, stance.x) && near(g.youMate.z, stance.z),
+      `the receiver (youMate) is not moved by E, got z=${g.youMate.z}`);
+
+    // 選んだ位置は次のポイントにも引き継がれる（次に相方が担当する番も後ろから始まる）
+    g.newPoint(); // 得点は動かしていない＝同じサイドでもう一度
+    ok(near(g.you.z, DOUBLES.BACK_Z_YOU), `your chosen spot carries over to the next point, z=${g.you.z}`);
+  }
+
+  // パートナーに「下がれ」と言っても、パートナーのサーブの番に自分まで下げられない
+  // （退行テスト：以前は人間の立ち位置も youMateFormation で決めていた）
+  {
+    const { g } = setup('youMate');
+    g.setYouMateFormation('back');
+    g.newPoint();
+    ok(g.servingPlayer() === 'youMate' && near(g.you.z, DOUBLES.NET_Z_YOU),
+      `the partner's "stay back" order does not drag you back too, z=${g.you.z}`);
+  }
+
+  // サーブ前でなければ（ラリー中）R/F は何もしない。シングルスでも何もしない
+  {
+    const { g } = setup('youMate');
+    g.phase = 'rally';
+    g.you.x = 1.234; g.you.z = -5.678;
+    g.setYouFormation('back');
+    ok(near(g.you.z, -5.678) && g.youFormation === 'net', `R/F do nothing during a rally, z=${g.you.z}`);
+
+    const s = new R.Game({ input: fakeInput, hooks: noHooks });
+    s.start(false);
+    const z = s.you.z;
+    s.setYouFormation('net');
+    ok(near(s.you.z, z), 'R/F do nothing in singles');
+  }
+}
+
 // --- ダブルス：「下がれ」を指示したパートナーは、ロブを叩きに前へ出ない ---
 // (ユーザー報告: パートナーに「下がれ」を指示していても、ロブが上がるたびにネット際まで
 //  走り出てスマッシュしてしまい、指示が事実上効いていなかった。ai.smashApproach() は
