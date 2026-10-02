@@ -205,7 +205,7 @@
           impact: state.ball.impact, impactPower: state.ball.impactPower,
           // 振り付け（scene/player.js）が「あと何秒で届くか」を見積もるのに使う
           vx: state.ball.vx, vy: state.ball.vy, vz: state.ball.vz,
-          live: state.ball.live, last: state.ball.last, bounces: state.ball.bounces,
+          live: state.ball.live, last: state.ball.last, bounces: state.ball.bounces, age: state.ball.age,
         },
         you: snapshotPlayer(state.you),
         cpu: snapshotPlayer(state.cpu),

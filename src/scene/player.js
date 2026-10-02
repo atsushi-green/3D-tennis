@@ -200,9 +200,9 @@
   const C = {
     HAND: 0, DIR: 3, FACE: 6, ELBOW: 9, OFF: 12, OFF_ELBOW: 15,
     W_GRIP: 18, W_THROAT: 19, W_BALL: 20,
-    TWIST: 21, HIPS: 22, BEND: 23, CROUCH: 24, LEAN: 25,
+    TWIST: 21, HIPS: 22, BEND: 23, CROUCH: 24, LEAN: 25, SWAY: 26,
   };
-  const CHANNELS = 26;
+  const CHANNELS = 27;
   /** サーブを待つ間のボールの位置（MOTION の座標）。game.js#placeServeBall と同じ置き方 */
   const BALL_HOLD = [0, SERVE.BALL_Y - GAIT.HIP_Y, 0.4];
 
@@ -255,6 +255,7 @@
     if (def.bend !== undefined) p[C.BEND] = def.bend;
     if (def.crouch !== undefined) p[C.CROUCH] = def.crouch;
     if (def.lean !== undefined) p[C.LEAN] = def.lean;
+    if (def.sway !== undefined) p[C.SWAY] = def.sway;
     if (def.off !== undefined) setOff(p, def.off); // 手とラケットの向きが決まってから
     return p;
   }
@@ -284,23 +285,22 @@
    * 1つの振り付け（キーの並び）。
    * @param {string} id クロスフェードの判定に使う名前（同じ id の間は補間が続く）
    * @param {object} [opts] pull＝フル溜めの形（keys[pullAt] から溜め量ぶん寄せる）、
-   *   adapt＝打点の高さに手を合わせるか、easeIn＝打点の直後をゆっくり進めるか
+   *   adapt＝打点でラケットを実際の球へ寄せるか（reachForBall）、easeIn＝打点の直後を
+   *   ゆっくり進めるか
    */
   function makeClip(id, keys, opts = {}) {
     const pullAt = opts.pullAt || 0;
     const contactKey = keys.find((k) => k.phi === 1);
-    let contactY = null;
-    if (opts.adapt !== false && contactKey) {
-      // 振り付けどおりに振ったときの、打点でのヘッドの中心の高さ（地面から）
-      const p = contactKey.pose;
-      contactY = GAIT.HIP_Y - crouchDrop(p[C.CROUCH]) + p[C.HAND + 1] + p[C.DIR + 1] * RACKET.HEAD_Y;
-    }
+    // 振り付けどおりに振ったときの打点でのヘッドの横の向き（＋＝ラケット側＝フォア）。
+    // 遠い球へ体幹を傾ける向きに使う。
+    const side = contactKey && contactKey.pose[C.HAND] + contactKey.pose[C.DIR] * RACKET.HEAD_Y < 0 ? -1 : 1;
     return {
       id,
       keys,
       pull: opts.pull ? compilePose(opts.pull, keys[pullAt].pose) : null,
       pullAt,
-      contactY,
+      adapt: opts.adapt !== false && !!contactKey,
+      side,
       easeIn: !!opts.easeIn,
     };
   }
@@ -491,10 +491,10 @@
   /**
    * ボールがこの選手の打点（体の CONTACT_AHEAD 前）に届くまでの見積もり。相手が打った
    * 球が自分のほうへ向かっていなければ null。
-   * @returns {{tc:number, x:number, y:number, bounceFirst:boolean}|null}
+   * @returns {{tc:number, x:number, cx:number, y:number, bounceFirst:boolean}|null}
    *   tc＝届くまでの秒数（負なら通り過ぎた）、x＝体の横を通るときの横の位置（モデルの
-   *   ローカル x。game.js#classifyStroke と同じく体の位置の面で測る）、y＝届くときの高さ、
-   *   bounceFirst＝それまでに一度弾むか
+   *   ローカル x。game.js#classifyStroke と同じく体の位置の面で測る）、cx・y＝打点
+   *   （体の CONTACT_AHEAD 前）に届くときの横の位置・高さ、bounceFirst＝それまでに一度弾むか
    */
   function ballApproach(player, state, ball) {
     const team = player.userData.team;
@@ -523,9 +523,12 @@
       const after = t - tb;
       y = PHYSICS.BALL_R + up * after - 0.5 * G * after * after;
     }
+    const lx = dx * c - dz * s;
+    const lvx = vx * c - vz * s;
     return {
       tc,
-      x: dx * c - dz * s + (vx * c - vz * s) * Math.max(ahead / -towards, 0),
+      x: lx + lvx * Math.max(ahead / -towards, 0),
+      cx: lx + lvx * t,
       y: Math.max(y, PHYSICS.BALL_R),
       bounceFirst,
     };
@@ -580,9 +583,8 @@
     let side = state.prep;
     const committed = isYou ? state.swing > 0 : true;
     if (!side && isYou && committed) side = state.chargeStroke || (app && classify(app));
-    if (!side && !isYou && app && app.tc <= MOTION.UNIT_TURN_T
-      && Math.abs(app.x) >= MOTION.UNIT_TURN_MIN_X && Math.abs(app.x) <= MOTION.UNIT_TURN_REACH) {
-      side = classify(app);
+    if (!side && !isYou && app && app.tc <= MOTION.UNIT_TURN_T && Math.abs(app.x) <= MOTION.UNIT_TURN_REACH) {
+      side = Math.abs(app.x) < MOTION.UNIT_TURN_MIN_X ? 'forehand' : classify(app);
     }
     if (!side) return null;
     const swingsAt = committed && app && (isYou || state.prep || Math.abs(app.x) <= MOTION.FWD_REACH);
@@ -592,29 +594,116 @@
         ? ctx.ball.bounces === 0 && !app.bounceFirst && atNet(player, state)
         : atNet(player, state)),
       fwd: swingsAt ? forwardAmount(app.tc) : 0,
-      height: app ? app.y : null,
+      // 打点の見積もり（モデルのローカル座標。y は地面からの高さ）
+      point: app ? { x: app.cx, y: app.y, z: MOTION.CONTACT_AHEAD } : null,
       // 人間：溜めている間は押している球種、離した後は溜めていた球種（離すと state.spin は
       // 一旦 'flat' に戻るので chargeSpin を見る）。CPU/AI は打つまで分からない＝フラット。
       spin: isYou && !state.charging && state.swing > 0 ? (state.chargeSpin || state.spin) : state.spin,
     };
   }
 
+  /** MOTION の座標（+x＝ラケット側、ひねる前）でのラケット側の肩の位置 */
+  function shoulderAt(twist, bend) {
+    const x = RIG.SHOULDER_X * Math.cos(bend) - RIG.SHOULDER_Y * Math.sin(bend);
+    return [x * Math.cos(twist), RIG.SHOULDER_X * Math.sin(bend) + RIG.SHOULDER_Y * Math.cos(bend), -x * Math.sin(twist)];
+  }
+
+  const ARM_REACH = RIG.UPPER + RIG.FORE - 0.01;
+
   /**
-   * 打点のまわりだけ、振り付けの打点の高さ（clip.contactY）と実際の球の高さの差を手に足す。
-   * 低い球は膝を沈めて拾う（沈めたぶん体幹ごと下がるので、そのぶんは手を下げない）。
+   * 打点のまわり（φ≒0.3〜1.6）だけ、ラケットのヘッドを実際の球の位置へ寄せる。振り付けの
+   * 打点はヘッドが体の横 ≒1m にあるが、実際の打点は届く範囲（PLAYER.REACH 1.55m）の
+   * どこにでも来るので、寄せないと遠い球ほどラケットと球が離れて見える。
+   * 1) 低い球は膝を沈め、さらに低ければ上体を前へ倒す
+   * 2) 手ごと球のほうへ動かす（ヘッドの向きはそのまま）。遠い球には体ごと（足元から）、
+   *    さらに体幹をその側へ傾ける
+   * 3) 腕を伸ばしても届かなければ、さらに体幹を傾ける。両手打ちはそれでも届かなければ
+   *    逆手を離して片手で伸ばす
+   * 4) 伸ばしきった手から、ラケットの先を球へ向ける
+   * 値は MOTION.CONTACT。
+   * @param {{x:number, y:number, z:number}|null} point 打点（モデルのローカル座標。
+   *   y は地面からの高さ）
    */
-  function adaptHeight(out, clip, phi, ballY) {
-    if (ballY === null || ballY === undefined || clip.contactY === null) return;
+  function reachForBall(out, clip, phi, point) {
+    if (!point || !clip.adapt) return;
     const w = phi < 1
       ? ease((phi - 0.3) / (MOTION.FWD_MAX - 0.3))
       : 1 - ease((phi - 1.15) / 0.45);
     if (w <= 0) return;
-    const H = MOTION.CONTACT_H;
-    const dh = clamp(ballY - clip.contactY, H.MIN, H.MAX) * w;
+    const K = MOTION.CONTACT;
+    const R = RACKET.HEAD_Y;
+    const side = clip.side;
+    const hand = [out[C.HAND], out[C.HAND + 1], out[C.HAND + 2]];
+    const dir = [out[C.DIR], out[C.DIR + 1], out[C.DIR + 2]];
+    const head = [0, 1, 2].map((i) => hand[i] + dir[i] * R);
+
+    // 1) 低い球：膝を沈め（下がったぶん体幹ごと低くなる）、さらに低ければ上体を前へ倒す。
+    // 体幹の原点の高さと前傾が決まってから球の位置を測る。
     const crouch0 = clamp(out[C.CROUCH], 0, 1);
-    const crouch1 = clamp(crouch0 + Math.max(0, -dh) * H.CROUCH, 0, 1);
-    out[C.CROUCH] = crouch1;
-    out[C.HAND + 1] += dh + (crouchDrop(crouch1) - crouchDrop(crouch0));
+    const below = GAIT.HIP_Y - crouchDrop(crouch0) + head[1] - point.y;
+    const crouch = clamp(crouch0 + clamp(below, 0, -K.H_MIN) * K.CROUCH * w, 0, 1);
+    out[C.CROUCH] = crouch;
+    out[C.LEAN] += clamp((below - K.LEAN_FROM) * K.LEAN_PER_M, 0, K.LEAN_MAX) * w;
+
+    // 球を MOTION の座標へ：足元を支点にした体ごとの傾き（sway）を戻し、体幹の原点
+    // （腰の高さ）から測り、+x をラケット側にし、振り付けの前傾（lean）を戻す（体ごと・
+    // 体幹ごと傾けるので、目標もその前の座標で書く）。
+    const lean = out[C.LEAN];
+    const hipY = GAIT.HIP_Y - crouchDrop(crouch);
+    const toBody = (sway) => {
+      const px = HAND * point.x;
+      const sx = px * Math.cos(sway) - point.y * Math.sin(sway);
+      const by = px * Math.sin(sway) + point.y * Math.cos(sway) - hipY;
+      return [sx, by * Math.cos(lean) + point.z * Math.sin(lean), -by * Math.sin(lean) + point.z * Math.cos(lean)];
+    };
+    let ball = toBody(out[C.SWAY]);
+
+    // 2) 外へ遠い球ほど、まず体ごとその側へ傾く（足元から。腰だけを折るより自然に見える）
+    const outward = side * (ball[0] - head[0]);
+    out[C.SWAY] += side * clamp(outward * K.SWAY_PER_M, 0, K.SWAY_MAX) * w;
+    ball = toBody(out[C.SWAY]);
+
+    // ヘッドから球までのずれ（体の内側へ・外へ・前後・上下それぞれ寄せすぎない）だけ手を
+    // 動かし、外へ遠い球ほどその側へ体幹も傾ける（bend は ＋＝ラケット側の肩が上がる）
+    const gap = [ball[0] - head[0], ball[1] - head[1], ball[2] - head[2]];
+    gap[0] = side * clamp(side * gap[0], -K.IN_MAX, K.OUT_MAX);
+    gap[1] = clamp(gap[1], K.H_MIN, K.H_MAX);
+    gap[2] = clamp(gap[2], -K.BACK_MAX, K.AHEAD_MAX);
+    out[C.BEND] -= side * clamp(side * gap[0] * K.SIDE_BEND, 0, K.BEND_MAX) * w;
+    const want = [0, 1, 2].map((i) => hand[i] + gap[i] * w);
+
+    // 腕の長さより遠ければ、肩から届くところで止める
+    const reachFrom = () => {
+      const sh = shoulderAt(out[C.TWIST], out[C.BEND]);
+      const arm = [want[0] - sh[0], want[1] - sh[1], want[2] - sh[2]];
+      const len = Math.hypot(arm[0], arm[1], arm[2]);
+      const k = len > ARM_REACH ? ARM_REACH / len : 1;
+      for (let i = 0; i < 3; i++) hand[i] = sh[i] + arm[i] * k;
+      return Math.hypot(ball[0] - hand[0], ball[1] - hand[1], ball[2] - hand[2]) - R;
+    };
+    let short = reachFrom();
+
+    // 3) 届かないぶん、さらに体幹を傾けて肩ごと寄る。両手打ちはそれでも届かなければ
+    // 逆手を離して片手で伸ばす（離した逆手は後ろへ広げてバランスを取る）。
+    if (short > 0) {
+      out[C.BEND] -= side * Math.min(short * K.STRETCH_BEND, K.STRETCH_BEND_MAX) * w;
+      short = reachFrom();
+    }
+    if (short > K.RELEASE_FROM && out[C.W_GRIP] > 0) {
+      const release = clamp((short - K.RELEASE_FROM) / 0.25, 0, 1) * w;
+      out[C.W_GRIP] *= 1 - release;
+      for (let i = 0; i < 3; i++) out[C.OFF + i] = lerp(out[C.OFF + i], K.STRETCH_OFF[i], release);
+    }
+
+    // 4) 止まった手から、ラケットの先を球へ向ける（届いていれば元の向きのまま）
+    const aim = [ball[0] - hand[0], ball[1] - hand[1], ball[2] - hand[2]];
+    const aimLen = Math.hypot(aim[0], aim[1], aim[2]);
+    if (aimLen > 1e-3) {
+      for (let i = 0; i < 3; i++) dir[i] = lerp(dir[i], aim[i] / aimLen, w);
+      const dl = Math.hypot(dir[0], dir[1], dir[2]) || 1;
+      for (let i = 0; i < 3; i++) out[C.DIR + i] = dir[i] / dl;
+    }
+    for (let i = 0; i < 3; i++) out[C.HAND + i] = hand[i];
   }
 
   /** 打った後（anim>0）の φ。FINISH_AT まで進んだら振り終わりの形を保つ */
@@ -662,7 +751,7 @@
               : PLAYER.SWING_ANIM;
       const phi = afterContactPhi(clip, (span - anim) / span);
       evalClip(clip, phi, state.swingCharge || 0, out);
-      adaptHeight(out, clip, phi, mem.contactY);
+      reachForBall(out, clip, phi, mem.contact);
       return { key: clip.id, kind: 'swing' };
     }
 
@@ -697,13 +786,33 @@
       // 溜めている間は溜め量ぶん、離した後は離した瞬間の溜め量ぶん深く引いたまま
       const charge = state.chargeFrac || (state.swing > 0 ? state.swingCharge : 0) || 0;
       evalClip(clip, phi, charge, out);
-      adaptHeight(out, clip, phi, intent.height);
+      reachForBall(out, clip, phi, intent.point);
       return { key: clip.id, kind: 'prep' };
     }
 
     const ready = ctx.phase === 'rally' || ctx.phase === 'serve';
     out.set(ready ? READY : IDLE);
     return { key: ready ? 'ready' : 'idle', kind: 'rest' };
+  }
+
+  /**
+   * 当たった瞬間の打点（モデルのローカル座標。y は地面からの高さ）。当たった物理の刻みの
+   * 後もそのフレームの残りぶん球は飛んでいる（ball.age＝打たれてからの時間）ので、
+   * その分を巻き戻す。
+   */
+  function contactPoint(player, state, ball) {
+    if (!ball) return null;
+    const age = ball.age || 0;
+    const f = player.userData.facing || 0;
+    const c = Math.cos(f);
+    const s = Math.sin(f);
+    const dx = ball.x - (ball.vx || 0) * age - state.x;
+    const dz = ball.z - (ball.vz || 0) * age - state.z;
+    return {
+      x: dx * c - dz * s,
+      y: ball.y - (ball.vy || 0) * age - 0.5 * G * age * age,
+      z: dx * s + dz * c,
+    };
   }
 
   function blendTime(from, to) {
@@ -737,10 +846,10 @@
     // ツイーナー（股抜き）の間だけ、体ごと相手に背を向ける（普段の向きは userData.facing）
     player.rotation.y = (ud.facing || 0) + tweenerTurn(state.anim, state.stroke);
 
-    // 新しい1打が始まった（当たった）瞬間の球の高さを覚えておく（打ち終わりまで打点の
-    // 高さに手を合わせるのに使う。球はもう飛んでいってしまうので、その瞬間に控える）
+    // 新しい1打が始まった（当たった）瞬間の打点を覚えておく（打ち終わりまでラケットを
+    // 打点へ寄せるのに使う。球はもう飛んでいってしまうので、その瞬間に控える）
     const newSwing = state.anim > 0 && (mem.lastAnim <= 0 || state.anim > mem.lastAnim + 1e-4);
-    if (newSwing) mem.contactY = ctx.ball ? ctx.ball.y : null;
+    if (newSwing) mem.contact = contactPoint(player, state, ctx.ball);
     mem.lastAnim = state.anim;
     // この跳躍の間にもう振ったか（跳んで打つ1打の、打つ前の振り出しを出し直さないため）
     if (!state.leap) mem.leapSwung = false;
@@ -986,7 +1095,7 @@
         dur: 0,
         lastAnim: 0,
         leapSwung: false,
-        contactY: null,
+        contact: null,
       },
     };
     // 一度もポーズを当てないメッシュ（縮地の残像）でも、腕が付け根から垂れた形にしておく
@@ -1071,7 +1180,10 @@
     const gait = player.userData.gait;
     const p = diveProgress(state);
     if (p === null) {
-      player.rotation.z = 0; // 前の1打の倒れ込みを残さない
+      // 前の1打の倒れ込みを残さない。代わりに、遠い球へ寄るときの体ごとの傾き
+      // （振り付けの sway。正＝ラケット側＝モデルのローカル HAND 側）を入れる。
+      // rotation.z を正にすると体は -x 側へ傾く。
+      player.rotation.z = -HAND * player.userData.motion.pose[C.SWAY];
       gait.legs.forEach(({ hip }) => { hip.rotation.y = 0; });
       return 0;
     }
