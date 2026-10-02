@@ -186,8 +186,13 @@
     onToggleGuide: () => menu.onToggleGuide(),
     onCycleSpecials: () => menu.onCycleSpecials(),
     // リプレイのスキップは Space だけ（以前はどのキーでも飛んでしまい、ラリー用の
-    // キーに触れただけで意図せずスキップされていた）。
-    onSkipReplay: () => world.skipReplay(),
+    // キーに触れただけで意図せずスキップされていた）。チェンジエンズの休憩も同じ Space で
+    // 切り上げる。リプレイ中は game.update() が止まっていて休憩はまだ始まっていないので、
+    // 1回の押下で両方が飛ぶことはない。
+    onSkipReplay: () => {
+      world.skipReplay();
+      game.skipChangeover();
+    },
     isMatchStatsOpen: () => matchStatsOpen,
     onCloseMatchStats: () => closeMatchStats(),
   });
@@ -257,6 +262,7 @@
       world.sync(game, dt);
       if (pointJustEnded) world.startReplay();
       hud.setReplay(world.isReplaying());
+      hud.setShade(game.changeoverShade());
       // いま Space を押していて技が出る状態なら、溜めバーも金色にする（＝離した瞬間に
       // 何が起きるかが、視線を動かさずにバーだけで分かる）。
       const armed = game.specialArmed;

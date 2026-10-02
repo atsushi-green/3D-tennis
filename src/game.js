@@ -6,9 +6,9 @@
   'use strict';
 
   const {
-    ATTRS, BOUNDS, CHARGE, COURT, CPU, DOUBLES, DROP, FX, HALF_L, HALF_W, NET, PHYSICS, PLAYER,
-    RETURN, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, TIMING, TIMING_AIM, TRAIL,
-    VOLLEY, WIND, shotSkill,
+    ATTRS, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, FX, HALF_L, HALF_W, NET, PHYSICS,
+    PLAYER, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, TIMING, TIMING_AIM,
+    TRAIL, VOLLEY, WIND, shotSkill,
   } = RallyOne.config;
   const {
     approach2D, clamp, lerp, mpsToKmh, rand, signOr,
@@ -22,7 +22,7 @@
     pairResponder, poachRun, frontPosition, backPosition,
     doublesRallyShot, doublesVolleyShot, doublesSmashShot,
   } = RallyOne.ai;
-  const { Match, pointStakes } = RallyOne.scoring;
+  const { Match, pointStakes, changeoverAfter } = RallyOne.scoring;
 
   const { BALL_R, STEP } = PHYSICS;
 
@@ -600,6 +600,14 @@
     return { you: blank(), cpu: blank() };
   }
 
+  /** チェンジエンズのコールの補足（休憩の種類ごと。種類は scoring.changeoverAfter()）。 */
+  const CHANGEOVER_CALLS = {
+    firstGame: '第1ゲームの後は休憩なし',
+    tiebreak: `タイブレーク ${RULES.TIEBREAK_CHANGE_EVERY}ポイントごと（休憩なし）`,
+    rest: `${CHANGEOVER.RULE_SEC.rest}秒の休憩 ／ SPACE でスキップ`,
+    setBreak: `セット間の休憩（${CHANGEOVER.RULE_SEC.setBreak}秒） ／ SPACE でスキップ`,
+  };
+
   /** phase: idle → serve → rally → over → (serve …) */
   class Game {
     /**
@@ -885,6 +893,21 @@
        * 風に流される」という区別を作っている。
        */
       this.wind = 0;
+      /**
+       * 両チームが試合開始時と反対のエンドにいるか（チェンジエンズのたびに反転する）。
+       * ゲームの座標は常に「人間のチームが手前（-z）」のままにしておき、入れ替わるのは会場の
+       * ほう＝表示側（scene/world.js）が審判台・線審・観客・太陽を180°回して映す（コートと
+       * ネットは点対称なので回しても同じ）。ロジック側で効くのは、会場に吹いている風の向き
+       * だけ（swapEnds()）。
+       */
+      this.endsSwapped = false;
+      /**
+       * チェンジエンズの最中だけ { kind, t, hold, swapped, rested } が入る（それ以外は null）。
+       * kind＝scoring.changeoverAfter() の休憩の種類、t＝始まってからの秒数、hold＝暗転した
+       * まま待つ秒数、swapped＝もう入れ替えて次のポイントの構えに入ったか、rested＝休憩ぶんの
+       * スタミナをどこまで戻したか(0〜1)。tickChangeover() が進める。
+       */
+      this.changeover = null;
     }
 
     actor(who) {
@@ -1833,13 +1856,81 @@
       // スタミナはポイント間で少し回復するが、そのセットで消化したゲーム数が増えるほど
       // 回復量そのものが目減りする（staminaRecoverAmount()）＝長いセットの終盤ほど
       // 疲れが抜けなくなる。4人全員に同じルールで効く。
-      // 回復量にも能力値「体力」が掛かる（attr.recover）。
-      const recover = this.staminaRecoverAmount(this.match.games.you + this.match.games.cpu);
+      this.recoverStamina(1);
+      this.beginServe();
+    }
+
+    /**
+     * 4人全員のスタミナを、ポイント間の回復量（staminaRecoverAmount()）の scale 倍だけ戻す。
+     * 回復量にも能力値「体力」が掛かる（attr.recover）。
+     */
+    recoverStamina(scale) {
+      const recover = this.staminaRecoverAmount(this.match.games.you + this.match.games.cpu) * scale;
       ACTORS.forEach((who) => {
         const actor = this.actor(who);
         actor.stamina = Math.min(1, actor.stamina + recover * actor.attr.recover);
       });
-      this.beginServe();
+    }
+
+    /**
+     * チェンジエンズを始める（ポイント間の一拍 TIMING.NEXT_POINT の後、セットの終わりは
+     * 次のセットを始める直前に呼ぶ）。暗転 → 暗いうちにコートを入れ替えて次のポイントの
+     * 構えへ → 明転、を update() の時計で進める（tickChangeover()）。
+     * @param {'firstGame'|'tiebreak'|'rest'|'setBreak'} kind scoring.changeoverAfter() の結果
+     */
+    beginChangeover(kind) {
+      this.changeover = {
+        kind, t: 0, hold: CHANGEOVER.HOLD_T[kind], swapped: false, rested: 0,
+      };
+      this.hooks.call('チェンジエンズ', CHANGEOVER_CALLS[kind]);
+    }
+
+    tickChangeover(dt) {
+      const co = this.changeover;
+      if (!co) return;
+      co.t += dt;
+      const swapAt = CHANGEOVER.FADE_T + co.hold;
+      if (co.swapped) {
+        if (co.t >= swapAt + CHANGEOVER.FADE_T) this.changeover = null;
+        return;
+      }
+      // 休憩のぶんのスタミナは、真っ暗になってから入れ替えるまでの間に少しずつ戻す
+      // （スコアボード脇のバーが満ちていくのが見える）。休憩なしの入れ替わりは倍率0。
+      const rested = clamp((co.t - CHANGEOVER.FADE_T) / co.hold, 0, 1);
+      this.recoverStamina(CHANGEOVER.RECOVER_MULT[co.kind] * (rested - co.rested));
+      co.rested = rested;
+      if (co.t < swapAt) return;
+      // 明転はここから数える（このフレームのはみ出しを持ち越すと、入れ替えた直後の
+      // 1コマが真っ暗にならず、選手が構えへ瞬間移動するところが薄く見えてしまう）。
+      co.t = swapAt;
+      co.swapped = true;
+      this.swapEnds();
+      this.newPoint(); // 選手を構えに置き直す＝ここから明転
+    }
+
+    /** 休憩を切り上げる（Space）。暗転しきったところへ飛び、次の更新で入れ替えて明転する。 */
+    skipChangeover() {
+      const co = this.changeover;
+      if (co && !co.swapped) co.t = Math.max(co.t, CHANGEOVER.FADE_T + co.hold);
+    }
+
+    /**
+     * チェンジエンズの暗転の濃さ（0＝なし〜1＝真っ暗）。表示専用（hud が画面に幕を掛ける）。
+     * 入れ替える瞬間（選手が構えへ瞬間移動し、会場が180°回る）は必ず真っ暗の間に来る。
+     */
+    changeoverShade() {
+      const co = this.changeover;
+      if (!co) return 0;
+      if (!co.swapped) return clamp(co.t / CHANGEOVER.FADE_T, 0, 1);
+      return clamp(1 - (co.t - CHANGEOVER.FADE_T - co.hold) / CHANGEOVER.FADE_T, 0, 1);
+    }
+
+    /** コートを入れ替わる。会場の向きは表示側が endsSwapped を見て回す。 */
+    swapEnds() {
+      this.endsSwapped = !this.endsSwapped;
+      // 風は会場に吹いているので、選手から見た向き（ゲームの座標の ±x）は逆になる。
+      // 強さはそのままで、続く newPoint() がいつもどおりそこから少しだけ揺らす。
+      this.wind = -this.wind;
     }
 
     /**
@@ -3138,6 +3229,9 @@
 
       const result = this.match.awardPoint(winner);
       const mine = winner === 'you';
+      // この1点でコートを入れ替わるか（チェンジエンズ）。決まった直後のスコアで判定する
+      // ＝セットの終わりは match.reset() の前（最終スコアのゲーム数）で見る。
+      const changeover = changeoverAfter(result, this.match);
       if (result.tiebreak && result.type === 'point') {
         // タイブレーク中は1本目だけ今のサーバーのまま、以降は2ポイントごとに交代
         // （＝奇数本目が終わった直後）。ダブルスは通常のゲームと同じ順番で4人が回る。
@@ -3172,7 +3266,15 @@
           this.resetStats(); // 次のマッチは0から数え直す（スタッツ画面はもう出した後）
           this.serverPartner = { you: 'you', cpu: 'cpu' }; // 次のセットは主力からサーブし直す
           this.hooks.score();
-          this.newPoint();
+          // セット間の休憩。ゲーム数が奇数で終わったセットなら、その間にコートも入れ替わる。
+          // 偶数なら入れ替わらず（次のセットの第1ゲームの後に入れ替わる）、休憩ぶんの
+          // スタミナだけ戻して始める。
+          if (changeover) {
+            this.beginChangeover(changeover);
+          } else {
+            this.recoverStamina(CHANGEOVER.RECOVER_MULT.setBreak);
+            this.newPoint();
+          }
         });
         return;
       }
@@ -3195,13 +3297,18 @@
         : this.lastShotBy[winner];
       this.hooks.call(mine ? 'ポイント' : '失点', sub, shot);
       this.hooks.score();
-      this.after(TIMING.NEXT_POINT, () => this.newPoint());
+      // 入れ替わるときも、決まったコールを読む一拍（NEXT_POINT）を置いてから暗転する
+      this.after(TIMING.NEXT_POINT, () => {
+        if (changeover) this.beginChangeover(changeover);
+        else this.newPoint();
+      });
     }
 
     /* -------------------------------------------------------- 毎フレーム */
 
     update(dt) {
       this.tickTimers(dt);
+      this.tickChangeover(dt);
 
       const swingBefore = this.you.swing;
       this.you.anim = Math.max(0, this.you.anim - dt);

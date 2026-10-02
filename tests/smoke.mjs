@@ -2847,6 +2847,164 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   ok(g.match.tiebreak === false, 'tiebreak flag clears once the set is decided');
 }
 
+// --- チェンジエンズ（ITF ルール10・29）：いつ入れ替わり、どの休憩が付くか ---
+{
+  const { changeoverAfter } = R.scoring;
+  const m = new Match();
+  const winGame = (who) => {
+    let r;
+    for (let p = 0; p < 4; p++) r = m.awardPoint(who);
+    return changeoverAfter(r, m);
+  };
+  // 6-6 まで1ゲームずつ交互に取らせる：第1ゲームの後は休憩なし、以降は奇数ゲームの後だけ90秒の休憩
+  const kinds = [];
+  for (let game = 0; game < 12; game++) kinds.push(winGame(game % 2 ? 'cpu' : 'you'));
+  ok(kinds.join() === 'firstGame,,rest,,rest,,rest,,rest,,rest,',
+    `ends change after every odd game of the set (no rest after the first), got ${kinds.join()}`);
+  ok(m.tiebreak, 'precondition: 6-6 goes to a tiebreak (12 games, so no change before it)');
+
+  // タイブレーク中は6ポイントごと（休憩なし）
+  const tb = [];
+  for (let p = 0; p < 12; p++) tb.push(changeoverAfter(m.awardPoint(p % 2 ? 'cpu' : 'you'), m));
+  ok(tb.join() === ',,,,,tiebreak,,,,,,tiebreak',
+    `a tiebreak changes ends every 6 points, got ${tb.join()}`);
+  ok(changeoverAfter(m.awardPoint('you'), m) === null, '13 tiebreak points: no change');
+  const last = m.awardPoint('you');
+  ok(last.type === 'set' && m.games.you === 7 && m.games.cpu === 6, 'precondition: the tiebreak decides the set 7-6');
+  // タイブレークは1ゲームと数える＝13ゲームのセットなので、終わったら入れ替わる
+  ok(changeoverAfter(last, m) === 'setBreak', `a 7-6 set ends with a change of ends, got ${changeoverAfter(last, m)}`);
+
+  // セットの終わりは、そのセットのゲーム数が偶数なら入れ替わらない（次のセットの第1ゲームの後）
+  const even = new Match();
+  let r;
+  for (let p = 0; p < 24; p++) r = even.awardPoint('you');
+  ok(r.type === 'set' && changeoverAfter(r, even) === null, `a 6-0 set (6 games) ends without a change, got ${changeoverAfter(r, even)}`);
+  const odd = new Match();
+  for (let p = 0; p < 4; p++) odd.awardPoint('cpu');
+  for (let p = 0; p < 24; p++) r = odd.awardPoint('you');
+  ok(r.type === 'set' && changeoverAfter(r, odd) === 'setBreak', `a 6-1 set (7 games) ends with a change, got ${changeoverAfter(r, odd)}`);
+}
+
+// --- チェンジエンズ：Game を通して暗転・入れ替わり・風・休憩のスタミナ・スキップ ---
+{
+  const { CHANGEOVER } = R.config;
+  const calls = [];
+  const hooks = { ...noHooks, call: (big, sub) => calls.push(`${big}|${sub || ''}`) };
+  const g = new R.Game({ input: fakeInput, hooks });
+  g.start(false, 'you');
+  // 次のポイントの構えに入り、暗転も明けきるまで進める（CPU のサーブはまだ飛んでこない）
+  const settle = () => {
+    for (let i = 0; i < 60 * 10 && (g.phase !== 'serve' || g.changeover); i++) g.update(1 / 60);
+  };
+  const winPoint = (who) => { g.phase = 'rally'; g.endPoint(who, 'test'); };
+  const winGame = (who) => { for (let p = 0; p < 4; p++) { winPoint(who); settle(); } };
+
+  // 第1ゲーム：最後の1点の後、暗転しきってから入れ替わり、明けたら幕が消える
+  for (let p = 0; p < 3; p++) { winPoint('you'); settle(); }
+  ok(!g.endsSwapped, 'precondition: no change during the first game');
+  g.wind = 0.5;
+  calls.length = 0;
+  winPoint('you');
+  let shadeAtSwap = null;
+  let maxShade = 0;
+  for (let i = 0; i < 60 * 10 && (g.phase !== 'serve' || g.changeover); i++) {
+    const before = g.endsSwapped;
+    g.update(1 / 60);
+    maxShade = Math.max(maxShade, g.changeoverShade());
+    if (before !== g.endsSwapped) shadeAtSwap = g.changeoverShade();
+  }
+  ok(g.endsSwapped, 'ends change after the first game');
+  ok(shadeAtSwap === 1, `the swap happens while the screen is fully dark, got shade ${shadeAtSwap}`);
+  ok(maxShade === 1 && g.changeoverShade() === 0 && g.changeover === null,
+    `the shade fades out and back in, got max ${maxShade} / now ${g.changeoverShade()}`);
+  ok(calls.some((c) => c === 'チェンジエンズ|第1ゲームの後は休憩なし'),
+    `the change after the first game is called with no rest, got ${JSON.stringify(calls)}`);
+  ok(g.wind < 0, `the wind blows the other way once the ends change, got ${g.wind}`);
+  ok(g.phase === 'serve' && g.match.games.you === 1, 'the next point is ready to serve after the change');
+
+  // 第2ゲーム：入れ替わらない。休憩もないのでスタミナはポイント間の分だけ戻る
+  for (let p = 0; p < 3; p++) { winPoint('cpu'); settle(); }
+  g.you.stamina = 0.2;
+  winPoint('cpu');
+  settle();
+  ok(g.endsSwapped, 'no change after the second game');
+  const plain = g.you.stamina - 0.2;
+  ok(Math.abs(plain - g.staminaRecoverAmount(2)) < 1e-9,
+    `between games without a change only the usual recovery applies, got ${plain}`);
+
+  // 第3ゲーム：90秒の休憩つきで入れ替わり、休憩ぶんスタミナが多く戻る
+  for (let p = 0; p < 3; p++) { winPoint('you'); settle(); }
+  g.you.stamina = 0.2;
+  calls.length = 0;
+  winPoint('you');
+  settle();
+  ok(!g.endsSwapped, 'ends change back after the third game');
+  ok(calls.some((c) => c.startsWith(`チェンジエンズ|${CHANGEOVER.RULE_SEC.rest}秒の休憩`)),
+    `the change after the third game comes with a rest, got ${JSON.stringify(calls)}`);
+  const rested = g.you.stamina - 0.2;
+  const want = g.staminaRecoverAmount(3) * (1 + CHANGEOVER.RECOVER_MULT.rest);
+  ok(Math.abs(rested - want) < 1e-6, `the rest recovers ${want.toFixed(3)} of stamina, got ${rested.toFixed(3)}`);
+
+  // Space（skipChangeover）で休憩を切り上げても、入れ替わりと休憩ぶんの回復はそのまま
+  winGame('cpu'); // 第4ゲーム（入れ替わらない）
+  for (let p = 0; p < 3; p++) { winPoint('you'); settle(); }
+  g.you.stamina = 0.2;
+  winPoint('you'); // 第5ゲーム
+  for (let i = 0; i < 60 * 5 && !g.changeover; i++) g.update(1 / 60);
+  ok(g.changeover && g.changeover.kind === 'rest', 'precondition: a rest changeover after the fifth game');
+  g.update(1 / 60);
+  g.skipChangeover();
+  g.update(1 / 60);
+  ok(g.endsSwapped && g.phase === 'serve', 'skipping the rest swaps ends on the next frame');
+  ok(Math.abs(g.you.stamina - 0.2 - g.staminaRecoverAmount(5) * (1 + CHANGEOVER.RECOVER_MULT.rest)) < 1e-6,
+    `and still recovers the whole rest, got ${g.you.stamina}`);
+  settle();
+  ok(g.changeover === null && g.changeoverShade() === 0, 'and fades back in');
+}
+
+// --- チェンジエンズ：タイブレークは6ポイントごと、セットの終わりはゲーム数が奇数なら入れ替わる ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(false, 'you');
+  const settle = () => {
+    for (let i = 0; i < 60 * 10 && (g.phase !== 'serve' || g.changeover); i++) g.update(1 / 60);
+  };
+  const winPoint = (who) => { g.phase = 'rally'; g.endPoint(who, 'test'); settle(); };
+  g.match.games = { you: 6, cpu: 6 };
+  g.match.tiebreak = true;
+  const swaps = [];
+  for (let p = 0; p < 6; p++) {
+    const before = g.endsSwapped;
+    winPoint(p % 2 ? 'cpu' : 'you');
+    swaps.push(before !== g.endsSwapped);
+  }
+  ok(swaps.join() === 'false,false,false,false,false,true',
+    `a tiebreak changes ends after the 6th point, got ${swaps.join()}`);
+  // 7-6 で終わったセット（13ゲーム）の後は、セット間の休憩のうちに入れ替わる
+  g.you.stamina = 0.2;
+  const before = g.endsSwapped;
+  for (let p = 0; p < 3; p++) winPoint('you'); // タイブレーク 3-3 → 6-3
+  ok(g.match.tiebreak, 'precondition: the tiebreak is still on at 6-3');
+  winPoint('you'); // 7-3＝セット
+  ok(g.match.games.you === 0 && g.match.games.cpu === 0, 'precondition: the next set has begun');
+  ok(g.endsSwapped !== before, 'a set decided by a tiebreak (13 games) ends with a change of ends');
+
+  // 6-0（6ゲーム）で終わったセットの後は入れ替わらないが、セット間の休憩ぶんは戻る
+  const h = new R.Game({ input: fakeInput, hooks: noHooks });
+  h.start(false, 'you');
+  h.match.games = { you: 5, cpu: 0 };
+  h.match.points = { you: 3, cpu: 0 };
+  h.you.stamina = 0.2;
+  h.phase = 'rally';
+  h.endPoint('you', 'test');
+  for (let i = 0; i < 60 * 10 && (h.phase !== 'serve' || h.changeover); i++) h.update(1 / 60);
+  ok(!h.endsSwapped && h.match.games.you === 0, 'a 6-0 set (6 games) ends without a change of ends');
+  const { CHANGEOVER, STAMINA } = R.config;
+  const setBreak = STAMINA.RECOVER_PER_POINT * (1 + CHANGEOVER.RECOVER_MULT.setBreak);
+  ok(Math.abs(h.you.stamina - 0.2 - setBreak) < 1e-6,
+    `but the set break still recovers ${setBreak.toFixed(3)}, got ${(h.you.stamina - 0.2).toFixed(3)}`);
+}
+
 // --- 当たった1打の直後に空振り処理が走らない（打ち方とモーションが上書きされない） ---
 // (退行テスト: hit() が成功時に swing を0にするため、「残り時間が0になった」だけを見て
 //  missSwing() を呼んでいた頃は、成功した1打の直後に必ず空振り処理が走って

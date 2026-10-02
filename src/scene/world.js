@@ -26,7 +26,12 @@
     const { scene, camera } = stage;
 
     const court = scene3d.createCourt();
-    scene.add(court, scene3d.createNet(), scene3d.createOfficials(), scene3d.createCrowd());
+    // 会場（審判台・線審・ボールボーイ・観客・太陽）。ゲームの座標は常に人間のチームが手前の
+    // ままなので、チェンジエンズ（game.endsSwapped）はこちらを180°回して映す。コート面・
+    // ライン・ネット・スタンドの壁は点対称なので回さなくても見え方は変わらない。
+    const venue = new THREE.Group();
+    venue.add(scene3d.createOfficials(), scene3d.createCrowd(), stage.sun);
+    scene.add(court, scene3d.createNet(), venue);
 
     const you = scene3d.createPlayer(THEME.YOU, 'you');
     const cpu = scene3d.createPlayer(THEME.CPU, 'cpu');
@@ -231,11 +236,15 @@
       return reel[reel.length - 1];
     }
 
-    /** コート脇・低い位置からボールの深さを追う「ローアングルのリプレイカメラ」 */
-    function placeReplayCamera(frame, dt) {
+    /**
+     * コート脇・低い位置からボールの深さを追う「ローアングルのリプレイカメラ」。
+     * 中継のカメラと同じく会場に据え付けてあるので、コートを入れ替わった後は反対の脇から映る。
+     * @param {number} side 会場の向き（入れ替わっていなければ 1、入れ替わった後は -1）
+     */
+    function placeReplayCamera(frame, dt, side) {
       const t = Math.min(1, dt * REPLAY.CAM_LERP);
       const z = clamp(frame.ball.z, -HALF_L, HALF_L);
-      camera.position.x = lerp(camera.position.x, REPLAY.CAM_X, t);
+      camera.position.x = lerp(camera.position.x, REPLAY.CAM_X * side, t);
       camera.position.y = lerp(camera.position.y, REPLAY.CAM_HEIGHT, t);
       camera.position.z = lerp(camera.position.z, z, t);
       camera.lookAt(0, REPLAY.CAM_LOOK_Y, z);
@@ -289,6 +298,9 @@
 
     /** @param {{ball:object, you:object, cpu:object, youMate:object, cpuMate:object, doubles:boolean}} state */
     function sync(state, dt) {
+      // 入れ替わるのは game の時計で暗転しきった瞬間（game.changeoverShade() が1の間）だけ。
+      // リプレイは update() を止めて再生するので、再生中に向きが変わることはない。
+      venue.rotation.y = state.endsSwapped ? Math.PI : 0;
       // 録画は再生中も止めない：裏では game.update() が実際の試合を進め続けているので、
       // ここで録り漏らすと再生の直後に次のポイントがすぐ終わったとき history が
       // 足りず（history.length<2）、そのポイントのリプレイだけ出せなくなってしまう。
@@ -309,7 +321,7 @@
           scene3d.updateTrail(trail, NO_TRAIL); // 再生そのものが「振り返り」なので軌跡は隠す
           scene3d.placeSmashHint(smashHint, null);
           scene3d.placeSwingGuide(swingGuide, null, state.you);
-          placeReplayCamera(frame, dt);
+          placeReplayCamera(frame, dt, state.endsSwapped ? -1 : 1);
           return;
         }
         replaying = false; // 再生し終わったら通常表示へ戻る

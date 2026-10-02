@@ -14,6 +14,9 @@ canvas{display:block}
 
 #scorewrap{position:absolute;top:14px;left:14px}
 
+/* チェンジエンズの暗転幕（opacity は hud.setShade() が毎フレーム入れる） */
+#shade{position:absolute;inset:0;background:var(--ink);opacity:0}
+
 /* broadcast-style scorebug */
 #bug{
   display:grid;grid-template-columns:auto 46px 56px;

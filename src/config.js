@@ -1575,6 +1575,9 @@
     SET_GAMES: 6,
     MARGIN: 2,      // ゲーム／セットとも2差が必要
     TIEBREAK_POINTS: 7, // 6-6 のタイブレークは7点先取（MARGIN=2は共用）
+    // タイブレーク中はこのポイント数ごとにコートを入れ替わる（ITF ルール10）。通常のゲームの
+    // 入れ替わり（奇数ゲームの後）は規則そのものなので値は持たない（scoring.changeoverAfter）。
+    TIEBREAK_CHANGE_EVERY: 6,
   };
 
   /**
@@ -1816,6 +1819,34 @@
     // 何が起きたのか分からないまま（人間のサーブなら、溜めキーを押したままだと
     // そのまま次のトスまで上がってしまう）。ポイント間（NEXT_POINT）より少し短い。
     FAULT_CALL: 1.3,
+  };
+
+  /**
+   * チェンジエンズ（コートの入れ替わり）の間合いと休憩。いつ入れ替わるかはルール
+   * （scoring.changeoverAfter）が決め、ここは「どう見せるか・どれだけ休めるか」だけを持つ。
+   * 種類（kind）は ITF ルール29 の休憩の区別そのもの：
+   * - firstGame：各セットの第1ゲームの後。休憩なしですぐ入れ替わる
+   * - tiebreak：タイブレーク中（6ポイントごと）。同じく休憩なし
+   * - rest：それ以外の奇数ゲームの後。90秒の休憩
+   * - setBreak：セットの終わり。120秒のセット間の休憩
+   * 見せ方は「暗転 → 暗いうちに入れ替える → 明転」。実際の90秒は待たせられないので、
+   * 暗転している間（HOLD_T）に縮めて見せ、休憩のぶんスタミナを戻す（RECOVER_MULT）。
+   * 時計は Game#update() で進むので、リプレイ中・スタッツ画面を開いている間は止まる。
+   */
+  const CHANGEOVER = {
+    FADE_T: 0.4, // 暗転・明転それぞれにかける秒数
+    // 真っ暗なまま待つ秒数。休憩なしの入れ替わりは、選手が歩いて渡るぶんだけ短く置く。
+    HOLD_T: {
+      firstGame: 0.35, tiebreak: 0.35, rest: 1.4, setBreak: 1.4,
+    },
+    // 休憩で戻るスタミナ。ポイント間の回復量（Game#staminaRecoverAmount。終盤ほど目減りする）
+    // の何倍か。ポイント間の回復とは別に、入れ替わりの暗転中に少しずつ足す。
+    // 休憩なしの入れ替わりは0（ポイント間と同じだけしか戻らない）。
+    RECOVER_MULT: {
+      firstGame: 0, tiebreak: 0, rest: 2.5, setBreak: 3.5,
+    },
+    // コールに出す、実際のルールでの休憩の長さ（秒。ITF ルール29）。表示の文言にだけ使う。
+    RULE_SEC: { rest: 90, setBreak: 120 },
   };
 
   /**
@@ -3223,7 +3254,7 @@
 
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
-    BOUNDS, CPU, DOUBLES, RULES, TIMING, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
+    BOUNDS, CPU, DOUBLES, RULES, TIMING, CHANGEOVER, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT, GUIDE,
     SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, STAMINA, TOSS, OFFICIALS,
     STANDS, SPECTATORS, MOTION,

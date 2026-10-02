@@ -30,6 +30,9 @@
 <body>
 
 <div id="hud">
+  <!-- チェンジエンズの暗転幕。#hud の先頭に置く＝スコアボードやコールはこの上に重なって
+       見えたまま（中継で休憩中もスコアが出ているのと同じ）。濃さは hud.setShade() が入れる。 -->
+  <div id="shade"></div>
   <div id="scorewrap">
     <div id="bug">
       <div class="nm" id="n1">YOU</div><div class="gm" id="g1">0</div><div class="pt" id="p1">0</div>
@@ -83,7 +86,7 @@
       <span><b>K</b> キックサーブ（必殺技。B/V/C の代わりに押してトス）</span>
       <span><b>Q/E</b> パートナーに前へ／下がれ（ダブルス）</span>
       <span><b>R/F</b> サーブ前に自分が前／後ろに立つ（ダブルス）</span>
-      <span><b>Space</b> リプレイをスキップ</span>
+      <span><b>Space</b> リプレイ／休憩をスキップ</span>
     </div>
   </div>
 </div>

@@ -155,7 +155,35 @@
     return null;
   }
 
+  /**
+   * いま決まった1点（match.awardPoint() の戻り値と、それを反映した後の match）を受けて、
+   * 選手がコートを入れ替わる（チェンジエンズ）かどうかと、そのときの休憩の種類を返す。
+   * ITF ルール10・29 のとおり：
+   * - 各セットの奇数ゲーム（第1・3・5…）が終わったら入れ替わる。セットの最後のゲームも
+   *   同じ数え方で、そのセットのゲーム数が奇数なら入れ替わり、偶数なら次のセットの
+   *   第1ゲームの後になる（＝次のセットも「奇数ゲームの後」のまま）。
+   * - タイブレークは1ゲームと数える（6-6＋タイブレーク＝13ゲーム＝終わったら入れ替わる）。
+   *   タイブレークの中では RULES.TIEBREAK_CHANGE_EVERY（6）ポイントごとに入れ替わる。
+   * - 休憩は90秒（rest）。ただし各セットの第1ゲームの後（firstGame）とタイブレーク中
+   *   （tiebreak）は休憩なしですぐ入れ替わる。セットの終わりはセット間の休憩（setBreak）。
+   * セットが終わったときの match はまだ reset() 前（最終スコアのまま）であること。
+   * @param {{type:'point'|'game'|'set', tiebreak?:boolean}} result
+   * @param {Match} match
+   * @returns {'firstGame'|'tiebreak'|'rest'|'setBreak'|null} null なら入れ替わらない
+   */
+  function changeoverAfter(result, match) {
+    if (result.type === 'point') {
+      if (!result.tiebreak) return null;
+      const played = match.tiebreakPoints.you + match.tiebreakPoints.cpu;
+      return played % RULES.TIEBREAK_CHANGE_EVERY === 0 ? 'tiebreak' : null;
+    }
+    const played = match.games.you + match.games.cpu;
+    if (played % 2 === 0) return null;
+    if (result.type === 'set') return 'setBreak';
+    return played === 1 ? 'firstGame' : 'rest';
+  }
+
   RallyOne.scoring = {
-    POINT_LABELS, pointLabel, Match, pointStakes, STAKE_LABELS,
+    POINT_LABELS, pointLabel, Match, pointStakes, STAKE_LABELS, changeoverAfter,
   };
 })(window.RallyOne = window.RallyOne || {});

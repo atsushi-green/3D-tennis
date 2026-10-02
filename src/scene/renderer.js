@@ -28,6 +28,8 @@
       renderer,
       scene,
       camera,
+      // 太陽は会場の一部（チェンジエンズで会場ごと回す。world.js が venue へ付け替える）
+      sun,
       render: () => renderer.render(scene, camera),
       resize: () => {
         camera.aspect = innerWidth / innerHeight;

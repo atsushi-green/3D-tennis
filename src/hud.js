@@ -107,6 +107,7 @@
         staminaFillCpuMate: $('staminaFillCpuMate'),
         staminaRowYouMate: $('staminaRowYouMate'),
         staminaRowCpuMate: $('staminaRowCpuMate'),
+        shade: $('shade'),
         call: $('call'),
         callBig: $('callBig'),
         callSub: $('callSub'),
@@ -570,6 +571,16 @@
 
     hideCall() {
       this.el.call.classList.remove('on');
+    }
+
+    /**
+     * チェンジエンズの暗転幕の濃さ。毎フレーム呼ばれるので、変わったときだけ書き込む。
+     * @param {number} amount 0（なし）〜1（真っ暗）。game.changeoverShade()
+     */
+    setShade(amount) {
+      if (amount === this.shade) return;
+      this.shade = amount;
+      this.el.shade.style.opacity = amount;
     }
 
     hideStartScreen() {
