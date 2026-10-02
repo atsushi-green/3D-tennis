@@ -3295,7 +3295,11 @@
      */
     tickSpecial(dt) {
       const you = this.you;
-      if (you.special && you.swing <= 0 && you.anim <= 0 && !you.charging) you.special = null;
+      // サーブを振り出して当たるのを待っている間（swingServe()）も技を残す。サーブはラリーの
+      // スイングの有効時間（swing）を使わないので、これを見ないと離した次のフレームで消え、
+      // 約0.2秒後に当たる serve() がキックサーブを打てなかった（普通のサーブとして飛んでいた）。
+      const servePending = !!(this.serveSwing && this.serveSwing.who === 'you');
+      if (you.special && you.swing <= 0 && you.anim <= 0 && !you.charging && !servePending) you.special = null;
       // AI（Hard）も同じ扱い：振っている間は技が残るのでフォームに使え、モーションが
       // 尽きたところで消える。AI には溜め（charging）もスイングの有効時間（swing）も
       // 無いので、見るのはモーションの残り（anim）だけ。

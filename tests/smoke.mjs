@@ -6332,6 +6332,28 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     ok(g.ball.vy > 0, `and the ball is kicking up after it, vy=${g.ball.vy.toFixed(2)}`);
   }
 
+  // --- キックサーブ：ふつうに（ゲージの線で）離しても出る ---
+  // 離してから当たるまで約0.2秒ある（swingServe）。上の溜めすぎの1本はトスがもう低く、
+  // 離した瞬間に当たるので、この待ちの間に技が消える不具合（tickSpecial が swing を
+  // 使わないサーブの技を次のフレームで消していた）を素通りしていた。
+  {
+    const g = new R.Game({ input: idle, hooks: noHooks });
+    g.setSpecials(['kickServe']);
+    g.start();
+    g.chargeStart('flat');
+    for (let f = 0; f < Math.round(SERVE.CHARGE_SWEET_T * 60); f++) g.update(1 / 60);
+    g.chargeRelease();
+    ok(g.phase === 'serve' && g.serveSwing && g.serveSwing.t > 0.05,
+      `precondition: released on the line, the racket is still on its way up, swing=${JSON.stringify(g.serveSwing)}`);
+    // untilServed() は球だけを進める（tickSpecial を通らない）ので、ここは実際の試合と同じく
+    // update() でフレームを進めて当たるのを待つ。
+    for (let f = 0; f < 60 && g.phase === 'serve'; f++) g.update(1 / 60);
+    ok(g.phase === 'rally', 'precondition: the serve was struck');
+    ok(g.ball.spin === 'top' && g.ball.kick === true,
+      `a kick serve released on the line is still a kick serve, spin=${g.ball.spin} kick=${g.ball.kick}`);
+    ok(g.usesLeft('kickServe') === 0, 'and it spends the kick serve');
+  }
+
   // --- 縮地：打点まで瞬間移動し、残像を残し、スイングの有効時間が伸びる ---
   {
     const g = rally(['shukuchi']);
