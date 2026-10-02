@@ -621,7 +621,7 @@
         x: 0, z: -HALF_L - 0.6, vx: 0, vz: 0, // vx/vz は実速度（加速度で目標速度に近づける）
         swing: 0, anim: 0, speed: 0, stroke: 'forehand', prep: null,
         // 今テイクバック中／振っている最中の球種。打つフォーム（scene/player.js の
-        // SWING.SPIN_FORM）を切り替えるためだけの表示用の値で、判定には一切使わない。
+        // MOTION の球種ごとの振り付け）を切り替えるためだけの表示用の値で、判定には一切使わない。
         spin: 'flat',
         charging: false, chargeTime: 0, swingCharge: 0, // 溜めキー押しっぱなしのテイクバック
         // この1振りが実際にボールを捉えたか。update() が「振ったのに届かなかった」を
@@ -3338,7 +3338,7 @@
       this.you.chargeFrac = this.you.charging
         ? clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1)
         : 0;
-      // 打つフォーム（scene/player.js の SWING.SPIN_FORM）に渡す球種。テイクバック中は
+      // 打つフォーム（scene/player.js・config の MOTION）に渡す球種。テイクバック中は
       // 押しているキー（chargeSpin）の球種、振っている最中は hit() が入れた実際の球種を
       // そのまま保ち、そのどちらでもない（構えているだけ）なら平常のフラットに戻す。
       // AI は溜めのキー入力がないので、打った球種が振り終わるまで残るだけになる。

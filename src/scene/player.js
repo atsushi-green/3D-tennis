@@ -1,71 +1,151 @@
 /**
- * 選手のメッシュ（胴・頭・脚・ラケットを持つ腕・逆手）とポーズ制御。
- * - スイング（打つ動作）: setSwingPose() が担当。ラケット側の腕を rotation.y で振る。
- * - 歩行/走行: setGaitPose() が担当。股関節・膝・逆手の腕・体幹を rotation.x で動かす。
- *   軸を分けているので、打ちながら走っていても振り付けが喧嘩しない。
- * 真のIK（目標位置からの逆算）ではなく、速度に応じて角度を数式で生成する簡易版。
+ * 選手のメッシュ（胴・頭・両腕・両脚・ラケット）とポーズ制御。全員右利き。
+ *
+ * - 腕は肩→肘→手の2関節。振り付けは「手をどこに置き、ラケットをどちらへ向けるか」の
+ *   キーポーズ（config の MOTION）で書き、肘の角度は solveArm()（2関節のIK）が逆算する。
+ * - 1打は φ という1本の時間軸（0＝テイクバック、1＝打点、2＝振り終わり）に沿って
+ *   キーポーズの間を補間する（evalClip）。打点より前はボールが届くまでの残り時間
+ *   （ballApproach）や跳躍の上昇から、打点より後ろは anim から φ を進める（chooseMotion）。
+ * - 逆手（左手）はトスを上げ、構えではスロートに添え、両手打ちのバックハンドでは
+ *   グリップを握る。走るときは前後に振る。
+ * - 違う振り付けへ移るとき（構え→テイクバック、振り終わり→構え）は、直前の形から短い
+ *   時間で寄せる（setSwingPose のクロスフェード）。
+ * - 歩行/走行は setGaitPose()（脚・体幹の上下ゆれ・前傾と、ポーズの膝の沈み込み）。
+ *   跳んで打つ1打の体（跳躍・脚）は apply*() が歩行の上から重ねる。
+ *
+ * world.js#syncPlayer から毎フレーム setSwingPose → setGaitPose → apply* → finishPose の
+ * 順に呼ぶ。腕のIKは体幹の最終的な傾きが決まってから解く（トスの左手はボールの
+ * ワールド座標を追う）ので、最後の finishPose() が受け持つ。
  */
 (function (RallyOne) {
   'use strict';
 
   const {
-    GAIT, PLAYER, SERVE, SPECIAL, SWING, THEME,
+    COURT, GAIT, MOTION, PHYSICS, PLAYER, SERVE, SPECIAL, SWING, THEME,
   } = RallyOne.config;
   const { clamp, lerp } = RallyOne.math;
   const scene3d = RallyOne.scene = RallyOne.scene || {};
 
   const TWO_PI = Math.PI * 2;
-  const ARM_SPAN = PLAYER.SERVE_ANIM; // アニメーションの基準時間
+  const ARM_SPAN = PLAYER.SERVE_ANIM; // 通常のスイングの進行度の基準時間
   /**
    * ラケットを持つ腕がモデルのローカルのどちら側にあるか。**-1 ＝ 右利き**（-x 側）。
-   * 振り付け（config.SWING の角度）は昔からすべて「腕が +x 側にある」前提で書かれているので、
-   * ポーズを作り終えた後に mirrorHanded() で左右を鏡映しして右利きに直す。
-   * game.js の RACKET_SIDE（当たり判定のフォア/バック）と必ず同じ向きにすること
-   * （ずれると「フォアと判定された球を逆の手で振る」ことになる）。
+   * MOTION の振り付けは「+x ＝ ラケット側」で書いてあり、x 成分とひねり・傾きにこれを
+   * 掛けてモデルの座標へ移す。game.js の RACKET_SIDE（当たり判定のフォア/バック）と
+   * 必ず同じ向きにすること（ずれると「フォアと判定された球を逆の手で振る」ことになる）。
    */
   const HAND = -1;
-  /** 肩（両腕の付け根）の高さ。体幹（torso）のローカル座標 */
-  const SHOULDER_Y = 0.46;
+  const RIG = MOTION.RIG;
+  const RACKET = MOTION.RACKET;
+  const G = Math.abs(PHYSICS.GRAVITY);
+  /** トスの初速（game.js#tossBall と同じ）。トスの進み具合をボールの上向きの速さから読む */
+  const TOSS_VY = Math.sqrt(2 * G * (SERVE.TOSS_PEAK - SERVE.BALL_Y));
 
-  function createRacketArm(shirt, mat) {
-    const arm = new THREE.Group();
+  /* ------------------------------------------------------------ メッシュ */
 
-    const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.05, 0.5, 8), mat(shirt));
-    upper.rotation.z = -Math.PI / 2;
-    upper.position.x = HAND * 0.28;
+  function mat(color) {
+    return new THREE.MeshLambertMaterial({ color });
+  }
 
-    const frame = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.022, 8, 20), mat(THEME.BALL));
-    frame.position.set(HAND * 0.72, 0, 0);
+  /** ラケット（手のローカル。−y がヘッド、面の法線が +z）。MOTION.RACKET の寸法 */
+  function createRacket() {
+    const racket = new THREE.Group();
+    const frameMat = mat(THEME.BALL);
 
+    const grip = new THREE.Mesh(
+      new THREE.CylinderGeometry(RACKET.GRIP_R, RACKET.GRIP_R * 1.12, RACKET.BUTT + RACKET.GRIP, 8),
+      mat(THEME.GRIP),
+    );
+    grip.position.y = (RACKET.BUTT - RACKET.GRIP) / 2;
+    racket.add(grip);
+
+    // スロート：グリップの上端からヘッドの下端の左右へ、細い2本の V 字
+    const headBottom = RACKET.HEAD_Y - RACKET.HEAD_L;
+    [-1, 1].forEach((s) => {
+      const dx = s * RACKET.HEAD_W * 0.55;
+      const dy = headBottom - RACKET.GRIP;
+      const bar = new THREE.Mesh(
+        new THREE.CylinderGeometry(RACKET.THROAT_R, RACKET.THROAT_R, Math.hypot(dx, dy), 6),
+        frameMat,
+      );
+      bar.position.set(dx / 2, -(RACKET.GRIP + dy / 2), 0);
+      bar.rotation.z = Math.atan2(dx, dy);
+      racket.add(bar);
+    });
+
+    // ヘッド：楕円のフレーム（輪をつぶすと太さまでつぶれるので、楕円の線に沿って管を作る）
+    const ring = [];
+    for (let i = 0; i < 28; i++) {
+      const a = (i / 28) * TWO_PI;
+      ring.push(new THREE.Vector3(RACKET.HEAD_W * Math.cos(a), RACKET.HEAD_L * Math.sin(a), 0));
+    }
+    const frame = new THREE.Mesh(
+      new THREE.TubeGeometry(new THREE.CatmullRomCurve3(ring, true), 40, RACKET.TUBE, 6, true),
+      frameMat,
+    );
+    frame.position.y = -RACKET.HEAD_Y;
     const strings = new THREE.Mesh(
-      new THREE.CircleGeometry(0.16, 20),
+      new THREE.CircleGeometry(1, 24),
       new THREE.MeshBasicMaterial({
-        color: 0xffffff, transparent: true, opacity: 0.14, side: THREE.DoubleSide,
+        color: 0xffffff, transparent: true, opacity: RACKET.STRING_OPACITY, side: THREE.DoubleSide,
       }),
     );
-    strings.position.set(HAND * 0.72, 0, 0);
-
-    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.2, 8), mat(THEME.GRIP));
-    grip.rotation.z = Math.PI / 2;
-    grip.position.set(HAND * 0.53, 0, 0);
-
-    arm.add(upper, frame, strings, grip);
-    return arm;
+    strings.scale.set(RACKET.HEAD_W, RACKET.HEAD_L, 1);
+    strings.position.y = -RACKET.HEAD_Y;
+    racket.add(frame, strings);
+    return racket;
   }
 
-  /** ラケットを持たない方の腕。歩行時のカウンタースイングだけを担当する簡素な1本。 */
-  function createOffArm(shirt, mat) {
-    const arm = new THREE.Group();
-    const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.045, 0.46, 8), mat(shirt));
-    upper.position.y = -0.23;
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 8), mat(THEME.SKIN));
-    hand.position.y = -0.46;
-    arm.add(upper, hand);
-    return arm;
+  /**
+   * 腕1本（肩→肘→手）。肩・肘・手はそれぞれ Group で、骨はローカル −y へ伸びる。
+   * 向きは毎フレーム solveArm() が決める。
+   * @param {number} side 肩がモデルのローカル x のどちら側か
+   */
+  function createArm(side, shirt, withRacket) {
+    const shoulder = new THREE.Group();
+    shoulder.position.set(side * RIG.SHOULDER_X, RIG.SHOULDER_Y, 0);
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(RIG.UPPER_R * 1.35, 10, 8), mat(shirt));
+    const sleeveLen = RIG.UPPER * RIG.SLEEVE;
+    const sleeve = new THREE.Mesh(
+      new THREE.CylinderGeometry(RIG.UPPER_R * 1.3, RIG.UPPER_R * 1.2, sleeveLen, 10),
+      mat(shirt),
+    );
+    sleeve.position.y = -sleeveLen / 2;
+    const upper = new THREE.Mesh(
+      new THREE.CylinderGeometry(RIG.UPPER_R, RIG.FORE_R * 1.1, RIG.UPPER, 8),
+      mat(THEME.SKIN),
+    );
+    upper.position.y = -RIG.UPPER / 2;
+    shoulder.add(cap, sleeve, upper);
+
+    const elbow = new THREE.Group();
+    elbow.position.y = -RIG.UPPER;
+    const foreLen = RIG.FORE - RIG.HAND_R;
+    const fore = new THREE.Mesh(
+      new THREE.CylinderGeometry(RIG.FORE_R * 1.1, RIG.FORE_R * 0.8, foreLen, 8),
+      mat(THEME.SKIN),
+    );
+    fore.position.y = -foreLen / 2;
+    elbow.add(new THREE.Mesh(new THREE.SphereGeometry(RIG.FORE_R * 1.15, 8, 6), mat(THEME.SKIN)), fore);
+    shoulder.add(elbow);
+
+    const hand = new THREE.Group();
+    hand.position.y = -RIG.FORE;
+    hand.add(new THREE.Mesh(new THREE.SphereGeometry(RIG.HAND_R, 10, 8), mat(THEME.SKIN)));
+    if (withRacket) hand.add(createRacket());
+    elbow.add(hand);
+
+    return {
+      shoulder, elbow, hand,
+      // IK の結果（体幹ローカル）。finishPose が逆手の目標（グリップ）を作るのに使う
+      reached: new THREE.Vector3(),
+      upperQ: new THREE.Quaternion(),
+      foreQ: new THREE.Quaternion(),
+    };
   }
 
-  /** 股関節(hip)→膝(knee)→足先、の2関節チェーンを1本作る。 */
-  function createLeg(sign, shorts, skin, mat) {
+  /** 股関節(hip)→膝(knee)→足首(ankle)、の3関節チェーンを1本作る。 */
+  function createLeg(sign, shorts) {
     const hip = new THREE.Group();
     hip.position.set(sign * GAIT.HIP_X, GAIT.HIP_Y, 0);
 
@@ -82,120 +162,246 @@
 
     const shin = new THREE.Mesh(
       new THREE.CylinderGeometry(GAIT.SHIN_R[0], GAIT.SHIN_R[1], GAIT.SHIN_LEN, 10),
-      mat(skin),
+      mat(THEME.SKIN),
     );
     shin.position.y = -GAIT.SHIN_LEN / 2;
     knee.add(shin);
 
+    // 足首（膝を曲げても足裏を地面と平行に保つため。finishPose が角度を入れる）
+    const ankle = new THREE.Group();
+    ankle.position.y = -GAIT.SHIN_LEN;
+    knee.add(ankle);
     const foot = new THREE.Mesh(new THREE.BoxGeometry(...GAIT.FOOT), mat(0x1c2531));
-    foot.position.set(0, -GAIT.SHIN_LEN, GAIT.FOOT[2] * 0.28);
-    knee.add(foot);
+    foot.position.set(0, 0, GAIT.FOOT[2] * 0.28);
+    ankle.add(foot);
 
-    return { hip, knee };
+    return { hip, knee, ankle };
+  }
+
+  /** 頭と帽子（つば）。頭は球なので、つばが無いとどちらを向いているか読めない */
+  function createHead(cap) {
+    const head = new THREE.Group();
+    head.position.y = RIG.HEAD_Y;
+    head.add(new THREE.Mesh(new THREE.SphereGeometry(RIG.HEAD_R, 16, 12), mat(THEME.SKIN)));
+    const crown = new THREE.Mesh(
+      new THREE.SphereGeometry(RIG.HEAD_R * 1.05, 16, 8, 0, TWO_PI, 0, Math.PI * 0.42),
+      mat(cap),
+    );
+    const brim = new THREE.Mesh(new THREE.BoxGeometry(RIG.HEAD_R * 1.25, 0.014, RIG.HEAD_R * 0.8), mat(cap));
+    brim.position.set(0, RIG.HEAD_R * 0.42, RIG.HEAD_R * 0.95);
+    head.add(crown, brim);
+    return head;
+  }
+
+  /* ------------------------------------------------------------ ポーズ（数値の配列） */
+
+  // 1フレームぶんの上半身の形を数値の配列で持つ。補間もクロスフェードもチャンネルごとの
+  // 線形演算だけで済む。座標は MOTION の座標系（+x＝ラケット側、ひねる前）。
+  const C = {
+    HAND: 0, DIR: 3, FACE: 6, ELBOW: 9, OFF: 12, OFF_ELBOW: 15,
+    W_GRIP: 18, W_THROAT: 19, W_BALL: 20,
+    TWIST: 21, HIPS: 22, BEND: 23, CROUCH: 24, LEAN: 25,
+  };
+  const CHANNELS = 26;
+  /** サーブを待つ間のボールの位置（MOTION の座標）。game.js#placeServeBall と同じ置き方 */
+  const BALL_HOLD = [0, SERVE.BALL_Y - GAIT.HIP_Y, 0.4];
+
+  function unit(v) {
+    const l = Math.hypot(v[0], v[1], v[2]) || 1;
+    return [v[0] / l, v[1] / l, v[2] / l];
+  }
+
+  function setVec(p, at, v) {
+    p[at] = v[0];
+    p[at + 1] = v[1];
+    p[at + 2] = v[2];
   }
 
   /**
-   * @param {{shirt:number, shorts:number}} colors
-   * @returns {THREE.Group} userData に arm（ラケット腕）／gait（歩行リグ一式）が入る
+   * 逆手の指定（MOTION のコメント参照）を、3つの重み（グリップ／スロート／ボール）と
+   * 自由な位置（残りの重み）に直す。自由な位置を指定しなかったポーズにも、その
+   * ポーズで握る・添える位置を入れておく：別の指定のキーと補間するとき、自由な位置の
+   * 側もそこから寄っていくように。
    */
-  scene3d.createPlayer = function createPlayer({ shirt, shorts }) {
-    const group = new THREE.Group();
-    const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
+  function setOff(p, off) {
+    let spec = off;
+    if (typeof off === 'string') spec = { [off]: 1 };
+    else if (Array.isArray(off)) spec = { at: off };
+    p[C.W_GRIP] = spec.grip || 0;
+    p[C.W_THROAT] = spec.throat || 0;
+    p[C.W_BALL] = spec.ball || 0;
+    let at = spec.at;
+    if (!at && spec.ball) at = BALL_HOLD;
+    if (!at) {
+      const along = spec.grip ? RACKET.TWO_HAND_AT : RACKET.THROAT_AT;
+      at = [0, 1, 2].map((i) => p[C.HAND + i] + p[C.DIR + i] * along);
+    }
+    setVec(p, C.OFF, at);
+  }
 
-    const leftLeg = createLeg(-1, shorts, THEME.SKIN, mat);
-    const rightLeg = createLeg(1, shorts, THEME.SKIN, mat);
-    group.add(leftLeg.hip, rightLeg.hip);
+  /** MOTION のポーズ1つを配列にする。書いていない項目は prev から引き継ぐ */
+  function compilePose(def, prev) {
+    const p = prev ? Float64Array.from(prev) : new Float64Array(CHANNELS);
+    if (def.hand) setVec(p, C.HAND, def.hand);
+    if (def.dir) setVec(p, C.DIR, unit(def.dir));
+    if (def.face) setVec(p, C.FACE, unit(def.face));
+    if (def.elbow) setVec(p, C.ELBOW, unit(def.elbow));
+    if (def.offElbow) setVec(p, C.OFF_ELBOW, unit(def.offElbow));
+    if (def.twist !== undefined) {
+      p[C.TWIST] = def.twist;
+      if (def.hips === undefined) p[C.HIPS] = def.twist * MOTION.HIPS_FOLLOW;
+    }
+    if (def.hips !== undefined) p[C.HIPS] = def.hips;
+    if (def.bend !== undefined) p[C.BEND] = def.bend;
+    if (def.crouch !== undefined) p[C.CROUCH] = def.crouch;
+    if (def.lean !== undefined) p[C.LEAN] = def.lean;
+    if (def.off !== undefined) setOff(p, def.off); // 手とラケットの向きが決まってから
+    return p;
+  }
 
-    // 体幹（胴・頭・両腕）はここだけ上下ゆれ・前傾させる。脚は接地したまま揺らさない。
-    const torso = new THREE.Group();
-    torso.position.y = GAIT.HIP_Y;
-    group.add(torso);
+  function compileKeys(defs, base) {
+    let prev = base;
+    return defs.map((def) => {
+      prev = compilePose(def, prev);
+      return { phi: def.phi, pose: prev };
+    });
+  }
 
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.23, 0.27, 0.68, 12), mat(shirt));
-    body.position.y = 0.34;
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.15, 16, 12), mat(THEME.SKIN));
-    head.position.y = 0.81;
-    torso.add(body, head);
+  /** 球種ごとの差分（keys と同じ並び。null はそのまま）を重ねた別の振り付け */
+  function varyKeys(keys, overrides) {
+    return keys.map((k, i) => ({
+      phi: k.phi,
+      pose: overrides && overrides[i] ? compilePose(overrides[i], k.pose) : k.pose,
+    }));
+  }
 
-    const arm = createRacketArm(shirt, mat);
-    arm.position.set(0, SHOULDER_Y, 0);
-    torso.add(arm);
+  /** 膝を crouch(0〜1) だけ沈めたとき、腰が下がる量(m) */
+  function crouchDrop(crouch) {
+    return (GAIT.THIGH_LEN + GAIT.SHIN_LEN) * (1 - Math.cos(clamp(crouch, 0, 1) * MOTION.CROUCH.THIGH));
+  }
 
-    const offArm = createOffArm(shirt, mat);
-    offArm.position.set(0, SHOULDER_Y, 0);
-    torso.add(offArm);
-
-    group.userData.arm = arm;
-    // この選手が普段向いている方向（world.js が cpu 側に Math.PI を入れる）。ツイーナーで
-    // 体ごと反転させたあと、確実に元の向きへ戻すために基準として持っておく。
-    group.userData.facing = 0;
-    group.userData.gait = {
-      torso, offArm, phase: 0, blend: 0,
-      legs: [
-        { hip: leftLeg.hip, knee: leftLeg.knee, offset: 0 },
-        { hip: rightLeg.hip, knee: rightLeg.knee, offset: Math.PI },
-      ],
+  /**
+   * 1つの振り付け（キーの並び）。
+   * @param {string} id クロスフェードの判定に使う名前（同じ id の間は補間が続く）
+   * @param {object} [opts] pull＝フル溜めの形（keys[pullAt] から溜め量ぶん寄せる）、
+   *   adapt＝打点の高さに手を合わせるか、easeIn＝打点の直後をゆっくり進めるか
+   */
+  function makeClip(id, keys, opts = {}) {
+    const pullAt = opts.pullAt || 0;
+    const contactKey = keys.find((k) => k.phi === 1);
+    let contactY = null;
+    if (opts.adapt !== false && contactKey) {
+      // 振り付けどおりに振ったときの、打点でのヘッドの中心の高さ（地面から）
+      const p = contactKey.pose;
+      contactY = GAIT.HIP_Y - crouchDrop(p[C.CROUCH]) + p[C.HAND + 1] + p[C.DIR + 1] * RACKET.HEAD_Y;
+    }
+    return {
+      id,
+      keys,
+      pull: opts.pull ? compilePose(opts.pull, keys[pullAt].pose) : null,
+      pullAt,
+      contactY,
+      easeIn: !!opts.easeIn,
     };
-    return group;
+  }
+
+  const READY = compilePose(MOTION.READY, null);
+  const IDLE = compilePose(MOTION.IDLE, null);
+
+  const CLIPS = (() => {
+    const fh = compileKeys(MOTION.FOREHAND.keys, READY);
+    const fhTop = varyKeys(fh, MOTION.FOREHAND.spin.top);
+    const fhSlice = compileKeys(MOTION.FOREHAND_SLICE.keys, READY);
+    const fhPull = MOTION.FOREHAND.pull;
+    const topContact = fhTop.find((k) => k.phi === 1).pose;
+    const fhBuggy = fhTop.filter((k) => k.phi <= 1).concat(compileKeys(MOTION.FOREHAND_BUGGY, topContact));
+
+    const bh2 = compileKeys(MOTION.BACKHAND2.keys, READY);
+    const bh1 = compileKeys(MOTION.BACKHAND1.keys, READY);
+    const bhSlice = compileKeys(MOTION.BACKHAND_SLICE.keys, READY);
+
+    const serve = compileKeys(MOTION.SERVE.keys, READY);
+    const smash = compileKeys(MOTION.SMASH.keys, READY);
+    return {
+      fh: {
+        flat: makeClip('fh:flat', fh, { pull: fhPull }),
+        top: makeClip('fh:top', fhTop, { pull: fhPull }),
+        slice: makeClip('fh:slice', fhSlice),
+        drop: makeClip('fh:drop', varyKeys(fhSlice, MOTION.FOREHAND_SLICE.spin.drop)),
+      },
+      fhBuggy: makeClip('fh:buggy', fhBuggy, { pull: fhPull }),
+      bh2: {
+        flat: makeClip('bh2:flat', bh2, { pull: MOTION.BACKHAND2.pull }),
+        top: makeClip('bh2:top', varyKeys(bh2, MOTION.BACKHAND2.spin.top), { pull: MOTION.BACKHAND2.pull }),
+      },
+      bh1: {
+        flat: makeClip('bh1:flat', bh1, { pull: MOTION.BACKHAND1.pull }),
+        top: makeClip('bh1:top', varyKeys(bh1, MOTION.BACKHAND1.spin.top), { pull: MOTION.BACKHAND1.pull }),
+        slice: makeClip('bh1:slice', bhSlice),
+        drop: makeClip('bh1:drop', varyKeys(bhSlice, MOTION.BACKHAND_SLICE.spin.drop)),
+      },
+      vfh: makeClip('v:fh', compileKeys(MOTION.VOLLEY_FH, READY)),
+      vbh: makeClip('v:bh', compileKeys(MOTION.VOLLEY_BH, READY)),
+      serve: makeClip('serve', serve, {
+        pull: MOTION.SERVE.pull,
+        pullAt: serve.findIndex((k) => k.phi === MOTION.SERVE.PULL_AT),
+        adapt: false,
+      }),
+      smash: makeClip('smash', smash, { pull: MOTION.SMASH.pull, adapt: false, easeIn: true }),
+      jack: makeClip('jack', compileKeys(MOTION.JACK, READY), { adapt: false }),
+      tweener: makeClip('tweener', compileKeys(MOTION.TWEENER, READY), { adapt: false }),
+    };
+  })();
+  const DIVE_REACH = {
+    fh: compilePose(MOTION.DIVE.FH, READY),
+    bh: compilePose(MOTION.DIVE.BH, READY),
   };
 
-  /**
-   * フォアハンドの弧の角度（0=横向き、正=プレイヤー視点で後ろ＝テイクバック、
-   * 負=プレイヤー視点で前＝フォロースルー）をバックハンド用に鏡映しする。+π を足す
-   * （＝原点を中心に180°回す点対称）と前後の向きまで反転してしまい、テイクバックの
-   * はずが前を向き、フォロースルーのはずが後ろを向く、という時間順序が壊れたスイングに
-   * なる。π−angle（＝左右の軸で折り返す線対称）なら前後の向きは保ったまま左右だけ
-   * 入れ替わるので、テイクバック→打点→フォロースルーの流れは崩れない。
-   */
-  function mirrorGroundAngle(angle, backhand) {
-    return backhand ? Math.PI - angle : angle;
+  function catmull(p0, p1, p2, p3, t) {
+    const t2 = t * t;
+    return 0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2
+      + (3 * p1 - p0 - 3 * p2 + p3) * t2 * t);
   }
 
-  /**
-   * 球種（フラット／トップスピン／スライス／ドロップ）ごとの振り付けを返す。
-   * 未知の球種（サーブ用の値など）はフラット扱い。
-   */
-  function spinForm(spin) {
-    return SWING.SPIN_FORM[spin] || SWING.SPIN_FORM.flat;
+  const pulledKey = new Float64Array(CHANNELS);
+  /** i 番目のキー。溜めの対象のキーだけ、溜め量ぶんフル溜めの形へ寄せたもの */
+  function keyPose(clip, i, charge) {
+    const pose = clip.keys[i].pose;
+    if (!clip.pull || i !== clip.pullAt || !(charge > 0)) return pose;
+    const k = Math.min(charge, 1);
+    for (let c = 0; c < CHANNELS; c++) pulledKey[c] = lerp(pose[c], clip.pull[c], k);
+    return pulledKey;
   }
 
-  /**
-   * スイングの残り時間から腕の角度を決める。5種類のポーズを軸を分けて切り替える：
-   * - フォアハンド／バックハンド: rotation.y（横振り）。mirrorGroundAngle() で左右だけを
-   *   鏡映しするので、バックハンドでもテイクバック→打点→フォロースルーが正しい前後の
-   *   向きのまま、体の逆サイドで振られる。さらに球種（state.spin）で振り付けが変わる：
-   *   腕の仰角 rotation.z を下から上へ通せばトップスピン、上から下へ通せばスライス、
-   *   ほぼ水平に通せばフラット（差分は SWING.SPIN_FORM）。横振りの弧と体幹のひねりの
-   *   深さも球種ごとに増減する。
-   * - サーブ: rotation.z（縦振り）。トス中は構え、打った瞬間から真上→前へ振り下ろす。
-   * - スマッシュ: 仰角(rotation.z)と前後の傾き(rotation.x)を同時に動かし、頭の後ろに
-   *   振りかぶった位置から真上（打点）を通って体の前へ振り下ろす（フォア/バックの区別は
-   *   ない）。跳んで打つので、体の浮き・脚のはさみ跳びは applySmashJump() が受け持つ。
-   * - ボレー: フォア/バックと同じ rotation.y だが、テイクバックがほとんどない短いパンチ。
-   * @param {THREE.Group} player
-   * @param {object} state その選手の見た目に関わる状態。ゲーム側の生の state と
-   *   リプレイのコマ（world.js#snapshotPlayer）の両方が同じ形をしている：
-   *   - anim {number} スイングの残り時間（秒）。0 なら構え／トスの姿勢
-   *   - stroke {'forehand'|'backhand'|'serve'|'smash'|'volley-forehand'|'volley-backhand'}
-   *   - prep {'forehand'|'backhand'|'smash'|null} 打つ前のテイクバック。まだ振って
-   *     いない（anim<=0）間、ボールがどちらの打点に来そうかに応じてラケットを引いておく。
-   *     'smash' は高い球を溜めているとき＝頭の後ろに担いだ振りかぶりの構え。
-   *   - spin {'flat'|'top'|'slice'|'drop'} テイクバック中／スイング中の球種。
-   *     グラウンドストロークのフォームだけを切り替える（SWING.SPIN_FORM）。
-   *   - chargeFrac {number} 溜めている間だけ 0〜1 で伸びる値。溜めるほど GROUND_START から
-   *     さらに CHARGE_PULL だけ深くテイクバックし、離した瞬間との落差で「今しっかり
-   *     溜めている」ことが分かるようにする。
-   *   - swingCharge {number} 振り始めた瞬間に固定される溜め量(0〜1)。スイング中（anim>0）は、
-   *     テイクバックが実際にどこまで深く入っていたか（＝chargeFrac の最終値）から弧を
-   *     始めるのに使う。ここを chargeFrac にすると振っている間に charging が false に
-   *     戻って 0 に落ち、テイクバック位置に飛んで見えてしまうため、release() の瞬間に
-   *     固定される swingCharge を使い続ける。
-   * @param {boolean} [tossing] トス中（打つ前）かどうか。サーブの構えを出す
-   */
-  /** 0→1 を滑らかに立ち上げる（両端で速度0）。振り向きのカクつきを消すのに使う */
+  /** 振り付けの φ の位置のポーズを out に書く（キーの間は Catmull-Rom） */
+  function evalClip(clip, phi, charge, out) {
+    const { keys } = clip;
+    const n = keys.length;
+    if (n === 1 || phi <= keys[0].phi) return out.set(keyPose(clip, 0, charge));
+    if (phi >= keys[n - 1].phi) return out.set(keyPose(clip, n - 1, charge));
+    let i = 0;
+    while (phi >= keys[i + 1].phi) i++;
+    const s = (phi - keys[i].phi) / (keys[i + 1].phi - keys[i].phi);
+    const p0 = keyPose(clip, Math.max(i - 1, 0), charge);
+    const p1 = keyPose(clip, i, charge);
+    const p2 = keyPose(clip, i + 1, charge);
+    const p3 = keyPose(clip, Math.min(i + 2, n - 1), charge);
+    for (let c = 0; c < CHANNELS; c++) out[c] = catmull(p0[c], p1[c], p2[c], p3[c], s);
+    return out;
+  }
+
+  /* ------------------------------------------------------------ 時間軸（φ）を決める */
+
+  /** 0→1 を滑らかに立ち上げる（両端で速度0） */
   function ease(t) {
     const x = clamp(t, 0, 1);
     return x * x * (3 - 2 * x);
+  }
+
+  /** 0→1 を「出だしが速く、終わりがゆっくり」で進める */
+  function easeOut(t) {
+    const x = clamp(t, 0, 1);
+    return 1 - (1 - x) * (1 - x);
   }
 
   /** ツイーナーのモーションの進行度（0＝打点、1＝振り終わり）。それ以外は null */
@@ -220,12 +426,6 @@
     return Math.PI * ease(frac);
   }
 
-  /** 0→1 を「出だしが速く、終わりがゆっくり」で進める。飛び込みの踏み切りに使う */
-  function easeOut(t) {
-    const x = clamp(t, 0, 1);
-    return 1 - (1 - x) * (1 - x);
-  }
-
   /**
    * 飛びつきボレーのモーションの進行度（0＝打点、1＝起き上がり終わり）。それ以外は null。
    * 空振り（missSwing）は技が乗っていてもボレーの形にならないので、ここでも拾わない。
@@ -238,7 +438,7 @@
   }
 
   /**
-   * 飛びつきボレーの体の形。腕（poseArm）と体（applyDiveLean）が同じ形を見るよう、
+   * 飛びつきボレーの体の形。腕（chooseMotion）と体（applyDiveLean）が同じ形を見るよう、
    * ここ1か所で決める。
    * - lean: 倒れ込み(rad)／lift: 足元の高さ(m)
    * - pose: 飛び込みのポーズの効き(0〜1)。0 なら歩行・スイングの形のまま
@@ -263,205 +463,13 @@
   }
 
   /**
-   * サーブの打点で、ラケット側の肩を上げて外へ出す（0＝ふだんの位置、1＝上げきり）。
-   * 腕の付け根はふだん胸の中心にあるので、真上へ伸ばしても頭の高さ程度にしか届かない。
-   * 実際のサーブでも打つ側の肩は大きく持ち上がる。位置は鏡映し（mirrorHanded）されない
-   * ので、ここで利き手の側（HAND）へ直接出す。
-   */
-  function raiseShoulder(arm, amount) {
-    arm.position.set(
-      HAND * SWING.SERVE_SHOULDER_X * amount,
-      SHOULDER_Y + SWING.SERVE_SHOULDER_UP * amount,
-      0,
-    );
-  }
-
-  function poseArm(player, state, tossing) {
-    const { anim, stroke, prep, spin, chargeFrac, swingCharge } = state;
-    const arm = player.userData.arm;
-    const torso = player.userData.gait.torso;
-    // ツイーナー（股抜き）の間だけ、体ごと相手に背を向ける。ラケット腕はモデルの
-    // ローカル +x 側に作られているので、向きを反転させればそのまま「背中側の球を
-    // 股の下から打つ」形になる（普段の向きは userData.facing に控えてある）。
-    player.rotation.y = (player.userData.facing || 0) + tweenerTurn(anim, stroke);
-    raiseShoulder(arm, 0); // 肩を上げるのはサーブの打点まわりだけ（下の 'serve' 系で上書き）
-
-    if (anim <= 0) {
-      const rise = serveRise(state);
-      if (rise !== null) {
-        // サーブで跳び上がっている間：トスの構え（後ろへ引いた腕）から、頂点（＝打点）で
-        // 真上・前へ伸ばしきった形へ振り上げる。打った瞬間からは下の 'serve' の振り下ろし。
-        const up = ease(rise);
-        raiseShoulder(arm, up);
-        arm.rotation.y = 0;
-        arm.rotation.z = lerp(SWING.SERVE_READY_Z, SWING.SERVE_START_Z, up);
-        arm.rotation.x = SWING.SERVE_REACH_X * up;
-      } else if (tossing) {
-        arm.rotation.y = 0;
-        arm.rotation.z = SWING.SERVE_READY_Z;
-        arm.rotation.x = 0;
-      } else if (prep === 'smash') {
-        // 高い球を溜めている間は、頭の後ろにラケットを担いだ振りかぶりの構え。
-        // 溜めるほど深く担いで、離した瞬間の振り下ろしとの落差を大きくする。
-        arm.rotation.y = 0;
-        arm.rotation.z = SWING.SMASH_READY_Z;
-        arm.rotation.x = SWING.SMASH_READY_X * (1 + (chargeFrac || 0) * 0.35);
-      } else if (prep) {
-        // 球種ぶんの差分（START）を足したところからテイクバックし、ラケットの高さ
-        // （Z_READY）も球種で変える＝振り出す前に何を打とうとしているかが分かる。
-        const form = spinForm(spin);
-        const pullBack = SWING.GROUND_START + form.START + (chargeFrac || 0) * SWING.CHARGE_PULL;
-        arm.rotation.y = mirrorGroundAngle(pullBack, prep === 'backhand');
-        arm.rotation.z = form.Z_READY;
-        arm.rotation.x = 0;
-      } else {
-        arm.rotation.y = SWING.REST_Y;
-        arm.rotation.z = 0;
-        arm.rotation.x = 0;
-      }
-      torso.rotation.y = 0;
-      return;
-    }
-
-    // スマッシュとツイーナーはモーションが長い（PLAYER.SMASH_ANIM / SPECIAL.TWEENER.ANIM）
-    // ので、進行度もその長さで割る。他のストロークは従来どおり ARM_SPAN 基準
-    // （＝既存の振り付けを変えない）。
-    const span = stroke === 'smash' ? PLAYER.SMASH_ANIM
-      : stroke === 'tweener' ? SPECIAL.TWEENER.ANIM
-        : stroke === 'jackknife' ? SPECIAL.JACK.ANIM
-          : ARM_SPAN;
-    const progress = clamp((span - anim) / span, 0, 1);
-
-    if (stroke === 'serve') {
-      raiseShoulder(arm, 1 - ease(progress)); // 打点で上げきった肩を、振り下ろしながら戻す
-      arm.rotation.y = 0;
-      arm.rotation.z = SWING.SERVE_START_Z + progress * (SWING.SERVE_FOLLOW_Z - SWING.SERVE_START_Z);
-      // 打点では前へ倒して伸ばしきっている（トスは体の前に上げる）。振り下ろしながら戻す。
-      arm.rotation.x = SWING.SERVE_REACH_X * (1 - progress);
-      torso.rotation.y = 0;
-      return;
-    }
-
-    if (stroke === 'smash') {
-      // 仰角と前後の傾きを同時に動かして、真上（打点）から体の前へ振り下ろす弧を作る。
-      // 振り始め（打点）を長く見せたいので、進行度を後半ほど速く進む曲線に乗せる
-      // （＝打った瞬間の「腕が上がりきった絵」が一瞬でも読み取れる）。
-      const swing = progress * progress;
-      arm.rotation.y = 0;
-      arm.rotation.z = lerp(SWING.SMASH_START_Z, SWING.SMASH_FOLLOW_Z, swing);
-      arm.rotation.x = lerp(SWING.SMASH_START_X, SWING.SMASH_FOLLOW_X, swing);
-      torso.rotation.y = 0;
-      return;
-    }
-
-    if (stroke === 'tweener') {
-      // ツイーナー（股抜き）。体は相手に背を向けたまま、ラケットだけを股の下へ落として
-      // 下から上へ振り抜く：横振り(rotation.y)はほぼ使わず、仰角(rotation.z)を
-      // 真下から前方へ通す。前後の傾き(rotation.x)で腕を体の内側（股の下）へ入れる。
-      const S = SWING.TWEENER;
-      arm.rotation.y = S.Y;
-      arm.rotation.z = lerp(S.Z_START, S.Z_END, progress);
-      arm.rotation.x = S.X;
-      torso.rotation.y = 0;
-      return;
-    }
-
-    if (stroke === 'jackknife') {
-      // ジャックナイフ。高い打点をフラットのバックハンドで叩くので、横振り(rotation.y)は
-      // グラウンドストロークと同じ系統のまま、仰角(rotation.z)を肩の高さ（Z_START）から
-      // 体の前（Z_END）へ下ろす＝上から叩き込む弧になる。必ずバックハンド側に振る。
-      // **進行度0がそのまま打点**（Y_START/Z_START）で、そこから振り抜く：跳躍も
-      // 打点が頂点なので、1コマ目が「跳んだ一番高いところで球を捉えた絵」になる。
-      const J = SWING.JACK;
-      arm.rotation.y = mirrorGroundAngle(lerp(J.Y_START, J.Y_END, progress), true);
-      arm.rotation.z = lerp(J.Z_START, J.Z_END, progress);
-      arm.rotation.x = 0;
-      // 跳びながら体をひねって振り抜く（通常のバックハンドより深くひねる）
-      torso.rotation.y = -J.TORSO_TWIST * Math.sin(progress * Math.PI);
-      return;
-    }
-
-    const dive = diveProgress(state);
-    if (dive !== null) {
-      // 飛びつきボレー。打点では普通のボレーと同じパンチ（通常のスイングの速さで振る）を
-      // 出しつつ、腕を頭の先の方向（ARM_REACH_Z）へ伸ばしていく＝体が倒れきったとき、
-      // ラケットが地面と平行に球の方へ伸びている。起き上がりでは構えの位置へ戻す。
-      const D = SWING.DIVE;
-      const { pose } = diveShape(dive);
-      const punch = clamp(dive * SPECIAL.DIVE.RECOVER / ARM_SPAN, 0, 1);
-      const base = dive < D.RISE ? SWING.VOLLEY_START + punch * SWING.VOLLEY_SWEEP : SWING.REST_Y;
-      // 伸ばしきった形は横振り 0（体の真横）から仰角・前傾をかけたもの。バックハンドは
-      // mirrorGroundAngle() で体の逆サイドへ回る（仰角・前傾はそのままで左右対称になる）。
-      arm.rotation.y = mirrorGroundAngle(lerp(base, 0, pose), stroke === 'volley-backhand');
-      arm.rotation.z = D.ARM_REACH_Z * pose;
-      arm.rotation.x = D.ARM_REACH_X * pose;
-      torso.rotation.y = 0;
-      return;
-    }
-
-    if (stroke === 'volley-forehand' || stroke === 'volley-backhand') {
-      // グラウンドストロークと同じ横振り(rotation.y)の系統だが、テイクバックをほとんど
-      // 取らない短いパンチ（VOLLEY_START/SWEEP は GROUND_START/SWEEP よりずっと小さい）。
-      const backhandVolley = stroke === 'volley-backhand';
-      arm.rotation.y = mirrorGroundAngle(
-        SWING.VOLLEY_START + progress * SWING.VOLLEY_SWEEP, backhandVolley,
-      );
-      arm.rotation.z = 0;
-      arm.rotation.x = 0;
-      // 通常のグラウンドストロークより体幹のひねりも控えめ（コンパクトな動作のため）
-      torso.rotation.y = (backhandVolley ? -1 : 1) * SWING.TORSO_TWIST * 0.5 * Math.sin(progress * Math.PI);
-      return;
-    }
-
-    const backhand = stroke === 'backhand';
-    const form = spinForm(spin);
-    // テイクバックが溜め量ぶん深く入っていた分だけ、始点をそこに合わせて弧を広げる
-    // （終点＝フォロースルーは GROUND_START+GROUND_SWEEP のまま揃える）。
-    // 球種ぶんの差分（START/SWEEP）は溜めとは独立に足す＝どの球種でも溜めの効き方は同じ。
-    const start = SWING.GROUND_START + form.START + (swingCharge || 0) * SWING.CHARGE_PULL;
-    const sweep = SWING.GROUND_SWEEP + form.SWEEP - (swingCharge || 0) * SWING.CHARGE_PULL;
-    arm.rotation.y = mirrorGroundAngle(start + progress * sweep, backhand);
-    // 腕の仰角。トップスピンは下から上へ、スライスは上から下へ、フラットはほぼ水平に
-    // 通る（左右は mirrorGroundAngle() が反転させるが、上下はバックハンドでも同じ）。
-    arm.rotation.z = lerp(form.Z_START, form.Z_END, progress);
-    arm.rotation.x = 0;
-    // sin カーブでひねって戻す（構え→打点→フォロースルーで元の向きに近づく）。
-    // ひねりの深さも球種で変える（大きく擦り上げるトップスピンがいちばん深い）。
-    torso.rotation.y = (backhand ? -1 : 1) * SWING.TORSO_TWIST * form.TWIST
-      * Math.sin(progress * Math.PI);
-  }
-
-  /**
-   * 利き手に合わせて左右を鏡映しする（HAND 参照）。x で鏡映しすると、y 軸まわりと
-   * z 軸まわりの回転だけ符号が反転し、x 軸まわりの傾きは変わらない。ポーズを作る側
-   * （poseArm）は「腕が +x 側」前提のままでよく、左右の違いはここ1箇所に閉じる。
-   */
-  function mirrorHanded(player) {
-    if (HAND > 0) return;
-    const arm = player.userData.arm;
-    arm.rotation.y *= -1;
-    arm.rotation.z *= -1;
-    player.userData.gait.torso.rotation.y *= -1;
-  }
-
-  /**
-   * スイング（と構え）のポーズを1人ぶん反映する。振り付けそのものは poseArm()、
-   * 利き手ぶんの左右反転は mirrorHanded() が受け持つ。
-   * 引数は poseArm() のドキュメントを参照。
-   */
-  scene3d.setSwingPose = function setSwingPose(player, state, tossing) {
-    poseArm(player, state, tossing);
-    mirrorHanded(player);
-  };
-
-  /**
    * 跳躍の進み具合(0〜1)。0＝踏み切り、1＝着地。跳んでいなければ null。
    * **打球のモーション（anim）とは別の時計**（state.leap）で動く：anim は「当たった
    * 瞬間」からしか始められないので、そこに跳躍を乗せると跳ぶのと打つのが同時に見える。
    * leap は game.js#tickLeap が「もうすぐ球が届く」ところで、まだ離していなくても
    * 始める＝当たるころには頂点にいて、空中で振り始める絵になる。
    * @param {object} state その選手の見た目に関わる状態
-   * @param {'smash'|'jackknife'} kind この関数が受け持つ跳び方
+   * @param {'smash'|'jackknife'|'serve'} kind この関数が受け持つ跳び方
    */
   function leapProgress(state, kind) {
     const leap = state.leap;
@@ -470,16 +478,523 @@
     return clamp((leap.span - leap.t) / leap.span, 0, 1);
   }
 
-  /**
-   * サーブの跳躍の上昇の進み具合(0〜1)。1 で頂点＝球に当たる瞬間。跳んでいなければ null。
-   * 腕の振り上げ（poseArm）はこれに合わせる＝頂点でラケットが伸びきる。
-   */
-  function serveRise(state) {
-    const u = leapProgress(state, 'serve');
+  /** 跳躍の上昇の進み具合(0〜1)。1 で頂点＝球に当たる瞬間。跳んでいなければ null */
+  function leapRise(state, kind) {
+    const u = leapProgress(state, kind);
     if (u === null) return null;
-    const rise = state.leap.rise;
+    const rise = kind === 'serve' ? state.leap.rise
+      : kind === 'smash' ? PLAYER.SMASH_LEAP_RISE
+        : SPECIAL.JACK.LEAP_RISE;
     return rise > 0 ? clamp(u / rise, 0, 1) : 1;
   }
+
+  /**
+   * ボールがこの選手の打点（体の CONTACT_AHEAD 前）に届くまでの見積もり。相手が打った
+   * 球が自分のほうへ向かっていなければ null。
+   * @returns {{tc:number, x:number, y:number, bounceFirst:boolean}|null}
+   *   tc＝届くまでの秒数（負なら通り過ぎた）、x＝体の横を通るときの横の位置（モデルの
+   *   ローカル x。game.js#classifyStroke と同じく体の位置の面で測る）、y＝届くときの高さ、
+   *   bounceFirst＝それまでに一度弾むか
+   */
+  function ballApproach(player, state, ball) {
+    const team = player.userData.team;
+    if (!ball || !ball.live || !team || ball.last === team) return null;
+    const f = player.userData.facing || 0;
+    const c = Math.cos(f);
+    const s = Math.sin(f);
+    const dx = ball.x - state.x;
+    const dz = ball.z - state.z;
+    const vx = ball.vx || 0;
+    const vz = ball.vz || 0;
+    const towards = vx * s + vz * c; // モデルのローカル +z（前）向きの速さ
+    if (!(towards < -1)) return null;
+    const ahead = dx * s + dz * c;
+    const tc = (ahead - MOTION.CONTACT_AHEAD) / -towards;
+    if (tc < -MOTION.PASS_T) return null;
+    const t = Math.max(tc, 0);
+    const vy = ball.vy || 0;
+    let y = ball.y + vy * t - 0.5 * G * t * t;
+    let bounceFirst = false;
+    if (y < PHYSICS.BALL_R) {
+      // 先に一度弾む。反発係数で跳ね返した山なりの、届くときの高さ（回転は無視した目安）
+      bounceFirst = true;
+      const tb = (vy + Math.sqrt(Math.max(vy * vy + 2 * G * (ball.y - PHYSICS.BALL_R), 0))) / G;
+      const up = (G * tb - vy) * PHYSICS.RESTITUTION;
+      const after = t - tb;
+      y = PHYSICS.BALL_R + up * after - 0.5 * G * after * after;
+    }
+    return {
+      tc,
+      x: dx * c - dz * s + (vx * c - vz * s) * Math.max(ahead / -towards, 0),
+      y: Math.max(y, PHYSICS.BALL_R),
+      bounceFirst,
+    };
+  }
+
+  /** フォワードスイングの進み具合(0〜1)。届く FWD_T 秒前から、届いた瞬間に1 */
+  function forwardAmount(tc) {
+    return tc >= 0 ? clamp(1 - tc / MOTION.FWD_T, 0, 1) : clamp(1 + tc / MOTION.PASS_T, 0, 1);
+  }
+
+  /** ネット際にいてノーバウンドで返す位置か（game.js#naturalStroke と同じ線引き） */
+  function atNet(player, state) {
+    return player.userData.who === 'you'
+      ? Math.abs(state.z) < COURT.SERVICE
+      : Math.abs(state.z) <= PLAYER.VOLLEY_Z;
+  }
+
+  function backhandClip(spin, style) {
+    // 両手打ちの選手もスライス・ドロップは片手（実際の両手打ちの選手と同じ）
+    if (spin === 'slice' || spin === 'drop') return CLIPS.bh1[spin];
+    const set = style === 'two' ? CLIPS.bh2 : CLIPS.bh1;
+    return set[spin] || set.flat;
+  }
+
+  /** 振っている最中（anim>0）の振り付け */
+  function strokeClip(player, state) {
+    switch (state.stroke) {
+      case 'serve': return CLIPS.serve;
+      case 'smash': return CLIPS.smash;
+      case 'tweener': return CLIPS.tweener;
+      case 'jackknife': return CLIPS.jack;
+      case 'volley-forehand': return CLIPS.vfh;
+      case 'volley-backhand': return CLIPS.vbh;
+      case 'backhand': return backhandClip(state.spin, player.userData.backhand);
+      default:
+        return state.special === 'buggyWhip' ? CLIPS.fhBuggy : (CLIPS.fh[state.spin] || CLIPS.fh.flat);
+    }
+  }
+
+  /**
+   * 振る前（anim<=0）に何を構えるか。ゲーム側のテイクバック（state.prep）があればそれ、
+   * 人間が溜めを離して球を待っているなら溜めていた向き、CPU/AI はボールが届く少し前から
+   * 横向きになる（MOTION.UNIT_TURN_T）。committed＝もう振ると決まっている（＝ボールが
+   * 届くのに合わせてフォワードスイングを始めてよい）。人間は離した後だけ：溜めている間や
+   * 何も押していない間に勝手に振り出すと、操作と違う絵になる。
+   */
+  function prepIntent(player, state, ctx) {
+    const ud = player.userData;
+    const isYou = ud.who === 'you';
+    const app = ballApproach(player, state, ctx.ball);
+    const classify = (a) => (a.x * HAND > 0 ? 'forehand' : 'backhand');
+    let side = state.prep;
+    const committed = isYou ? state.swing > 0 : true;
+    if (!side && isYou && committed) side = state.chargeStroke || (app && classify(app));
+    if (!side && !isYou && app && app.tc <= MOTION.UNIT_TURN_T
+      && Math.abs(app.x) >= MOTION.UNIT_TURN_MIN_X && Math.abs(app.x) <= MOTION.UNIT_TURN_REACH) {
+      side = classify(app);
+    }
+    if (!side) return null;
+    const swingsAt = committed && app && (isYou || state.prep || Math.abs(app.x) <= MOTION.FWD_REACH);
+    return {
+      side,
+      volley: side !== 'smash' && (app
+        ? ctx.ball.bounces === 0 && !app.bounceFirst && atNet(player, state)
+        : atNet(player, state)),
+      fwd: swingsAt ? forwardAmount(app.tc) : 0,
+      height: app ? app.y : null,
+      // 人間：溜めている間は押している球種、離した後は溜めていた球種（離すと state.spin は
+      // 一旦 'flat' に戻るので chargeSpin を見る）。CPU/AI は打つまで分からない＝フラット。
+      spin: isYou && !state.charging && state.swing > 0 ? (state.chargeSpin || state.spin) : state.spin,
+    };
+  }
+
+  /**
+   * 打点のまわりだけ、振り付けの打点の高さ（clip.contactY）と実際の球の高さの差を手に足す。
+   * 低い球は膝を沈めて拾う（沈めたぶん体幹ごと下がるので、そのぶんは手を下げない）。
+   */
+  function adaptHeight(out, clip, phi, ballY) {
+    if (ballY === null || ballY === undefined || clip.contactY === null) return;
+    const w = phi < 1
+      ? ease((phi - 0.3) / (MOTION.FWD_MAX - 0.3))
+      : 1 - ease((phi - 1.15) / 0.45);
+    if (w <= 0) return;
+    const H = MOTION.CONTACT_H;
+    const dh = clamp(ballY - clip.contactY, H.MIN, H.MAX) * w;
+    const crouch0 = clamp(out[C.CROUCH], 0, 1);
+    const crouch1 = clamp(crouch0 + Math.max(0, -dh) * H.CROUCH, 0, 1);
+    out[C.CROUCH] = crouch1;
+    out[C.HAND + 1] += dh + (crouchDrop(crouch1) - crouchDrop(crouch0));
+  }
+
+  /** 打った後（anim>0）の φ。FINISH_AT まで進んだら振り終わりの形を保つ */
+  function afterContactPhi(clip, progress) {
+    const p = clamp(progress / MOTION.FINISH_AT, 0, 1);
+    // スマッシュは打点（腕が伸びきった絵）を長めに見せる（後半ほど速く振り下ろす）
+    return 1 + (clip.easeIn ? p * p : easeOut(p));
+  }
+
+  /**
+   * いまの状態から目標のポーズを out に書き、その出どころ（振り付けの名前）を返す。
+   * 名前が変わったら setSwingPose がクロスフェードする。
+   * @returns {{key:string, kind:'swing'|'prep'|'rest'}}
+   */
+  function chooseMotion(player, state, ctx, out) {
+    const ud = player.userData;
+    const mem = ud.motion;
+    const { anim, stroke } = state;
+
+    const dive = diveProgress(state);
+    if (dive !== null) {
+      // 飛びつきボレー。打点では普通のボレーのパンチを出しつつ、伏せていく間に腕を頭の先へ
+      // 伸ばす（体ごと倒すので、伸ばした腕が地面と平行に球のほうを向く）。起き上がりでは
+      // 構えへ戻す。
+      const backhand = stroke === 'volley-backhand';
+      const { pose } = diveShape(dive);
+      if (dive < SWING.DIVE.RISE) {
+        const punch = clamp(dive * SPECIAL.DIVE.RECOVER / ARM_SPAN, 0, 1);
+        evalClip(backhand ? CLIPS.vbh : CLIPS.vfh, 1 + punch, 0, out);
+      } else {
+        out.set(READY);
+      }
+      const reach = DIVE_REACH[backhand ? 'bh' : 'fh'];
+      for (let c = 0; c < CHANNELS; c++) out[c] = lerp(out[c], reach[c], pose);
+      return { key: 'dive', kind: 'swing' };
+    }
+
+    if (anim > 0) {
+      const clip = strokeClip(player, state);
+      // anim を入れた長さ（game.js#hit／serve()）で割る＝当たった瞬間がちょうど φ=1
+      const span = stroke === 'smash' ? PLAYER.SMASH_ANIM
+        : stroke === 'tweener' ? SPECIAL.TWEENER.ANIM
+          : stroke === 'jackknife' ? SPECIAL.JACK.ANIM
+            : stroke === 'serve' ? PLAYER.SERVE_ANIM
+              : PLAYER.SWING_ANIM;
+      const phi = afterContactPhi(clip, (span - anim) / span);
+      evalClip(clip, phi, state.swingCharge || 0, out);
+      adaptHeight(out, clip, phi, mem.contactY);
+      return { key: clip.id, kind: 'swing' };
+    }
+
+    if (ctx.serve) {
+      // サーブ：構え → トス（両腕を下げてから、逆手を上げ、ラケットを担ぐ）→ 跳んで打点へ。
+      // トス中の進み具合はボールの上向きの速さ（＝トスを上げてからの時間）で読む。
+      const rise = leapRise(state, 'serve');
+      let phi = -1;
+      if (rise !== null) phi = rise;
+      else if (ctx.serve === 'toss') phi = -1 + clamp(1 - (ctx.ball.vy || 0) / TOSS_VY, 0, 1);
+      evalClip(CLIPS.serve, phi, state.chargeFrac || 0, out);
+      return { key: 'serve', kind: 'prep' };
+    }
+
+    // 跳んで打つ1打は、跳び上がる間にラケットを振り出す（人間は当たる前から跳んでいる）。
+    // 振り終わった後もまだ宙にいる（跳躍の時計のほうが長い）ときは、もう打ったので戻さない。
+    const smashRise = mem.leapSwung ? null : leapRise(state, 'smash');
+    const jackRise = mem.leapSwung ? null : leapRise(state, 'jackknife');
+    if (jackRise !== null || smashRise !== null) {
+      const clip = jackRise !== null ? CLIPS.jack : CLIPS.smash;
+      evalClip(clip, MOTION.FWD_MAX * ease(jackRise !== null ? jackRise : smashRise), state.chargeFrac || 0, out);
+      return { key: clip.id, kind: 'prep' };
+    }
+
+    const intent = prepIntent(player, state, ctx);
+    if (intent) {
+      const clip = intent.side === 'smash' ? CLIPS.smash
+        : intent.volley ? (intent.side === 'forehand' ? CLIPS.vfh : CLIPS.vbh)
+          : intent.side === 'forehand' ? (CLIPS.fh[intent.spin] || CLIPS.fh.flat)
+            : backhandClip(intent.spin, ud.backhand);
+      const phi = MOTION.FWD_MAX * ease(intent.fwd);
+      // 溜めている間は溜め量ぶん、離した後は離した瞬間の溜め量ぶん深く引いたまま
+      const charge = state.chargeFrac || (state.swing > 0 ? state.swingCharge : 0) || 0;
+      evalClip(clip, phi, charge, out);
+      adaptHeight(out, clip, phi, intent.height);
+      return { key: clip.id, kind: 'prep' };
+    }
+
+    const ready = ctx.phase === 'rally' || ctx.phase === 'serve';
+    out.set(ready ? READY : IDLE);
+    return { key: ready ? 'ready' : 'idle', kind: 'rest' };
+  }
+
+  function blendTime(from, to) {
+    const B = MOTION.BLEND;
+    if (to === 'swing') return B.TO_SWING;
+    if (to === 'prep') return B.TO_PREP;
+    if (from === 'swing' || (from === 'rest' && to === 'rest')) return B.FROM_SWING;
+    return B.DEFAULT;
+  }
+
+  /**
+   * スイング（と構え）のポーズを1人ぶん決める。腕のIKは finishPose() で解く。
+   * @param {THREE.Group} player
+   * @param {object} state その選手の見た目に関わる状態。ゲーム側の生の state と
+   *   リプレイのコマ（world.js#snapshotPlayer）の両方が同じ形をしている：
+   *   - anim {number} スイングの残り時間（秒）。0 なら構え
+   *   - stroke {'forehand'|'backhand'|'serve'|'smash'|'volley-forehand'|'volley-backhand'|'tweener'|'jackknife'}
+   *   - prep {'forehand'|'backhand'|'smash'|null} 打つ前のテイクバック（game.js#updatePrep）
+   *   - spin {'flat'|'top'|'slice'|'drop'} テイクバック中／スイング中の球種
+   *   - chargeFrac {number} 溜めている間だけ 0〜1 で伸びる値。溜めるほど深く引く
+   *   - swingCharge {number} 振り始めた瞬間に固定される溜め量(0〜1)
+   *   - swing / chargeStroke / chargeSpin（人間だけ）溜めを離してから当たるまでの状態
+   *   - leap / special 跳躍の時計と必殺技
+   * @param {{dt:number, ball:object, phase:string, serve:'hold'|'toss'|null}} ctx
+   *   ball＝ボール（位置・速度・live・last・bounces）、phase＝試合の局面、
+   *   serve＝この選手がサーブを待っている（'hold'）／トス中（'toss'）か
+   */
+  scene3d.setSwingPose = function setSwingPose(player, state, ctx) {
+    const ud = player.userData;
+    const mem = ud.motion;
+    // ツイーナー（股抜き）の間だけ、体ごと相手に背を向ける（普段の向きは userData.facing）
+    player.rotation.y = (ud.facing || 0) + tweenerTurn(state.anim, state.stroke);
+
+    // 新しい1打が始まった（当たった）瞬間の球の高さを覚えておく（打ち終わりまで打点の
+    // 高さに手を合わせるのに使う。球はもう飛んでいってしまうので、その瞬間に控える）
+    const newSwing = state.anim > 0 && (mem.lastAnim <= 0 || state.anim > mem.lastAnim + 1e-4);
+    if (newSwing) mem.contactY = ctx.ball ? ctx.ball.y : null;
+    mem.lastAnim = state.anim;
+    // この跳躍の間にもう振ったか（跳んで打つ1打の、打つ前の振り出しを出し直さないため）
+    if (!state.leap) mem.leapSwung = false;
+    else if (state.anim > 0) mem.leapSwung = true;
+
+    const pick = chooseMotion(player, state, ctx, mem.target);
+    // 振り付けが変わったら、いま見えている形から寄せる。振っている途中に次の1打が
+    // 始まったとき（ボレーの打ち合いなど）も、同じ振り付けの頭へ飛ぶので寄せる。
+    if (pick.key !== mem.key || (newSwing && mem.kind === 'swing')) {
+      mem.from.set(mem.pose);
+      mem.t = 0;
+      mem.dur = blendTime(mem.kind, pick.kind);
+      mem.key = pick.key;
+    }
+    mem.kind = pick.kind;
+    mem.t += ctx.dt || 0;
+    const k = mem.dur > 0 ? ease(mem.t / mem.dur) : 1;
+    for (let c = 0; c < CHANNELS; c++) mem.pose[c] = lerp(mem.from[c], mem.target[c], k);
+
+    // 体幹のひねりと左右の傾き（前傾 rotation.x は setGaitPose が歩行の前傾と足して入れる）。
+    // 頭はひねりの一部を戻す＝胴を回しても顔はボールのほうを見ている。
+    const rig = ud.rig;
+    rig.torso.rotation.y = HAND * mem.pose[C.TWIST];
+    rig.torso.rotation.z = HAND * mem.pose[C.BEND];
+    rig.head.rotation.y = -HAND * mem.pose[C.TWIST] * RIG.HEAD_FOLLOW;
+  };
+
+  /* ------------------------------------------------------------ IK */
+
+  const _d = new THREE.Vector3();
+  const _p = new THREE.Vector3();
+  const _u = new THREE.Vector3();
+  const _f = new THREE.Vector3();
+  const _n = new THREE.Vector3();
+  const _x = new THREE.Vector3();
+  const _y = new THREE.Vector3();
+  const _z = new THREE.Vector3();
+  const _elbow = new THREE.Vector3();
+  const _m = new THREE.Matrix4();
+
+  /** 骨（ローカル −y 方向へ伸びる）を、向き along・回転軸 axis（ローカル x）に合わせる */
+  function boneQuat(axis, along, out) {
+    _y.copy(along).negate();
+    _z.crossVectors(axis, _y);
+    _m.makeBasis(axis, _y, _z);
+    return out.setFromRotationMatrix(_m);
+  }
+
+  /** ラケット（−y がヘッド、+z が面）を、ヘッドの向き dir・面の向き face に合わせる */
+  function racketQuat(dir, face, out) {
+    _y.copy(dir).negate();
+    _z.copy(face).addScaledVector(dir, -face.dot(dir));
+    if (_z.lengthSq() < 1e-8) _z.set(dir.y, -dir.x, 0); // 面の向きがヘッドと同じ向きなら適当な直交方向
+    if (_z.lengthSq() < 1e-8) _z.set(0, dir.z, -dir.y);
+    _z.normalize();
+    _x.crossVectors(_y, _z);
+    _m.makeBasis(_x, _y, _z);
+    return out.setFromRotationMatrix(_m);
+  }
+
+  /**
+   * 2関節のIK。肩（固定）から target へ手を伸ばし、肘を pole の向きへ張り出す。
+   * 届かない目標なら腕を伸ばしきってその方向を指す。座標はすべて体幹ローカル。
+   * @returns {THREE.Vector3} 実際に手が届いた位置（arm.reached）
+   */
+  function solveArm(arm, target, pole) {
+    const a = RIG.UPPER;
+    const b = RIG.FORE;
+    const S = arm.shoulder.position;
+    _d.subVectors(target, S);
+    let len = _d.length();
+    if (len < 1e-6) _d.set(0, -1, 0);
+    else _d.divideScalar(len);
+    len = clamp(len, Math.abs(a - b) + 0.02, a + b - 1e-4);
+    // ポールのうち、肩→目標の向きと直交する成分＝肘が張り出す向き
+    _p.copy(pole).addScaledVector(_d, -pole.dot(_d));
+    if (_p.lengthSq() < 1e-8) _p.set(0, 0, -1).addScaledVector(_d, _d.z);
+    _p.normalize();
+    const cosA = clamp((a * a + len * len - b * b) / (2 * a * len), -1, 1);
+    _u.copy(_d).multiplyScalar(cosA).addScaledVector(_p, Math.sqrt(1 - cosA * cosA)); // 上腕の向き
+    _elbow.copy(S).addScaledVector(_u, a);
+    arm.reached.copy(S).addScaledVector(_d, len);
+    _f.subVectors(arm.reached, _elbow).normalize(); // 前腕の向き
+    _n.crossVectors(_d, _p).normalize();            // 腕を曲げる面の法線（肘はこの軸だけで曲がる）
+    boneQuat(_n, _u, arm.upperQ);
+    boneQuat(_n, _f, arm.foreQ);
+    arm.shoulder.quaternion.copy(arm.upperQ);
+    arm.elbow.quaternion.copy(arm.upperQ).invert().multiply(arm.foreQ);
+    return arm.reached;
+  }
+
+  const _qTorso = new THREE.Quaternion();
+  const _qHand = new THREE.Quaternion();
+  const _euler = new THREE.Euler();
+  const _hand = new THREE.Vector3();
+  const _dir = new THREE.Vector3();
+  const _face = new THREE.Vector3();
+  const _pole = new THREE.Vector3();
+  const _off = new THREE.Vector3();
+  const _offPole = new THREE.Vector3();
+  const _tmp = new THREE.Vector3();
+  const runOff = [0, 0, 0];
+
+  /** MOTION の座標（+x＝ラケット側、ひねる前）の点・向きを、体幹ローカルへ移す */
+  function toTorso(pose, at, out) {
+    return out.set(HAND * pose[at], pose[at + 1], pose[at + 2]).applyQuaternion(_qTorso);
+  }
+
+  /**
+   * 腕のIKと足首。歩行・跳躍の上書き（setGaitPose・apply*）がすべて済んでから呼ぶ。
+   * @param {THREE.Group} player
+   * @param {{x:number, y:number, z:number}|null} ball トス・スマッシュで逆手が追うボール
+   */
+  scene3d.finishPose = function finishPose(player, ball) {
+    const ud = player.userData;
+    const { rig, gait } = ud;
+    const mem = ud.motion;
+    const pose = mem.pose;
+
+    // 足首：膝を曲げても足裏を地面と平行に保つ（走っている間は蹴り出しが見えるよう弱める）
+    const flat = lerp(MOTION.ANKLE_FLAT, MOTION.ANKLE_FLAT_RUN, gait.blend);
+    gait.legs.forEach(({ hip, knee, ankle }) => {
+      ankle.rotation.x = -(hip.rotation.x + knee.rotation.x) * flat;
+    });
+
+    // MOTION の座標は「ひねる前」なので、体幹のひねり・傾きを打ち消して体幹ローカルへ移す
+    _euler.set(0, HAND * pose[C.TWIST], HAND * pose[C.BEND], 'XYZ');
+    _qTorso.setFromEuler(_euler).invert();
+    toTorso(pose, C.HAND, _hand);
+    toTorso(pose, C.DIR, _dir).normalize();
+    toTorso(pose, C.FACE, _face);
+    toTorso(pose, C.ELBOW, _pole);
+    // 構え・ポイント間に走るときは、ラケットを持つ手も前後に振る
+    const run = mem.kind === 'rest' ? gait.blend : 0;
+    _hand.z -= GAIT.ARM_SWING * 0.5 * Math.sin(gait.phase) * run;
+
+    const racketArm = rig.racket;
+    const reached = solveArm(racketArm, _hand, _pole);
+    racketQuat(_dir, _face, _qHand);
+    racketArm.hand.quaternion.copy(racketArm.foreQ).invert().multiply(_qHand);
+
+    // 逆手：自由な位置・グリップ・スロート・ボールを重みで混ぜた点へ伸ばす。
+    // 構えのまま走り出したら、スロートから手を離して腰の横で腕を振る（RUN_OFF）。
+    const release = run * MOTION.RUN_RELEASE;
+    let wGrip = clamp(pose[C.W_GRIP], 0, 1);
+    let wThroat = clamp(pose[C.W_THROAT], 0, 1) * (1 - release);
+    let wBall = clamp(pose[C.W_BALL], 0, 1);
+    const sum = wGrip + wThroat + wBall;
+    if (sum > 1) {
+      wGrip /= sum;
+      wThroat /= sum;
+      wBall /= sum;
+    }
+    const wFree = Math.max(0, 1 - wGrip - wThroat - wBall);
+    _off.set(0, 0, 0);
+    if (wFree > 0) {
+      for (let i = 0; i < 3; i++) runOff[i] = lerp(pose[C.OFF + i], MOTION.RUN_OFF[i], release);
+      toTorso(runOff, 0, _tmp);
+      _tmp.z += GAIT.ARM_SWING * Math.sin(gait.phase) * gait.blend; // 走るときの腕振り
+      _off.addScaledVector(_tmp, wFree);
+    }
+    if (wGrip > 0) _off.addScaledVector(_tmp.copy(reached).addScaledVector(_dir, RACKET.TWO_HAND_AT), wGrip);
+    if (wThroat > 0) _off.addScaledVector(_tmp.copy(reached).addScaledVector(_dir, RACKET.THROAT_AT), wThroat);
+    if (wBall > 0) {
+      if (ball) {
+        rig.torso.updateWorldMatrix(true, false);
+        rig.torso.worldToLocal(_tmp.set(ball.x, ball.y, ball.z));
+      } else {
+        _tmp.set(HAND * BALL_HOLD[0], BALL_HOLD[1], BALL_HOLD[2]).applyQuaternion(_qTorso);
+      }
+      _off.addScaledVector(_tmp, wBall);
+    }
+    toTorso(pose, C.OFF_ELBOW, _offPole);
+    solveArm(rig.off, _off, _offPole);
+  };
+
+  /* ------------------------------------------------------------ 組み立て */
+
+  /**
+   * @param {{shirt:number, shorts:number}} colors
+   * @param {'you'|'cpu'|'youMate'|'cpuMate'} [who] どの選手か（バックハンドの打ち方・
+   *   チームの判定に使う）。縮地の残像のように誰でもないメッシュは省略
+   * @returns {THREE.Group} userData に rig（関節）／gait（歩行リグ）／motion（ポーズ）が入る
+   */
+  scene3d.createPlayer = function createPlayer({ shirt, shorts }, who) {
+    const group = new THREE.Group();
+
+    // 腰から下（脚・腰回り）。腰のひねりと膝の沈み込みはこの Group ごと動かす
+    const hips = new THREE.Group();
+    group.add(hips);
+    const rightLeg = createLeg(HAND, shorts); // ラケット側の脚
+    const leftLeg = createLeg(-HAND, shorts);
+    const pelvis = new THREE.Mesh(
+      new THREE.CylinderGeometry(RIG.PELVIS_R * 0.95, RIG.PELVIS_R, RIG.PELVIS_H, 14),
+      mat(shorts),
+    );
+    pelvis.position.y = GAIT.HIP_Y - RIG.PELVIS_H * 0.3;
+    pelvis.scale.z = 0.72;
+    hips.add(rightLeg.hip, leftLeg.hip, pelvis);
+
+    // 体幹（胴・頭・両腕）はここだけ上下ゆれ・前傾・ひねりを入れる。
+    const torso = new THREE.Group();
+    torso.position.y = GAIT.HIP_Y;
+    group.add(torso);
+
+    const body = new THREE.Mesh(
+      new THREE.CylinderGeometry(RIG.BODY_TOP_R, RIG.BODY_BOTTOM_R, RIG.BODY_H, 14),
+      mat(shirt),
+    );
+    body.position.y = RIG.BODY_H / 2;
+    body.scale.z = RIG.BODY_DEPTH;
+    const head = createHead(shorts);
+    const racketArm = createArm(HAND, shirt, true);
+    const offArm = createArm(-HAND, shirt, false);
+    torso.add(body, head, racketArm.shoulder, offArm.shoulder);
+
+    // legs[0] がローカル -x 側、legs[1] が +x 側（apply* が左右の向きを決めるのに使う）
+    const legs = HAND < 0 ? [rightLeg, leftLeg] : [leftLeg, rightLeg];
+    group.userData = {
+      who: who || null,
+      team: who ? (who.indexOf('cpu') === 0 ? 'cpu' : 'you') : null,
+      backhand: (who && MOTION.BACKHAND[who]) || 'two',
+      // この選手が普段向いている方向（world.js が cpu 側に Math.PI を入れる）。ツイーナーで
+      // 体ごと反転させたあと、確実に元の向きへ戻すために基準として持っておく。
+      facing: 0,
+      rig: {
+        torso, head, hips, racket: racketArm, off: offArm,
+      },
+      gait: {
+        torso, hips, phase: 0, blend: 0,
+        legs: [
+          { ...legs[0], offset: 0 },
+          { ...legs[1], offset: Math.PI },
+        ],
+      },
+      motion: {
+        pose: Float64Array.from(IDLE),
+        from: Float64Array.from(IDLE),
+        target: new Float64Array(CHANNELS),
+        key: null,
+        kind: 'rest',
+        t: 0,
+        dur: 0,
+        lastAnim: 0,
+        leapSwung: false,
+        contactY: null,
+      },
+    };
+    // 一度もポーズを当てないメッシュ（縮地の残像）でも、腕が付け根から垂れた形にしておく
+    scene3d.finishPose(group, null);
+    return group;
+  };
+
+  /* ------------------------------------------------------------ 跳躍・飛び込み（体の側） */
 
   /**
    * 上昇（0〜π/2）→ 下降（π/2〜π）の sin カーブ。頂点付近は sin が寝るので滞空感が出る。
@@ -510,12 +1025,11 @@
    * 毎フレーム書くので、その上から浮いている量ぶんだけ上書きする）。
    * - 体そのものを浮かせる（メッシュの y。ゲーム側の座標は動かさない＝表示だけ）
    * - はさみ跳び：ラケット側の脚を後ろへ蹴り上げ、逆脚を前へ振り出す
-   * - 体幹：打点では反り、振り下ろしに合わせて前へ折る
+   * 体幹の反り→前への折れは振り付け（MOTION.SMASH の lean）が受け持つ。
    * @param {object} state その選手の見た目に関わる状態（setSwingPose と同じもの）
    * @returns {number} 浮いた高さ(m)。影を小さくするのに使う（world.js 参照）
    */
   scene3d.applySmashJump = function applySmashJump(player, state) {
-    const { anim, stroke, special } = state;
     const lift = smashLift(state);
     player.position.y = lift;
     if (lift <= 0) return 0;
@@ -523,24 +1037,17 @@
     const gait = player.userData.gait;
     // 浮いているほど強くポーズを効かせる（ダンクで高さが伸びても効き方は同じになるよう、
     // 分母にもジャンプの倍率を掛けて正規化する）。
-    const peak = SWING.SMASH_JUMP_H * (special === 'dunkSmash' ? SPECIAL.DUNK.JUMP_MULT : 1);
+    const peak = SWING.SMASH_JUMP_H * (state.special === 'dunkSmash' ? SPECIAL.DUNK.JUMP_MULT : 1);
     const air = clamp(lift / peak, 0, 1);
-    // 体幹は打球のモーション側の進み具合で折る：当たる前（anim=0）は反ったまま跳び上がり、
-    // 当たってから振り下ろしに合わせて前へ折れる。
-    const progress = stroke === 'smash' && anim > 0
-      ? clamp((PLAYER.SMASH_ANIM - anim) / PLAYER.SMASH_ANIM, 0, 1)
-      : 0;
     // はさみ跳びは「ラケット側の脚を後ろへ蹴り上げる」。legs[0] がローカル -x 側、
     // legs[1] が +x 側なので、利き手（HAND）でどちらがラケット側かを選ぶ。
     const back = gait.legs[HAND < 0 ? 0 : 1];
     const front = gait.legs[HAND < 0 ? 1 : 0];
 
     back.hip.rotation.x = lerp(back.hip.rotation.x, SWING.SMASH_LEG_SPLIT, air);
-    back.knee.rotation.x = lerp(back.knee.rotation.x, -SWING.SMASH_KNEE_TUCK, air);
+    back.knee.rotation.x = lerp(back.knee.rotation.x, SWING.SMASH_KNEE_TUCK, air);
     front.hip.rotation.x = lerp(front.hip.rotation.x, -SWING.SMASH_LEG_SPLIT * 0.6, air);
-    front.knee.rotation.x = lerp(front.knee.rotation.x, -SWING.SMASH_KNEE_TUCK * 0.25, air);
-    gait.offArm.rotation.x = lerp(gait.offArm.rotation.x, -SWING.SMASH_LEG_SPLIT * 0.5, air);
-    gait.torso.rotation.x = lerp(SWING.SMASH_TORSO_ARCH, SWING.SMASH_TORSO_X, progress * progress);
+    front.knee.rotation.x = lerp(front.knee.rotation.x, SWING.SMASH_KNEE_TUCK * 0.5, air);
     return lift;
   };
 
@@ -551,13 +1058,13 @@
    * 倒れる向きはフォア/バックで決める：フォアならラケット側（ローカルの HAND 側）、
    * バックならその逆へ飛び込むのが自然。
    * - 体は足元を支点に倒す（ゲーム側の位置は動かさない＝表示だけ）
-   * - 伏せている間は脚を開いて膝を曲げ、足先を宙へ上げる。ラケット腕は poseArm() が
-   *   頭の先へ伸ばす
+   * - 伏せている間は脚を開いて膝を曲げ、足先を宙へ上げる。ラケット腕は chooseMotion() が
+   *   頭の先へ伸ばす（MOTION.DIVE）
    * - 起き上がりは上体を先に起こし、膝を抱え込んでから立つ
    * 股関節の rotation.y（ひねり）・rotation.z（開き）と体幹の rotation.z は歩行
-   * （setGaitPose）が触らない軸なので、技が終わったら自分で0へ戻す。股関節の
-   * rotation.z はツイーナーも使うので、
-   * world.js ではこちらを applyTweenerHop() より後に呼ぶ。
+   * （setGaitPose）が触らない軸なので、技が終わったら自分で戻す。体幹の rotation.z は
+   * 振り付けの傾き（bend）も使うので、技が出ていない間は触らない。股関節の
+   * rotation.z はツイーナーも使うので、world.js ではこちらを applyTweenerHop() より後に呼ぶ。
    * @returns {number} 浮いた高さ(m)。スマッシュのジャンプと同じく影を小さくするのに使う
    */
   scene3d.applyDiveLean = function applyDiveLean(player, state) {
@@ -565,7 +1072,6 @@
     const p = diveProgress(state);
     if (p === null) {
       player.rotation.z = 0; // 前の1打の倒れ込みを残さない
-      gait.torso.rotation.z = 0;
       gait.legs.forEach(({ hip }) => { hip.rotation.y = 0; });
       return 0;
     }
@@ -576,7 +1082,7 @@
     player.rotation.z = -toward * lean;
     player.position.y = lift;
     // 起き上がりでは上体を先に起こす（体全体の倒れ込みを打ち消す向きに体幹だけ曲げる）。
-    gait.torso.rotation.z = toward * D.GETUP_TORSO * getup;
+    gait.torso.rotation.z += toward * D.GETUP_TORSO * getup;
 
     // 脚のひねりは倒れ込む先と同じ符号（ローカル y まわり）＝膝が上を向く。
     const roll = toward * D.LEG_ROLL * pose;
@@ -588,7 +1094,6 @@
       knee.rotation.x = lerp(knee.rotation.x, D.KNEE_TUCK, pose) + D.GETUP_KNEE * getup;
     });
     gait.torso.rotation.x = lerp(gait.torso.rotation.x, D.TORSO_X, pose);
-    gait.offArm.rotation.x = lerp(gait.offArm.rotation.x, D.OFF_ARM_X, pose);
     return lift;
   };
 
@@ -628,9 +1133,8 @@
       const outward = i === 0 ? -1 : 1;
       hip.rotation.z = lerp(0, outward * T.LEG_SPLAY, air);
       hip.rotation.x = lerp(hip.rotation.x, outward * T.LEG_KICK, air);
-      knee.rotation.x = lerp(knee.rotation.x, -T.KNEE_TUCK, air);
+      knee.rotation.x = lerp(knee.rotation.x, T.KNEE_TUCK, air);
     });
-    gait.offArm.rotation.x = lerp(gait.offArm.rotation.x, T.OFF_ARM_X, air);
     gait.torso.rotation.x = lerp(gait.torso.rotation.x, T.TORSO_X, air);
     return lift;
   };
@@ -643,8 +1147,6 @@
    * **跳躍だけは打球のモーション（anim）ではなく専用の時計（state.leap）で動く。**
    * anim は「当たった瞬間」からしか始められないので、そこに跳躍も乗せると跳ぶのと
    * 振るのが同時になり、「打ってから跳んだ」ように見えてしまう（ユーザー報告）。
-   * leap は**溜めを離した瞬間**（game.js#chargeRelease）から数え始めるので、
-   * 跳ぶ → ボールが来る → 振り抜く → 着地、の順に読める。
    * 踏み切り（LEAP_RISE）で上がり、頂点でふわりと粘ってから着地する。
    * @param {object} state その選手の見た目に関わる状態（setSwingPose と同じもの）
    * @returns {number} 浮いた高さ(m)。影を小さくするのに使う（world.js 参照）
@@ -665,7 +1167,6 @@
       hip.rotation.x = lerp(hip.rotation.x, J.LEG_FOLD, air);
       knee.rotation.x = lerp(knee.rotation.x, J.KNEE_TUCK, air);
     });
-    gait.offArm.rotation.x = lerp(gait.offArm.rotation.x, -J.LEG_FOLD * 0.4, air);
     gait.torso.rotation.x = lerp(gait.torso.rotation.x, J.TORSO_X, air);
     return lift;
   };
@@ -674,8 +1175,9 @@
    * サーブのジャンプ。applySmashJump() と同じく歩行ポーズの後に上から重ねる。
    * トスが打点（state.leap.reach）まで落ちてくるのに合わせて跳び、頂点でラケットを
    * 伸ばしきって当てる（頂点＝当たる瞬間になるよう game.js#tickServeSwing が踏み切る）。
-   * - 上がる間は両脚をそろえて伸ばし、体を反らせる
-   * - 打ったあとは振り下ろしに合わせて体を前へ折り、ラケット側の脚を後ろへ蹴り上げる
+   * - 上がる間は両脚をそろえて伸ばす（トロフィーで曲げた膝を伸ばして跳ぶ）
+   * - 打ったあとは振り下ろしに合わせて、ラケット側の脚を後ろへ蹴り上げる
+   * 体幹の反り→前への折れは振り付け（MOTION.SERVE の lean）が受け持つ。
    * @param {object} state その選手の見た目に関わる状態（setSwingPose と同じもの）
    * @returns {number} 浮いた高さ(m)。影を小さくするのに使う（world.js 参照）
    */
@@ -702,14 +1204,15 @@
     const back = gait.legs[HAND < 0 ? 0 : 1];
     const kick = air * progress;
     back.hip.rotation.x = lerp(back.hip.rotation.x, SWING.SERVE_LEG_KICK, kick);
-    back.knee.rotation.x = lerp(back.knee.rotation.x, -SWING.SERVE_KNEE_TUCK, kick);
-    const torsoX = lerp(SWING.SERVE_TORSO_ARCH, SWING.SERVE_TORSO_X, progress * progress);
-    gait.torso.rotation.x = lerp(gait.torso.rotation.x, torsoX, air);
+    back.knee.rotation.x = lerp(back.knee.rotation.x, SWING.SERVE_KNEE_TUCK, kick);
     return lift;
   };
 
+  /* ------------------------------------------------------------ 歩行 */
+
   /**
-   * 実際の移動速度から歩行/走行のポーズを毎フレーム更新する。
+   * 実際の移動速度から歩行/走行のポーズを毎フレーム更新する。ポーズの膝の沈み込み
+   * （crouch）・腰のひねり（hips）・前傾（lean）もここで脚と体幹に入れる。
    * @param {THREE.Group} player
    * @param {number} speed 実速度(m/s)。壁際でクランプされた分は含めない想定
    * @param {number} maxSpeed この選手が出しうる速度の目安（歩き⇔走りのブレンドを正規化する基準）
@@ -717,6 +1220,7 @@
    */
   scene3d.setGaitPose = function setGaitPose(player, speed, maxSpeed, dt) {
     const g = player.userData.gait;
+    const pose = player.userData.motion.pose;
     const moving = speed > GAIT.MIN_SPEED;
     const target = moving ? 1 : 0;
     g.blend += Math.sign(target - g.blend) * Math.min(Math.abs(target - g.blend), GAIT.BLEND_RATE * dt);
@@ -727,17 +1231,22 @@
 
     const thighAmp = (GAIT.WALK_SWING + (GAIT.RUN_SWING - GAIT.WALK_SWING) * speedFrac) * g.blend;
     const kneeAmp = GAIT.KNEE_BEND * g.blend;
-    const armAmp = GAIT.ARM_SWING * g.blend;
+    // 膝の沈み込み：太ももを前へ、すねをその倍だけ後ろへ折る（足先が股関節の真下に残る）
+    const crouch = clamp(pose[C.CROUCH], 0, 1);
+    const sink = crouch * MOTION.CROUCH.THIGH;
 
     g.legs.forEach(({ hip, knee, offset }) => {
       const p = g.phase + offset;
-      hip.rotation.x = thighAmp * Math.sin(p);
-      // 脚が前へ振り出される半サイクルだけ膝を曲げ、足先を地面から浮かせる
-      knee.rotation.x = -kneeAmp * Math.max(0, Math.sin(p + Math.PI / 2));
+      hip.rotation.x = thighAmp * Math.sin(p) - sink; // 正＝太ももを後ろへ
+      // 膝は脚を前へ振り出す間（太ももが後ろから前へ戻る半周期＝cos が負）だけ大きく
+      // 曲げて踵を跳ね上げ、着地している間もわずかに曲げておく。正＝曲げる。
+      knee.rotation.x = kneeAmp * Math.max(0, -Math.cos(p)) + GAIT.STANCE_KNEE * g.blend + 2 * sink;
     });
 
-    g.offArm.rotation.x = -armAmp * Math.sin(g.phase);
-    g.torso.position.y = GAIT.HIP_Y + GAIT.BOB_AMP * Math.abs(Math.sin(g.phase)) * g.blend;
-    g.torso.rotation.x = GAIT.LEAN_MAX * speedFrac * g.blend;
+    const drop = crouchDrop(crouch);
+    g.hips.position.y = -drop;
+    g.hips.rotation.y = HAND * pose[C.HIPS] * (1 - MOTION.HIPS_RUN_DAMP * g.blend);
+    g.torso.position.y = GAIT.HIP_Y - drop + GAIT.BOB_AMP * Math.abs(Math.sin(g.phase)) * g.blend;
+    g.torso.rotation.x = GAIT.LEAN_MAX * speedFrac * g.blend + pose[C.LEAN];
   };
 })(window.RallyOne = window.RallyOne || {});

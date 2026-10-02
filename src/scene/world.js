@@ -28,14 +28,14 @@
     const court = scene3d.createCourt();
     scene.add(court, scene3d.createNet(), scene3d.createOfficials(), scene3d.createCrowd());
 
-    const you = scene3d.createPlayer(THEME.YOU);
-    const cpu = scene3d.createPlayer(THEME.CPU);
+    const you = scene3d.createPlayer(THEME.YOU, 'you');
+    const cpu = scene3d.createPlayer(THEME.CPU, 'cpu');
     cpu.rotation.y = Math.PI; // CPU は手前を向く
     cpu.userData.facing = Math.PI; // 普段の向き（setSwingPose がツイーナー後に戻す基準）
     // ダブルスのパートナー。シングルスでは this.doubles===false の間 sync() で visible=false のまま。
     // 本人と同じ色だと見分けがつかないので、シャツ/短パンを入れ替えた配色(THEME.*_MATE)にする。
-    const youMate = scene3d.createPlayer(THEME.YOU_MATE);
-    const cpuMate = scene3d.createPlayer(THEME.CPU_MATE);
+    const youMate = scene3d.createPlayer(THEME.YOU_MATE, 'youMate');
+    const cpuMate = scene3d.createPlayer(THEME.CPU_MATE, 'cpuMate');
     cpuMate.rotation.y = Math.PI;
     cpuMate.userData.facing = Math.PI;
     const ballMesh = scene3d.createBall();
@@ -92,10 +92,16 @@
       camera.lookAt(follow.look, CAMERA.LOOK_AT.y, CAMERA.LOOK_AT.z);
     }
 
-    /** プレイヤー1人ぶんの位置・スイング・歩行ポーズと影をまとめて反映する */
-    function syncPlayer(mesh, shadow, state, maxSpeed, dt, tossing) {
+    /**
+     * プレイヤー1人ぶんの位置・スイング・歩行ポーズと影をまとめて反映する。
+     * @param {object} frame 生の game state かリプレイの1コマ（ball・phase を読む）
+     * @param {'hold'|'toss'|null} serve この選手がサーブを待っている／トス中か
+     */
+    function syncPlayer(mesh, shadow, state, maxSpeed, dt, frame, serve) {
       mesh.position.set(state.x, 0, state.z);
-      scene3d.setSwingPose(mesh, state, !!tossing);
+      scene3d.setSwingPose(mesh, state, {
+        dt, ball: frame.ball, phase: frame.phase, serve,
+      });
       scene3d.setGaitPose(mesh, state.speed, maxSpeed, dt);
       // スマッシュ・サーブのジャンプ・飛びつきボレーの倒れ込み・ツイーナーの跳躍は歩行の後
       // （同じ関節を上書きするため）。同時に起きることはないので、浮いた高さは
@@ -106,7 +112,21 @@
         + scene3d.applyDiveLean(mesh, state)
         + scene3d.applyJackknifeLeap(mesh, state)
         + scene3d.applyServeJump(mesh, state);
+      // 腕のIKは最後（体幹の傾き・体の浮きがすべて決まってから。トスの左手はボールを追う）
+      scene3d.finishPose(mesh, frame.ball);
       scene3d.placeGroundShadow(shadow, state, lift);
+    }
+
+    /**
+     * サーブを待っている（'hold'）／トス中（'toss'）の選手。サーブの構え・トスの左手に使う。
+     * リプレイのコマにも同じ形で録る（recordFrame）。
+     */
+    function serveStages(state) {
+      const stages = { you: null, cpu: null, youMate: null, cpuMate: null };
+      if (state.phase === 'serve') {
+        stages[state.servingPlayer()] = state.tossActive || state.aiTossActive ? 'toss' : 'hold';
+      }
+      return stages;
     }
 
     /**
@@ -114,14 +134,14 @@
      * 両方から呼べるよう切り出したもの（syncCamera・trail・smashHint は含まない：
      * それぞれ生の state とリプレイで振る舞いが違うため sync() 側で個別に扱う）。
      */
-    function applyFrame(state, dt, tossing) {
-      syncPlayer(you, shadows.you, state.you, PLAYER.SPEED, dt, tossing);
-      syncPlayer(cpu, shadows.cpu, state.cpu, PLAYER.CPU_CHASE, dt, false);
+    function applyFrame(state, dt, stages) {
+      syncPlayer(you, shadows.you, state.you, PLAYER.SPEED, dt, state, stages.you);
+      syncPlayer(cpu, shadows.cpu, state.cpu, PLAYER.CPU_CHASE, dt, state, stages.cpu);
 
       youMate.visible = cpuMate.visible = shadows.youMate.visible = shadows.cpuMate.visible = state.doubles;
       if (state.doubles) {
-        syncPlayer(youMate, shadows.youMate, state.youMate, PLAYER.CPU_CHASE, dt, false);
-        syncPlayer(cpuMate, shadows.cpuMate, state.cpuMate, PLAYER.CPU_CHASE, dt, false);
+        syncPlayer(youMate, shadows.youMate, state.youMate, PLAYER.CPU_CHASE, dt, state, stages.youMate);
+        syncPlayer(cpuMate, shadows.cpuMate, state.cpuMate, PLAYER.CPU_CHASE, dt, state, stages.cpuMate);
       }
 
       // 縮地の残像（跳ぶ前の位置に一瞬だけ残る分身）。リプレイでも同じように出したいので、
@@ -162,6 +182,8 @@
       return {
         x: p.x, z: p.z, anim: p.anim, stroke: p.stroke, prep: p.prep, spin: p.spin,
         chargeFrac: p.chargeFrac, swingCharge: p.swingCharge, speed: p.speed,
+        // 人間だけ：溜めを離してから当たるまで（フォワードスイングを出すか・どちら向きか）
+        charging: p.charging, swing: p.swing, chargeStroke: p.chargeStroke, chargeSpin: p.chargeSpin,
         // 必殺技（フォーム・ジャンプの高さ・倒れ込みに効く）と、縮地の残像。
         special: p.special || null,
         // 跳躍（打球のモーションとは別の時計。スマッシュ／ジャックナイフ／サーブ）
@@ -181,13 +203,16 @@
         ball: {
           x: state.ball.x, y: state.ball.y, z: state.ball.z,
           impact: state.ball.impact, impactPower: state.ball.impactPower,
+          // 振り付け（scene/player.js）が「あと何秒で届くか」を見積もるのに使う
+          vx: state.ball.vx, vy: state.ball.vy, vz: state.ball.vz,
+          live: state.ball.live, last: state.ball.last, bounces: state.ball.bounces,
         },
         you: snapshotPlayer(state.you),
         cpu: snapshotPlayer(state.cpu),
         youMate: snapshotPlayer(state.youMate),
         cpuMate: snapshotPlayer(state.cpuMate),
         doubles: state.doubles,
-        tossing: state.tossActive === true && state.server === 'you',
+        stages: serveStages(state),
       });
       while (history.length > 1 && recClock - history[0].t > REPLAY.WINDOW_SEC) history.shift();
     }
@@ -275,7 +300,7 @@
         // 落ち着かない切り替わりになってしまう。
         if (replayClock <= playEnd + REPLAY.HOLD_SEC) {
           const frame = frameAt(Math.min(replayClock, playEnd));
-          applyFrame(frame, dt, frame.tossing);
+          applyFrame(frame, dt, frame.stages);
           scene3d.updateTrail(trail, NO_TRAIL); // 再生そのものが「振り返り」なので軌跡は隠す
           scene3d.placeSmashHint(smashHint, null);
           scene3d.placeSwingGuide(swingGuide, null, state.you);
@@ -290,7 +315,7 @@
         camera.lookAt(follow.look, CAMERA.LOOK_AT.y, CAMERA.LOOK_AT.z);
       }
 
-      applyFrame(state, dt, state.tossActive === true && state.server === 'you');
+      applyFrame(state, dt, serveStages(state));
       // 軌跡はラリーの決着がついた後（ポイント間の 'serve' 待ち・'over'）だけ見せる。
       // ラリー中に出しっぱなしだと本来の目的（アウトの結果を振り返る）を超えて
       // 「次にどこへ来るか」の手がかりになってしまうため。
