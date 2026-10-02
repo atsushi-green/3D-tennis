@@ -251,6 +251,8 @@
 
   /** キー → 表示名。config.SPECIAL_MOVES を畳んだだけの引き当て表。 */
   const SPECIAL_LABEL = Object.fromEntries(SPECIAL_MOVES.map((m) => [m.key, m.label]));
+  /** トスを上げる前、キックサーブが打てるときの案内（HUD の溜めバーの上に出す） */
+  const KICK_HINT = `K を押してトス → ${SPECIAL_LABEL.kickServe}`;
 
   /**
    * その必殺技を出している間だけ広がる「打てる範囲」。
@@ -359,7 +361,8 @@
    * @type {{[key:string]: (g: Game, c: object) => boolean}}
    */
   const SPECIAL_MATCH = {
-    kickServe: (g, c) => c.serving,
+    // 自分のサーブを、キックサーブのキー（K）でトスを上げたときだけ（B/V/C のサーブでは出ない）
+    kickServe: (g, c) => c.serving && c.kick,
     // 「前へ踏み込みながら、高いノーバウンドの球を叩く」場面だけ。
     // ・バウンド後の球（bounces > 0）では出さない。跳ね上がった球を打つのはスマッシュ
     //   ではなく高い打点の返球で、そこまで技にすると普通のラリー中に暴発する。
@@ -635,6 +638,7 @@
         chargeFrac: 0, // 溜めている間だけ 0〜1 で増える、テイクバックの深さ用（chargeTime のポーズ表示版）
         chargeStroke: null, // chargeStart() の瞬間に固定するフォア/バック。溜めている間は変えない
         chargeSpin: 'flat', // chargeStart() の瞬間に固定するスピン（B/V/C）。実際に当たるまで押し続けなくてよい
+        chargeKick: false, // このサーブのトスをキックサーブのキー（K）で上げたか（chargeStart()）
         // この1打に乗っている必殺技のキー（chargeRelease() が入れる。出していなければ null）。
         // 打ち終わってモーションが尽きたところで update() が消す＝振っている間は残るので、
         // 打球の計算（hit/playerShot）だけでなくフォーム（scene/player.js）にも使える。
@@ -1046,13 +1050,19 @@
      * （＝トス開始とテイクバックの溜め開始は同じ1回の押下）。ラリー中はテイクバックを
      * 溜め始める。実際に打つのは chargeRelease()（離した瞬間）。
      * @param {'flat'|'top'|'slice'} [spin] 押したキーに対応するスピン。省略時はフラット。
+     * @param {boolean} [kick] キックサーブのキー（K）。自分のサーブのトスを上げるときだけ
+     *   受け付け、キックサーブを選んであれば（回数が残っていれば）それで打つ。
+     * @returns {boolean} 溜め（トス）を始めたか。K はサーブ以外では何もしない（false）ので、
+     *   input.js はそのときキーを「溜めているキー」として握らない（B/V/C を塞がない）。
      */
-    chargeStart(spin = 'flat') {
+    chargeStart(spin = 'flat', kick = false) {
       // 自分がサーブする番（＝ダブルスで味方が回ってきているときは対象外）のときだけ反応する
       const myServe = this.phase === 'serve' && this.servingPlayer() === 'you';
       // もう振り出していて、トスが落ちてくるのを待っているだけ（swingServe()）。押し直しても
       // 2回目のスイングにはならない。
-      if (myServe && this.serveSwing) return;
+      if (myServe && this.serveSwing) return false;
+      // キックサーブのキーは、自分のサーブでトスを上げるときにしか意味がない
+      if (kick && !(myServe && !this.tossActive)) return false;
       if (myServe && !this.tossActive) {
         this.tossBall();
         this.you.charging = true;
@@ -1060,7 +1070,11 @@
         // サーブのスピン（V/C＝トップスピン／スライス）もトスを上げた瞬間に固定する。
         // グラウンドストロークと同じ理由で、当たる瞬間まで押し続けなくてよい。
         this.you.chargeSpin = spin;
-        return;
+        // キックサーブは B/V/C とは別のキー（K）で上げたトスだけ。以前は「自分のサーブ」
+        // だけが条件で、技を選んでいると回数が残る限り**どのサーブもキックサーブになり**、
+        // 普通のサーブを打ち分けられなかった（ユーザー報告）。
+        this.you.chargeKick = kick;
+        return true;
       }
       // レシーブ側は、サーブが飛んでくる前からラケットを引いて待てる（実際のテニスと
       // 同じ「テイクバックして待つ」）。以前はここが素通りで、サーブが打たれて
@@ -1080,7 +1094,7 @@
         this.you.chargeTime = 0;
         this.you.chargeSpin = spin;
         this.you.chargeStroke = null;
-        return;
+        return true;
       }
       if ((myServe && this.tossActive) || this.phase === 'rally') {
         this.you.charging = true;
@@ -1095,7 +1109,9 @@
           // 当たる瞬間まで押し続ける必要はない。
           this.you.chargeSpin = spin;
         }
+        return true;
       }
+      return false;
     }
 
     /**
@@ -1153,6 +1169,15 @@
       if (!this.specials.length) return null;
       const serving = this.phase === 'serve' && this.servingPlayer() === 'you';
       if (!serving && !(this.phase === 'rally' && this.you.charging)) return null;
+      // サーブで出る技はキックサーブだけで、それは K で上げたトスにしか乗らない。
+      // トスを上げる前は「K で打てる」ことを案内し、B/V/C で上げたトスには何も出さない。
+      if (serving && !this.you.chargeKick) {
+        if (this.tossActive || this.specials.indexOf('kickServe') === -1
+          || this.usesLeft('kickServe') <= 0) return null;
+        return {
+          move: null, label: null, spent: null, usesLeft: this.usesLeft('kickServe'), hint: KICK_HINT,
+        };
+      }
       const ctx = this.specialContext(); // 打点の先読みは重いので1回だけ作って使い回す
       const move = this.pickSpecial(ctx);
       // 出せる技がないときだけ、「回数さえ残っていれば出せた技」を探して理由を伝える
@@ -1327,6 +1352,8 @@
         // 押しているキーの球種（B=flat / V=top / C=slice。chargeStart() の瞬間に固定）。
         // 「その打ち方でしか成立しない技」の条件に使う。
         spin: this.you.chargeSpin,
+        // このサーブのトスをキックサーブのキー（K）で上げたか
+        kick: this.you.chargeKick,
         contact: (move) => {
           const r = specialReach(move);
           const key = `${r.mult}:${r.y}`;
@@ -1844,6 +1871,7 @@
       if (iServe) {
         this.you.charging = false;
         this.you.chargeSpin = 'flat';
+        this.you.chargeKick = false;
       }
       this.you.chargeTime = 0; // 前のサーブの溜めを持ち越さない
       this.you.chargeStroke = null;
@@ -3845,6 +3873,7 @@
         if (ball.y <= SERVE.BALL_Y) {
           // 打たずに落ちてきた。トスをやり直せるようにリセットする（フォルトにはしない）
           this.tossActive = false;
+          this.you.chargeKick = false; // 次のトスをどのキーで上げるかは、そのとき決め直す
           this.placeServeBall();
           this.hooks.call('サーブ', '←→ 左右のコース ／ ↑↓ 深さ ／ B/V/C 押しっぱなしで打つ');
         }

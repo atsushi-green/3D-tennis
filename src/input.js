@@ -21,6 +21,12 @@
    */
   const SWING = { KeyB: 'flat', KeyV: 'top', KeyC: 'slice' };
   const SWING_CODES = Object.keys(SWING);
+  /**
+   * キックサーブ（必殺技）のキー。自分のサーブで B/V/C の代わりに押してトスを上げると、
+   * 離した1本がキックサーブになる（溜めて離す操作は B/V/C と同じ）。サーブ以外では何もしない。
+   * 以前は専用のキーが無く、技を選んでいると自分のサーブがすべてキックサーブになっていた。
+   */
+  const KICK = ['KeyK'];
   /** ダブルスのAIパートナーへの指示。Q＝ネットへ前へ、E＝ベースラインまで下がれ */
   const FORMATION_NET = ['KeyQ'];
   const FORMATION_BACK = ['KeyE'];
@@ -76,14 +82,14 @@
   class Input {
     constructor() {
       this.held = new Set();
-      // 溜め始めに使った1つのキー（B/V/C いずれか、またはポインタなら 'Pointer'）。
+      // 溜め始めに使った1つのキー（B/V/C/K いずれか、またはポインタなら 'Pointer'）。
       // 溜めている間に他の2キーを押しても無視し、この打鍵が離されたときだけ離した扱いにする。
       this.chargeKey = null;
     }
 
     /**
      * @param {{onStart:Function, onStartSingles:Function, onStartDoubles:Function,
-     *   onChargeStart:Function,
+     *   onChargeStart:Function, onKickStart:Function,
      *   onChargeRelease:Function, onFormationNet:Function, onFormationBack:Function,
      *   onStandNet:Function, onStandBack:Function,
      *   onSelectDifficulty:Function, onSelectSurface:Function, onSelectStyle:Function,
@@ -125,6 +131,10 @@
         if (SWING[e.code] && !this.chargeKey) {
           this.chargeKey = e.code;
           handlers.onChargeStart(SWING[e.code]);
+        } else if (KICK.indexOf(e.code) !== -1) {
+          // サーブのトスを上げられたときだけ「溜めているキー」として握る（サーブ以外で
+          // 押しても B/V/C を塞がない）
+          if (!this.chargeKey && handlers.onKickStart()) this.chargeKey = e.code;
         } else if (FORMATION_NET.indexOf(e.code) !== -1) {
           handlers.onFormationNet();
         } else if (FORMATION_BACK.indexOf(e.code) !== -1) {

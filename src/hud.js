@@ -223,7 +223,7 @@
         el.classList.toggle('on', on.indexOf(el.dataset.special) !== -1);
       });
       this.el.specialNote.textContent = on.length
-        ? `選択中 ${on.length} 種 — 条件を満たした1打で自動的に出ます（専用の操作はなし。技ごとに1ゲーム ${SPECIAL.USES_PER_GAME} 回まで）。`
+        ? `選択中 ${on.length} 種 — 条件を満たした1打で自動的に出ます（キックサーブだけは K でトスを上げて打つ。技ごとに1ゲーム ${SPECIAL.USES_PER_GAME} 回まで）。`
         : '必殺技なし（これまでどおりのテニス）。技を選ぶと、条件を満たした1打で自動的に出るようになります。';
     }
 
@@ -231,8 +231,9 @@
      * 「いま溜めキーを離したら何が出るか」（溜めバーの上）。必殺技は自動発動なので、
      * これは操作の案内ではなく「この1打がどうなるか」の予告。
      * @param {{move:string|null, label:string|null, spent:string|null,
-     *   usesLeft:number}|null} armed Game#specialArmed。null（打つ場面ではない）なら非表示。
+     *   usesLeft:number, hint?:string}|null} armed Game#specialArmed。null（打つ場面ではない）なら非表示。
      *   spent は「回数さえ残っていれば出ていた技」の名前（使い切ったことを伝えるため）。
+     *   hint はまだ技が乗っていないが、操作すれば出せるときの案内（キックサーブの K）。
      */
     setSpecialTip(armed) {
       const el = this.el.specialTip;
@@ -247,7 +248,9 @@
         ? `⚡ ${armed.label}${left}`
         : armed.spent
           ? `⚡ ${armed.spent} はこのゲームでは使用済み`
-          : '⚡ この場面で出せる技はありません';
+          : armed.hint
+            ? `⚡ ${armed.hint}${left}`
+            : '⚡ この場面で出せる技はありません';
     }
 
     /**

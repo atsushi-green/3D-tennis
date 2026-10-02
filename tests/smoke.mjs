@@ -262,8 +262,8 @@ function untilServed(g) {
  * トスが打点まで来たところで当たる（untilServed()）。
  * @param {'flat'|'top'|'slice'} [spin] 押したキーに対応するスピン。省略時はフラット。
  */
-function tossAndHit(g, holdFrames = 0, spin = 'flat') {
-  g.chargeStart(spin); // トスとチャージを同時に開始
+function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
+  g.chargeStart(spin, kick); // トスとチャージを同時に開始（kick＝キックサーブのキー K）
   for (let f = 0; f < holdFrames; f++) g.update(1 / 60);
   g.chargeRelease(); // 離した瞬間に振り出す
   untilServed(g);
@@ -6184,11 +6184,14 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     ballAt(behind, 1.0, -1.2); // 真後ろに 1.2m ＝ 抜かれた球
     ok(behind.pickSpecial() === 'tweener', `a ball that got past you picks the tweener, got ${behind.pickSpecial()}`);
 
-    // 自分のサーブ → キックサーブ（ラリー用の技は出ない）
+    // 自分のサーブ → B/V/C のトスでは何も出ない（ラリー用の技も出ない）。
+    // キックサーブは K で上げたトスだけ。
     const serving = new R.Game({ input: idle, hooks: noHooks });
     serving.setSpecials(ALL);
     serving.start();
-    ok(serving.pickSpecial() === 'kickServe', `serving picks the kick serve, got ${serving.pickSpecial()}`);
+    ok(serving.pickSpecial() === null, `a plain serve picks nothing, got ${serving.pickSpecial()}`);
+    ok(serving.chargeStart('top', true) === true, 'K tosses the serve');
+    ok(serving.pickSpecial() === 'kickServe', `a K toss picks the kick serve, got ${serving.pickSpecial()}`);
   }
 
   // --- 装備していない技は出ない（同じ場面でも次の優先度へ落ちる） ---
@@ -6318,7 +6321,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     const OVER_FRAMES = 58;
     ok(g.serveFaultChance(OVER_FRAMES / 60) > 0.9,
       `precondition: that hold would normally almost always fault, got ${g.serveFaultChance(OVER_FRAMES / 60).toFixed(2)}`);
-    tossAndHit(g, OVER_FRAMES);
+    tossAndHit(g, OVER_FRAMES, 'top', true);
     ok(g.you.special === 'kickServe', `the kick serve is armed on release, got ${g.you.special}`);
     ok(g.you.serveMiss === false, 'an over-charged kick serve is not faulted');
     ok(g.ball.spin === 'top' && g.ball.kick === true, 'the kick serve is a topspin ball marked to kick up');
@@ -6340,7 +6343,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     const g = new R.Game({ input: idle, hooks: noHooks });
     g.setSpecials(['kickServe']);
     g.start();
-    g.chargeStart('flat');
+    g.chargeStart('top', true);
     for (let f = 0; f < Math.round(SERVE.CHARGE_SWEET_T * 60); f++) g.update(1 / 60);
     g.chargeRelease();
     ok(g.phase === 'serve' && g.serveSwing && g.serveSwing.t > 0.05,
@@ -6352,6 +6355,42 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat') {
     ok(g.ball.spin === 'top' && g.ball.kick === true,
       `a kick serve released on the line is still a kick serve, spin=${g.ball.spin} kick=${g.ball.kick}`);
     ok(g.usesLeft('kickServe') === 0, 'and it spends the kick serve');
+  }
+
+  // --- キックサーブは専用のキー（K）だけ：選んでいても B/V/C のサーブは普通のサーブ ---
+  // 以前は「自分のサーブ」だけが条件で、回数が残る限りどのサーブもキックサーブになっていた。
+  {
+    const g = new R.Game({ input: idle, hooks: noHooks });
+    g.setSpecials(['kickServe']);
+    g.start();
+    const before = g.specialAim();
+    ok(before && before.move === null && /K/.test(before.hint || ''),
+      `before the toss, the HUD tells how to kick, got ${JSON.stringify(before)}`);
+    g.chargeStart('flat');
+    ok(g.specialAim() === null, 'a B toss shows no special at all');
+    for (let f = 0; f < Math.round(SERVE.CHARGE_SWEET_T * 60); f++) g.update(1 / 60);
+    g.chargeRelease();
+    for (let f = 0; f < 60 && g.phase === 'serve'; f++) g.update(1 / 60);
+    ok(g.phase === 'rally' && g.ball.kick === false && g.ball.spin === 'flat',
+      `a B serve stays a plain flat serve, kick=${g.ball.kick} spin=${g.ball.spin}`);
+    ok(g.usesLeft('kickServe') === SPECIAL.USES_PER_GAME, 'and the kick serve is not spent');
+
+    // K はサーブのトス以外では何もしない（握らない＝B/V/C を塞がない）
+    ok(g.chargeStart('top', true) === false && !g.you.charging, 'K does nothing during a rally');
+    const recv = new R.Game({ input: idle, hooks: noHooks });
+    recv.setSpecials(['kickServe']);
+    recv.start(false, 'cpu');
+    ok(recv.chargeStart('top', true) === false && !recv.you.charging, 'nor while waiting for the CPU serve');
+    // 使い切っていれば、K のトスは普通のトップスピンのサーブ（HUD は使用済みと出す）
+    const spent = new R.Game({ input: idle, hooks: noHooks });
+    spent.setSpecials(['kickServe']);
+    spent.start();
+    spent.spendSpecial('kickServe');
+    ok(spent.specialAim() === null, 'with no kick left, nothing is suggested before the toss');
+    spent.chargeStart('top', true);
+    const aim = spent.specialAim();
+    ok(aim && aim.move === null && aim.spent === R.config.SPECIAL_MOVES[0].label,
+      `a K toss with no kick left says it is spent, got ${JSON.stringify(aim)}`);
   }
 
   // --- 縮地：打点まで瞬間移動し、残像を残し、スイングの有効時間が伸びる ---

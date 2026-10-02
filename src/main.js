@@ -173,6 +173,8 @@
     },
     onSelectToss: menu.onSelectToss,
     onChargeStart: (spin) => game.chargeStart(spin),
+    // キックサーブはトップスピンのトスとして上げる（serve() が球種もキック用に決める）
+    onKickStart: () => game.chargeStart('top', true),
     onChargeRelease: () => game.chargeRelease(),
     onFormationNet: () => game.setYouMateFormation('net'),
     onFormationBack: () => game.setYouMateFormation('back'),
