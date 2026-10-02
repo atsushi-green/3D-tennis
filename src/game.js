@@ -271,6 +271,16 @@
   }
 
   /**
+   * 飛びつきボレーで伸ばした体が、高さ y(m) の球に届く水平距離(m)。足元（当たる瞬間には
+   * DIVE.CONTACT_LIFT だけ浮いている）を支点に、長さ DIVE.BODY_REACH の体を倒して届く範囲。
+   * 高い球ほど体を立てて届かせるので短くなる。
+   */
+  function diveStretch(y) {
+    const { DIVE } = SPECIAL;
+    return Math.sqrt(Math.max(0, DIVE.BODY_REACH ** 2 - (y - DIVE.CONTACT_LIFT) ** 2));
+  }
+
+  /**
    * その打点が「ボレー」になるか（hit() の isVolley とまったく同じ条件）。
    * ボレーを担当する技（飛びつき／ドライブボレー）が出られる場面と、グラウンド
    * ストロークの技（バギーホイップ）が出てはいけない場面を、この1つで判定する。
@@ -652,6 +662,9 @@
         // 別の時計**で、tickLeap() が「もうすぐ球が届く」ところで離す前から始める
         // ＝跳んでから空中で振り始める絵になる。
         leap: null,
+        // 飛びつきボレーの、打つ前の飛び込み（startDive() が入れ、当たった瞬間に null）。
+        // 飛び込んでいる間は足元が球のほうへ動き、他の誰も球に触らない（AI も同じ）。
+        dive: null,
         // 相手が打ってからこのフレームまでに左右へ動いた量（符号つき、m）。CPU/AI の
         // chaseDist の人間版で、resetChase() が新しい球のたびに0へ戻す。必殺技
         // バギーホイップの「フォア側へ大きく振り回されたか」の判定に使う。
@@ -680,9 +693,10 @@
         x, z, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, spin: 'flat', stamina: 1,
         runX: 0, fwd: 0, special: null, specialLabel: null, specialUses: {}, leap: null,
         // dash＝縮地で跳ぶ前の位置（表示専用の残像。人間の you.dash と同じもの）、
-        // diveVolley＝この1打は飛びつきボレーだ、という旗（swingAiAt が立て hit が下ろす）。
-        // どちらも Extreme でだけ立つ（SPECIAL.AI.MOVES_ALL）。
-        dash: null, diveVolley: false,
+        // diveVolley＝この1打は飛びつきボレーだ、という旗（swingAiAt が立て hit が下ろす）、
+        // dive＝その打つ前の飛び込み（人間の you.dive と同じもの）。
+        // どれも Extreme でだけ立つ（SPECIAL.AI.MOVES_ALL）。
+        dash: null, diveVolley: false, dive: null,
         attr: ATTRS[who], netDir: NET_DIR[who],
       });
       this.cpu = aiActor(0, CPU.HOME_Z, 'cpu');
@@ -1096,6 +1110,8 @@
         this.you.chargeStroke = null;
         return true;
       }
+      // 飛びつきボレーで飛び込んでいる最中は構え直せない（当たるのを待つだけ）
+      if (this.phase === 'rally' && this.you.dive) return false;
       if ((myServe && this.tossActive) || this.phase === 'rally') {
         this.you.charging = true;
         this.you.chargeTime = 0;
@@ -1486,6 +1502,7 @@
       if (this.phase !== 'rally' || !this.ball.live) return;
       if (TEAM_OF[who] === this.ball.last) return;   // 自陣へ向かってくる球だけ
       if (this.recoverTimers[who] > 0) return;       // 打った直後は動けない（硬直中）
+      if (this.actor(who).dive) return;              // 飛びつきボレーで飛び込んでいる最中
       if (this.reactTimers[who] > 0) return;         // まだ反応できていない
       const actor = this.actor(who);
       // ボールが自陣に入るまで待つ（ネットの向こうにある間は判断しない）。相手が打った
@@ -1880,6 +1897,7 @@
       this.you.sinceRunT = Infinity; // 前のポイントの走りも持ち越さない（バギーホイップの条件）
       ACTORS.forEach((w) => { this.actor(w).dash = null; }); // 縮地の残像も持ち越さない
       ACTORS.forEach((w) => { this.actor(w).leap = null; }); // 跳躍も持ち越さない
+      ACTORS.forEach((w) => { this.actor(w).dive = null; }); // 飛びつきボレーの飛び込みも
       // AI（Hard / Extreme）ぶんも同じく持ち越さない
       ACTORS.forEach((w) => {
         if (w === 'you') return;
@@ -2315,7 +2333,9 @@
       // 人間はテイクバックを始めた瞬間に chargeStart() が固定した向きをそのまま使う。
       // ここで改めて判定すると、溜めている間にボールと自分の位置関係が変わった場合、
       // テイクバックで見せていた向きと実際に振る向きがずれてしまう。
-      const baseStroke = (who === 'you' && this.you.chargeStroke) || classifyStroke(who, ball, player);
+      // 飛びつきボレーは飛び込んだ先（startDive() が決めた向き）で打つ。
+      const baseStroke = (player.dive && player.dive.stroke)
+        || (who === 'you' && this.you.chargeStroke) || classifyStroke(who, ball, player);
 
       // 人間の打球だけ溜め量に応じて演出を強める（AIは常に0＝通常の演出）
       const charge = who === 'you' ? this.you.swingCharge : 0;
@@ -3083,6 +3103,8 @@
       }
       this.phase = 'over';
       this.ball.live = false;
+      // 飛びつきボレーで飛び込んでいる最中に決まった（めったにない）なら、当てずにそこで止める
+      ACTORS.forEach((w) => { this.actor(w).dive = null; });
       // 観客の歓声（sfx.point）用の決まり方。エース／ウィナーは相手の非（凡ミス）とは
       // 違う盛り上がり方をする。ラリーの本数（rallyShots）も渡し、長引くほど盛り上げる。
       const outcome = reason === 'ダブルフォルト' ? 'doubleFault'
@@ -3327,7 +3349,10 @@
       // スイングの有効時間（swing）を使わないので、これを見ないと離した次のフレームで消え、
       // 約0.2秒後に当たる serve() がキックサーブを打てなかった（普通のサーブとして飛んでいた）。
       const servePending = !!(this.serveSwing && this.serveSwing.who === 'you');
-      if (you.special && you.swing <= 0 && you.anim <= 0 && !you.charging && !servePending) you.special = null;
+      // 飛びつきボレーで飛び込んでいる間（dive）も、まだ当たっていないので残す。
+      if (you.special && you.swing <= 0 && you.anim <= 0 && !you.charging && !servePending && !you.dive) {
+        you.special = null;
+      }
       // AI（Hard）も同じ扱い：振っている間は技が残るのでフォームに使え、モーションが
       // 尽きたところで消える。AI には溜め（charging）もスイングの有効時間（swing）も
       // 無いので、見るのはモーションの残り（anim）だけ。
@@ -3536,7 +3561,8 @@
       // ので入力があっても一切動かさない（＝ボールはプレイヤーの手元ではなく静止したトス
       // 位置から放たれる、という見た目のずれをなくす）。打った直後のフォロースルー中
       // （recoverTimers.you）も同様に、入力があっても動き出せない。
-      if (!this.tossActive && this.recoverTimers.you <= 0) {
+      // 飛びつきボレーで飛び込んでいる間（you.dive）は、足元を tickDives() が動かす。
+      if (!this.tossActive && this.recoverTimers.you <= 0 && !this.you.dive) {
         const youBefore = { x: this.you.x, z: this.you.z };
         const mx = this.input.moveX * INPUT_X_TO_WORLD;
         const mz = this.input.moveZ;
@@ -3804,7 +3830,8 @@
      * そうでなければ通常どおり moveTowards で目標へ寄せる。
      */
     moveIfRecovered(recoverKey, actor, before, target, speed, dt) {
-      if (this.recoverTimers[recoverKey] > 0) {
+      // 飛びつきボレーで飛び込んでいる間も、足元は tickDives() が動かす
+      if (this.recoverTimers[recoverKey] > 0 || actor.dive) {
         actor.speed = 0;
         return;
       }
@@ -4053,14 +4080,36 @@
       const mustBounceFirst = this.serveInFlight && ball.bounces < 1;
       if (mustBounceFirst) return;
 
+      // 飛びつきボレーで飛び込んでいる最中の選手がいれば、その1人が当たるまで誰も触らない
+      // （相方に横取りさせない。当たる瞬間は tickDives() が決める）。
+      const diving = ACTORS.find((w) => this.actor(w).dive);
+      if (diving) {
+        this.tickDives(diving);
+        return;
+      }
+
       // プレイヤーは溜めキーを押した瞬間の前後だけ打てる。人間が優先（AIパートナーに横取りさせない）
       if (ball.last !== 'you' && ball.z < PLAYER.NET_MARGIN && this.you.swing > 0) {
         // 能力値「リーチ・読み」で手の届く範囲が広がる／狭まる（attr.reach）。
         // 必殺技（飛びつきボレー・ツイーナー・ダンクスマッシュ）はさらにその上から広がる。
         const extra = specialReach(this.you.special);
         // レシーブ（サーブを打ち返す1打）だけ RETURN.REACH_MULT ぶん広い（reachMult()）。
-        if (reaches(ball, this.you, PLAYER.REACH * this.reachMult() * extra.mult)
-          && ball.y < PLAYER.REACH_Y + extra.y) {
+        const reach = PLAYER.REACH * this.reachMult() * extra.mult;
+        if (this.you.special === 'divingVolley') {
+          // 飛びつきボレーは、球に届く瞬間が迫った（DIVE.LUNGE_MIN 以内）ところで飛び込み、
+          // 届いたところで当たる（startDive）。振りの有効時間がこの刻みで尽きるなら、
+          // 届く瞬間がもう少し先でも今飛ぶ（待つと空振りになる）。ただし伸びたリーチに
+          // 球が入ってくるのは、振りの有効時間のうちでなければならない（他の打ち方と同じ。
+          // 入ってこない球は空振り）。
+          const plan = this.diveTarget('you', () => reach);
+          if (plan && plan.first.t <= this.you.swing
+            && (plan.best.t <= SPECIAL.DIVE.LUNGE_MIN || this.you.swing <= STEP)) {
+            this.you.swingConnected = true; // 振りは届いた（空振りの扱いにしない）
+            this.you.swing = 0;
+            this.startDive('you', plan.contact);
+            return;
+          }
+        } else if (reaches(ball, this.you, reach) && ball.y < PLAYER.REACH_Y + extra.y) {
           this.hit('you');
           this.you.swing = 0;
         }
@@ -4103,9 +4152,15 @@
       if (!aiCanReturnNow(actor, ball)) return false;
       if (ball.y >= PLAYER.CPU_REACH_Y || ball.y <= PLAYER.CPU_REACH_Y_MIN) return false;
       const reach = reactReach(ball.age, actor.attr.reach);
+      if (reaches(ball, actor, reach)) {
+        this.hit(who);
+        return true;
+      }
       // 普通のリーチでは届かない球でも、飛びつきボレー（Extreme のみ）なら手が届く。
-      if (!reaches(ball, actor, reach) && !this.tryAiDive(who, ball, reach)) return false;
-      this.hit(who);
+      // 人間と同じく、ここから球へ飛び込んで、届いたところで当たる（startDive）。
+      const dive = this.tryAiDive(who, ball, reach);
+      if (!dive) return false;
+      this.startDive(who, dive.at);
       return true;
     }
 
@@ -4113,22 +4168,156 @@
      * AI の飛びつきボレー（Extreme のみ。SPECIAL.AI.MOVES_ALL 参照）。
      * 人間の条件（SPECIAL_MATCH.divingVolley＝「ノーバウンドだが、普通に振ったのでは
      * 届かない」）をそのまま AI の当たり判定へ移したもので、伸びたリーチ
-     * （SPECIAL.DIVE.REACH_MULT）でだけ届く球のときに true を返し、この1打に技が乗る旗を
+     * （SPECIAL.DIVE.REACH_MULT）でだけ届く球のときに飛び込むと決め、この1打に技が乗る旗を
      * 立てる（hit() が受け取る）。代償——打った後の長い硬直（DIVE.RECOVER）——も人間と同じ。
      * 出すかどうかの抽選は球ごとに1回（diveCommit）。
-     * @param {number} reach 普通に手を伸ばして届く距離(m)（reactReach の結果）
+     * **飛び込むと決める瞬間は、伸びたリーチに球が入った瞬間のまま**（打点の見込みで早めに
+     * 決めると、後ずさりしてネット際を離れる前に決まる＝取れる球が増え、強さが変わる）。
+     * 当たるのはその後、diveTarget() で選んだ打点（普通のリーチに入る前まで）。
+     * @param {number} reach いま普通に手を伸ばして届く距離(m)（reactReach の結果）
+     * @returns {{at:object|null}|null} 飛び込むなら打点（diveTarget の contact。見込みが
+     *   立たなければ null＝この場で当てる）。飛び込まないなら null
      */
     tryAiDive(who, ball, reach) {
-      if (!this.aiSpecialsOn() || !this.diveCommit[who]) return false;
-      if (this.aiMoves().indexOf('divingVolley') === -1) return false;
-      if (this.usesLeft('divingVolley', who) <= 0) return false;
-      if (ball.bounces !== 0) return false; // ボレーの場面だけ（バウンド後の球は対象外）
+      if (!this.aiSpecialsOn() || !this.diveCommit[who]) return null;
+      if (this.aiMoves().indexOf('divingVolley') === -1) return null;
+      if (this.usesLeft('divingVolley', who) <= 0) return null;
+      if (ball.bounces !== 0) return null; // ボレーの場面だけ（バウンド後の球は対象外）
       const actor = this.actor(who);
-      if (Math.abs(actor.z) > PLAYER.VOLLEY_Z) return false; // ネット際にいるときだけ
-      if (!reaches(ball, actor, reach * SPECIAL.DIVE.REACH_MULT)) return false;
+      if (Math.abs(actor.z) > PLAYER.VOLLEY_Z) return null; // ネット際にいるときだけ
+      const { REACH_MULT } = SPECIAL.DIVE;
+      if (!reaches(ball, actor, reach * REACH_MULT)) return null;
       this.diveCommit[who] = false;
       actor.diveVolley = true;
-      return true;
+      // 手の届く範囲は打たれてからの時間で広がる（reactReach）ので、見込みの各瞬間には
+      // その瞬間の範囲を使う。普通のリーチに入ってくる瞬間より後は選ばない（体のそばまで
+      // 来た球へ飛び込むことになる）。
+      const plan = this.diveTarget(who, (t) => reactReach(ball.age + t, actor.attr.reach) * REACH_MULT,
+        1 / REACH_MULT);
+      return { at: plan && plan.contact };
+    }
+
+    /**
+     * 飛びつきボレーの打点の見込み。これから DIVE.LUNGE_MAX 秒の軌道のうち、伸びたリーチ
+     * （reachAt）の中にいる間（ノーバウンドで、自陣の、打てる高さ）から、**伸ばした体で
+     * いちばん届きやすい瞬間**を選ぶ。届きやすさは「足元からの水平距離 − その高さで伸ばした
+     * 体が届く水平距離（diveStretch）」の小ささで、同じくらいなら早いほうを選ぶ
+     * （DIVE.LATE_COST。真上から落ちてくるだけの球を、低くなるまで待たないため）。
+     * いま立っている場所のままで見積もる。
+     * @param {string} who
+     * @param {(t:number) => number} reachAt t 秒後の伸びたリーチ(m)
+     * @param {number} [inner] 足元からの水平距離が伸びたリーチのこの割合より近づいたら、
+     *   そこで打ち切る（普通のリーチに入ってくる球を、その手前で捉えるため）
+     * @returns {{first:object, best:object, contact:object}|null}
+     *   first＝リーチに入る最初の瞬間、best＝いちばん届きやすい瞬間、contact＝飛び込みに
+     *   要る時間（LUNGE_MIN）より後でいちばん届きやすい瞬間（そんな瞬間が無ければ best）。
+     *   リーチに入ってこないなら null。瞬間はどれも predictWindow() のサンプル
+     *   （t は今からの秒数）。
+     */
+    diveTarget(who, reachAt, inner = 0) {
+      const actor = this.actor(who);
+      const { DIVE } = SPECIAL;
+      const score = (at) => Math.hypot(at.x - actor.x, at.z - actor.z) - diveStretch(at.y)
+        + DIVE.LATE_COST * at.t;
+      let first = null;
+      let best = null;
+      let late = null;
+      let over = false; // リーチに入ってから出た（ひとつながりの区間はそこまで）
+      const consider = (at) => {
+        const ratio = Math.hypot(at.x - actor.x, at.z - actor.z) / reachAt(at.t);
+        const ok = !over && ratio < 1 && ratio >= inner && at.y < PLAYER.REACH_Y
+          && at.z * NET_DIR[who] < PLAYER.NET_MARGIN;
+        if (!ok) {
+          if (first) over = true;
+          return false;
+        }
+        if (!first) first = at;
+        if (!best || score(at) < score(best)) best = at;
+        if (at.t >= DIVE.LUNGE_MIN && (!late || score(at) < score(late))) late = at;
+        return true;
+      };
+      // いまの位置も候補に入れる（predictWindow は1刻み先から。離れていく球には、いまが
+      // 最後の届く瞬間ということがある）。この先はノーバウンドのまま（弾んだら打ち切る）。
+      const ball = this.ball;
+      consider({ x: ball.x, y: ball.y, z: ball.z, t: 0 });
+      predictWindow(ball, consider, DIVE.LUNGE_MAX, 0);
+      return best ? { first, best, contact: late || best } : null;
+    }
+
+    /**
+     * 飛びつきボレーの飛び込みを始める（人間は checkSwings から、球に届く瞬間が飛び込みに
+     * 要る時間 DIVE.LUNGE_MIN 以内に迫ったとき。AI は swingAiAt から、伸びたリーチに球が
+     * 入ったとき＝飛び込むと決めたとき）。
+     *
+     * **すぐには打たない。** 以前は伸びたリーチに球が入った瞬間に当てていたので、3m 先の
+     * 球を直立したまま打ち返す＝ラケットと球が離れて見えた（ユーザー報告）。代わりに
+     * 見込んだ打点（at）まで体ごと球へ飛び込む：伸ばした体で届く水平距離（diveStretch）
+     * まで、足元も球のほうへ移す（DIVE.MAX_TRAVEL まで）。実際に当てるのは tickDives()。
+     * 打点の向き（フォア／バック）も、溜め始めの見込みではなく飛び込む先で決める
+     * ＝ラケットを持つ手が球の側に来る。
+     * @param {string} who
+     * @param {{x:number, y:number, z:number, t:number}|null} at 打点（diveTarget の contact）。
+     *   null ならいまの球の位置でこの場で当てる
+     */
+    startDive(who, at) {
+      const actor = this.actor(who);
+      const ball = this.ball;
+      const { DIVE } = SPECIAL;
+      const point = at || {
+        x: ball.x, y: ball.y, z: ball.z, t: 0,
+      };
+      const dx = point.x - actor.x;
+      const dz = point.z - actor.z;
+      const dist = Math.hypot(dx, dz);
+      const travel = clamp(dist - diveStretch(point.y), 0, DIVE.MAX_TRAVEL);
+      const k = dist > 1e-6 ? travel / dist : 0;
+      let x1 = actor.x + dx * k;
+      let z1 = actor.z + dz * k;
+      if (who === 'you') {
+        const bounds = this.youBounds();
+        x1 = clamp(x1, bounds.xMin, bounds.xMax);
+        z1 = clamp(z1, bounds.zMin, bounds.zMax);
+      }
+      actor.dive = {
+        t: 0,
+        span: point.t,
+        age0: ball.age, // 経過時間は球の ball.age で測る（tickDives）
+        x0: actor.x,
+        z0: actor.z,
+        x1,
+        z1,
+        ball: { x: point.x, y: point.y, z: point.z },
+        stroke: RACKET_SIDE[who] * dx >= 0 ? 'forehand' : 'backhand',
+      };
+      actor.speed = 0;
+      if (who === 'you') {
+        this.you.vx = 0;
+        this.you.vz = 0;
+      }
+      if (point.t <= 0) this.tickDives(who); // 飛び込む間もない球は、この場で当てる
+    }
+
+    /**
+     * 飛び込んでいる選手を1刻みぶん進める（checkSwings から物理の刻みごとに）。足元を
+     * 飛び込む先へ寄せ、打点の時刻に届いたら当てる。時刻は球の ball.age（打たれてからの
+     * 経過時間）で測る＝物理の刻みとぴったり揃う。
+     * @param {string} who 飛び込んでいる選手
+     */
+    tickDives(who) {
+      const actor = this.actor(who);
+      const dive = actor.dive;
+      dive.t = this.ball.age - dive.age0;
+      const u = dive.span > 0 ? clamp(dive.t / dive.span, 0, 1) : 1;
+      // 踏み切りで一気に出て、伸びきるところでは足元がほぼ止まっている
+      const move = 1 - (1 - u) * (1 - u);
+      actor.x = lerp(dive.x0, dive.x1, move);
+      actor.z = lerp(dive.z0, dive.z1, move);
+      // 打点の時刻（予測と同じ刻みで数えた時間）。足し算の誤差で1刻み遅れないよう少し甘く見る
+      if (dive.t < dive.span - 1e-6) return;
+      actor.x = dive.x1;
+      actor.z = dive.z1;
+      this.hit(who); // 打ち方の向きは dive.stroke（hit() が見る）
+      actor.dive = null;
     }
 
     /* ---------------------------------------------------------- タイマー */

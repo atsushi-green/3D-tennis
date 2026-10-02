@@ -7482,6 +7482,67 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
       `the dive motion lasts as long as the lock, got ${g.you.stroke}/${g.you.anim}`);
   }
 
+  // --- 飛びつきボレーは球へ飛び込み、伸ばした体が届いたところで当たる ---
+  // 以前は伸びたリーチ（3m）に入った瞬間に直立したまま当てていたので、ラケットと球が
+  // 離れて見えた（ユーザー報告）。横を速く抜けていく球で確かめる：
+  // ・飛び込み（you.dive）は目で追える長さ（LUNGE_MIN）以上ある
+  // ・当たるのは球が体の真横を通るとき（通り過ぎてから後ろへ飛びつくのではない）
+  // ・足元は球のほうへ移り、当たる瞬間の球は伸ばした体の届く距離の内側にある
+  // ・フォア／バックは溜め始めの見込みではなく、飛び込む先で決まる
+  {
+    const { DIVE } = SPECIAL;
+    const stretch = (y) => Math.sqrt(DIVE.BODY_REACH ** 2 - (y - DIVE.CONTACT_LIFT) ** 2);
+    /** 体の横 side*2.7m を、前から 18m/s で抜けていく球に飛びつく */
+    const passDive = (side, forceStroke) => {
+      const g = rally(['divingVolley']);
+      g.you.x = 0;
+      g.you.z = -3;
+      g.ball.x = side * 2.7;
+      g.ball.y = 1.0;
+      g.ball.z = -0.2;
+      g.ball.vx = 0; g.ball.vy = 2; g.ball.vz = -18;
+      g.ball.bounces = 0;
+      g.ball.age = 0.5;
+      const offered = g.pickSpecial();
+      g.chargeStart();
+      if (forceStroke) g.you.chargeStroke = forceStroke;
+      g.chargeRelease();
+      let span = null;
+      let at = null;
+      const hit = g.hit.bind(g);
+      g.hit = (who) => {
+        at = { x: g.ball.x, y: g.ball.y, z: g.ball.z, you: { x: g.you.x, z: g.you.z } };
+        hit(who);
+      };
+      for (let i = 0; i < 40 && g.ball.last !== 'you'; i++) {
+        g.update(1 / 60);
+        if (g.you.dive && span === null) span = g.you.dive.span;
+      }
+      return { g, offered, span, at };
+    };
+    const fh = passDive(-1);
+    ok(fh.offered === 'divingVolley', `precondition: the passing ball offers the dive, got ${fh.offered}`);
+    ok(fh.g.ball.last === 'you' && !!fh.at, 'the dive returns the passing ball');
+    ok(fh.span !== null && fh.span >= DIVE.LUNGE_MIN - 1e-6,
+      `the lunge is long enough to see: ${fh.span && fh.span.toFixed(3)}s (min ${DIVE.LUNGE_MIN})`);
+    if (fh.at) {
+      const { at } = fh;
+      const dz = at.z - at.you.z;
+      ok(Math.abs(dz) < 0.5, `it meets the ball beside the body, not after it went past: dz=${dz.toFixed(2)}`);
+      ok(at.you.x < -0.4, `the feet travel toward the ball: x=${at.you.x.toFixed(2)}`);
+      const d = Math.hypot(at.x - at.you.x, at.z - at.you.z);
+      ok(d <= stretch(at.y) + 0.05,
+        `and the ball is within the stretched body's reach: ${d.toFixed(2)}m (reach ${stretch(at.y).toFixed(2)}m)`);
+    }
+    ok(fh.g.you.stroke === 'volley-forehand', `the racket side faces the ball, got ${fh.g.you.stroke}`);
+    ok(!fh.g.you.dive, 'and the lunge is over once it hits');
+    // 反対側（バック側）へ抜ける球：溜め始めにフォアの見込みだったとしても、バックで飛びつく
+    const bh = passDive(1, 'forehand');
+    ok(bh.g.ball.last === 'you' && bh.g.you.stroke === 'volley-backhand',
+      `a ball on the backhand side is dived at with the backhand, got ${bh.g.you.stroke}`);
+    ok(bh.at && bh.at.you.x > 0.4, `toward the backhand side: x=${bh.at && bh.at.you.x.toFixed(2)}`);
+  }
+
   // --- 必殺技で決めたポイントは、球種ではなく技名でコールされる ---
   {
     const g = rally(['hawkEye']);
@@ -8114,16 +8175,82 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
         g.ball.z = g.cpu.z - 0.1;
         g.ball.x = g.cpu.x + PLAYER.CPU_REACH * g.cpu.attr.reach * 1.3; // 届かないが飛びつけば届く
       };
+      /** 飛び込み（startDive）から当たるまで、物理を1刻みずつ進める */
+      const throughDive = (g, who) => {
+        for (let i = 0; i < 240 && g[who].dive; i++) g.stepBall(R.config.PHYSICS.STEP);
+      };
       onExtreme(() => {
         const g = cpuRally();
         diveBall(g);
         g.diveCommit.cpu = true;
         ok(g.swingAiAt('cpu', g.ball) === true, 'extreme: the AI dives at a volley it cannot otherwise reach');
+        ok(!!g.cpu.dive && g.ball.last === 'you',
+          'it launches itself at the ball first (the hit comes when the racket gets there)');
+        throughDive(g, 'cpu');
+        ok(g.ball.last === 'cpu', 'and then hits it');
         ok(g.cpu.special === 'divingVolley', `and the shot carries the move, got ${g.cpu.special}`);
         ok(g.usesLeft('divingVolley', 'cpu') === CPU.SPECIAL_USES - 1, 'it spends one use');
         ok(g.recoverTimers.cpu === SP.DIVE.RECOVER,
           `and pays the same long recovery the human does, got ${g.recoverTimers.cpu}`);
         ok(g.cpu.diveVolley === false, 'the flag is cleared so the next swing is an ordinary one');
+      });
+      // 遠い球には足元ごと飛び込み、伸ばした体が届くところで当たる
+      onExtreme(() => {
+        const g = cpuRally();
+        diveBall(g);
+        g.ball.x = g.cpu.x + PLAYER.CPU_REACH * g.cpu.attr.reach * 1.8; // 伸ばした体でも届かない遠さ
+        g.diveCommit.cpu = true;
+        const x0 = g.cpu.x;
+        ok(g.swingAiAt('cpu', g.ball) === true, 'extreme: the AI dives at a far volley');
+        let at = null;
+        const hit = g.hit.bind(g);
+        g.hit = (who) => { at = { x: g.ball.x, y: g.ball.y, cx: g.cpu.x, cz: g.cpu.z, z: g.ball.z }; hit(who); };
+        throughDive(g, 'cpu');
+        ok(g.ball.last === 'cpu' && !!at, 'and returns it');
+        ok(g.cpu.x > x0 + 0.3, `moving its feet toward the ball: x ${x0.toFixed(2)} -> ${g.cpu.x.toFixed(2)}`);
+        if (at) {
+          const { DIVE } = SP;
+          const reach = Math.sqrt(DIVE.BODY_REACH ** 2 - (at.y - DIVE.CONTACT_LIFT) ** 2);
+          const d = Math.hypot(at.x - at.cx, at.z - at.cz);
+          ok(d <= reach + 0.05, `so the stretched racket gets there: ${d.toFixed(2)}m (reach ${reach.toFixed(2)}m)`);
+        }
+      });
+      // 打たれて間もない球でも、目で追える長さ（LUNGE_MIN）は飛び込んでから当てる。AI の手の
+      // 届く範囲は打たれてからの時間で広がる（reactReach）ので、打点の見込みにもその瞬間の
+      // 範囲を使う（いまの範囲で見ると、飛び込むと決めた直後にもう範囲の外へ抜ける球に
+      // しか見込みが立たず、一瞬で倒れ込んで当てていた）。
+      onExtreme(() => {
+        const g = cpuRally();
+        g.cpu.x = 0; g.cpu.z = 2;
+        g.ball.x = 2.7; g.ball.y = 1.0; g.ball.z = 0.2;
+        g.ball.vx = 0; g.ball.vy = 2; g.ball.vz = 18;
+        g.ball.age = 0.6;
+        g.diveCommit.cpu = true;
+        let span = null;
+        for (let i = 0; i < 120 && g.ball.last === 'you'; i++) {
+          g.recoverTimers.cpu = Math.max(g.recoverTimers.cpu, g.cpu.dive ? 0 : 1); // 走らせない
+          g.stepBall(R.config.PHYSICS.STEP);
+          if (g.cpu.dive && span === null) span = g.cpu.dive.span;
+        }
+        ok(span !== null && span >= SP.DIVE.LUNGE_MIN - 1e-6,
+          `a fresh ball is still dived at with a full lunge: ${span && span.toFixed(3)}s (min ${SP.DIVE.LUNGE_MIN})`);
+        ok(g.ball.last === 'cpu', 'and returned');
+      });
+      // 体のほうへ寄ってくる球に飛びついたときは、普通のリーチに入る手前で捉える
+      // （体のそばまで引きつけてから倒れ込むのではない）
+      onExtreme(() => {
+        const g = cpuRally();
+        diveBall(g);
+        g.ball.vx = -4; // 体のほうへ寄ってくる
+        g.diveCommit.cpu = true;
+        let at = null;
+        const hit = g.hit.bind(g);
+        g.hit = (who) => { at = { d: Math.hypot(g.ball.x - g.cpu.x, g.ball.z - g.cpu.z) }; hit(who); };
+        const reach = R.ai.reactReach(g.ball.age, g.cpu.attr.reach);
+        ok(g.swingAiAt('cpu', g.ball) === true, 'extreme: it dives at it (the decision is unchanged)');
+        throughDive(g, 'cpu');
+        ok(!!at && at.d >= reach - 0.05,
+          `and meets it before it comes within normal reach: ${at && at.d.toFixed(2)}m (normal reach ${reach.toFixed(2)}m)`);
       });
       // 出す気でいない球（抽選に外れた球）には飛びつかない
       onExtreme(() => {
@@ -8149,6 +8276,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
           diveBall(g);
           g.diveCommit.cpu = true;
           g.swingAiAt('cpu', g.ball);
+          throughDive(g, 'cpu');
           const land = R.physics.predictLanding(g.ball);
           const inHumanCourt = !land.net && land.z < 0 && land.z >= -(L + COURT.LINE_SLACK)
             && Math.abs(land.x) <= W + COURT.LINE_SLACK;

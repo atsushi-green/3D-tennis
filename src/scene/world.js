@@ -191,6 +191,11 @@
           t: p.leap.t, kind: p.leap.kind, span: p.leap.span, rise: p.leap.rise, reach: p.leap.reach,
         } : null,
         dash: p.dash ? { x: p.dash.x, z: p.dash.z, t: p.dash.t } : null,
+        // 飛びつきボレーの、打つ前の飛び込み（飛ぶ先の足元・打点・向き）
+        dive: p.dive ? {
+          t: p.dive.t, span: p.dive.span, x1: p.dive.x1, z1: p.dive.z1, stroke: p.dive.stroke,
+          ball: { x: p.dive.ball.x, y: p.dive.ball.y, z: p.dive.ball.z },
+        } : null,
       };
     }
 
