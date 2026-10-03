@@ -4473,6 +4473,8 @@
       // このバウンドの跡（ボールマーク）を、判定どおりに線へ掛かる／掛からない位置に置くのに使う
       if (this.lastBounce) this.lastBounce.call = this.lineCall;
       if (kind !== 'safe') this.hooks.sound('lineCall', kind);
+      // 際どさは音の側が見る（ライン際なら観客が「おぉ…」と漏らす。AUDIO.CROWD.OOH）
+      this.hooks.sound('nearLine', at.inside);
     }
 
     /**

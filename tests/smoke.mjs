@@ -9053,6 +9053,9 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     ok(c && c.kind === 'out' && c.line === 'base' && c.out.x === 0 && c.out.z === -1 && c.decisive,
       `a long ball is called out on the baseline, got ${JSON.stringify(c)}`);
     ok(voiced().join() === 'out', `and the judge shouts it, got ${JSON.stringify(sounds)}`);
+    const near = sounds.filter(([n]) => n === 'nearLine');
+    ok(near.length === 1 && Math.abs(near[0][1] - c.inside) < 1e-12 && c.inside < -0.3,
+      `every call tells how close to the line it was (the crowd reacts only to close ones), got ${JSON.stringify(near)}`);
   }
   // ラリー：サイドラインの外。より大きく割った方の線になる
   {
@@ -9074,6 +9077,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     ok(g.lineCall && g.lineCall.kind === 'safe' && g.lineCall.line === 'base' && !g.lineCall.decisive,
       `a ball just inside the baseline gets the safe signal, got ${JSON.stringify(g.lineCall)}`);
     ok(voiced().length === 0, 'the safe signal is silent');
+    ok(sounds.some(([n, inside]) => n === 'nearLine' && inside >= 0 && inside <= LINE_CALL.SAFE_MARGIN),
+      `but a ball just inside the line still reaches the crowd, got ${JSON.stringify(sounds)}`);
     const h = make();
     rallyBounce(h, 1.0, -(HALF_L - LINE_CALL.SAFE_MARGIN - 0.3));
     ok(h.lineCall === null, `a comfortably-in ball gets no call, got ${JSON.stringify(h.lineCall)}`);

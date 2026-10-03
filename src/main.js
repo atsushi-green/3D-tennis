@@ -358,6 +358,10 @@
         world.startReplay(game.lineCall && game.lineCall.decisive ? LINE_CALL.REPLAY_DELAY : 0);
       }
       hud.setReplay(world.isReplaying(), world.isCheckingMark());
+      // 観客のざわめきはポイントの合間だけ。サーブの構えに入ると静まり、ラリー中は無音。
+      // 1本目のフォールトからセカンドサーブまでの間も静かなまま（'fault' は含めない）
+      sfx.murmur(!game.practice && (world.isReplaying() || matchStatsOpen || !!game.changeover
+        || game.phase === 'over'));
       hud.setShade(game.changeoverShade());
       hud.setPractice(game.practice);
       // いま Space を押していて技が出る状態なら、溜めバーも金色にする（＝離した瞬間に
@@ -372,6 +376,8 @@
       hud.setSmashTip(game.smashHint);
       hud.setSwingGuide(game.swingGuide, game.you.x);
       syncStamina();
+    } else {
+      sfx.murmur(false); // 試合を作り直してスタート画面／レッスン一覧へ戻った
     }
     world.render();
   }

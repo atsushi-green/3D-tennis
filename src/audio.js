@@ -193,6 +193,9 @@
       src.start(t0, Math.random() * Math.max(0, buffer.duration - dur));
       src.stop(t0 + dur);
 
+      // ダブルフォルトには、拍手より先にため息が漏れる
+      if (outcome === 'doubleFault') crowdVoices(C.SIGH);
+
       // 拍手。粒ごとに開始時刻をずらすことで、揃った1発ではなくパチパチとばらける。
       const P = C.CLAP;
       const claps = Math.round(lerp(P.MIN, P.MAX, excitement)
@@ -270,6 +273,109 @@
         type: 'highpass', vol: V.BURST_VOL, hz: V.BURST_HZ, q: 0.7, dur: V.BURST_DUR,
         at: tEnd - ac.currentTime,
       });
+    } catch (e) {
+      /* 音が出ないだけなのでゲームは続行 */
+    }
+  }
+
+  /**
+   * 観客の声（「おぉ…」・ため息）。AUDIO.CROWD.OOH / SIGH のコメント参照。
+   * @param {object} V AUDIO.CROWD.OOH か SIGH
+   */
+  function crowdVoices(V) {
+    const ac = context();
+    if (!ac) return;
+    try {
+      const t0 = ac.currentTime + V.DELAY;
+      const dur = jDur(V.DUR);
+      // 立ち上がって HOLD の割合まで保ち、そこから消える（指数で落とすと出た直後に萎んで聞こえる）
+      const vol = jVol(V.VOL);
+      const out = ac.createGain();
+      out.gain.setValueAtTime(SILENCE, t0);
+      out.gain.linearRampToValueAtTime(vol, t0 + V.ATTACK);
+      out.gain.setValueAtTime(vol, t0 + dur * V.HOLD);
+      out.gain.linearRampToValueAtTime(SILENCE, t0 + dur);
+      out.connect(ac.destination);
+      // 声の束 → フォルマント3本（並列）→ エンベロープ。人数で割って束の音量を揃える
+      const bus = ac.createGain();
+      bus.gain.value = 1 / Math.sqrt(V.VOICES);
+      V.VOWEL.forEach((hz, i) => {
+        const bp = ac.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.value = hz;
+        bp.Q.value = V.FORMANT_Q;
+        const level = ac.createGain();
+        level.gain.value = V.FORMANT_GAIN[i];
+        bus.connect(bp).connect(level).connect(out);
+      });
+      for (let i = 0; i < V.VOICES; i++) {
+        const osc = ac.createOscillator();
+        osc.type = 'sawtooth';
+        const pitch = rand(V.PITCH_MIN, V.PITCH_MAX);
+        const start = t0 + rand(0, V.SPREAD);
+        osc.frequency.setValueAtTime(pitch, start);
+        osc.frequency.linearRampToValueAtTime(pitch * V.PITCH_PEAK, start + dur * 0.3);
+        osc.frequency.linearRampToValueAtTime(pitch * V.PITCH_END, t0 + dur);
+        osc.connect(bus);
+        osc.start(start);
+        osc.stop(t0 + dur + 0.02);
+      }
+      if (V.BREATH > 0) {
+        const buffer = noiseBuffer(ac);
+        const breath = ac.createBufferSource();
+        breath.buffer = buffer;
+        const level = ac.createGain();
+        level.gain.value = V.BREATH;
+        breath.connect(level).connect(bus);
+        breath.start(t0, Math.random() * Math.max(0, buffer.duration - dur));
+        breath.stop(t0 + dur);
+      }
+    } catch (e) {
+      /* 音が出ないだけなのでゲームは続行 */
+    }
+  }
+
+  /**
+   * ポイントの合間のざわめき（AUDIO.CROWD.MURMUR）。一度だけ組み立てて鳴らし続け、
+   * murmur(on) で音量の目標だけを切り替える（ラリー中は 0 へ静まる）。
+   */
+  let bed = null;
+  function murmur(on) {
+    if (!bed && !on) return;
+    const ac = context();
+    if (!ac) return;
+    const M = AUDIO.CROWD.MURMUR;
+    try {
+      if (!bed) {
+        const gain = ac.createGain();
+        gain.gain.value = 0;
+        gain.connect(ac.destination);
+        const buffer = noiseBuffer(ac);
+        M.BANDS.forEach((hz, i) => {
+          const src = ac.createBufferSource();
+          src.buffer = buffer;
+          src.loop = true;
+          const bp = ac.createBiquadFilter();
+          bp.type = 'bandpass';
+          bp.frequency.value = hz;
+          bp.Q.value = M.Q;
+          // 音節くらいの速さの揺れ（BAND_GAIN × (1 ± AM_DEPTH)）
+          const am = ac.createGain();
+          am.gain.value = M.BAND_GAIN[i];
+          const lfo = ac.createOscillator();
+          lfo.frequency.value = M.SYLLABLE_HZ[i];
+          const depth = ac.createGain();
+          depth.gain.value = M.AM_DEPTH * M.BAND_GAIN[i];
+          lfo.connect(depth).connect(am.gain);
+          src.connect(bp).connect(am).connect(gain);
+          src.start(0, (buffer.duration * i) / M.BANDS.length); // 帯域ごとに別の区間から
+          lfo.start();
+        });
+        bed = { gain, on: false };
+      }
+      if (bed.on === on) return;
+      bed.on = on;
+      bed.gain.gain.setTargetAtTime(on ? M.VOL : 0, ac.currentTime, on ? M.RISE_TC : M.HUSH_TC);
     } catch (e) {
       /* 音が出ないだけなのでゲームは続行 */
     }
@@ -358,6 +464,16 @@
     },
     /** 線審の「アウト！」「フォルト！」（ライン際に入った球の「セーフ」は無言の合図だけ）。 */
     lineCall: (kind) => lineCallVoice(kind),
+    /**
+     * 線審が判定した球（コールのたび）。線からの距離が AUDIO.CROWD.OOH.MARGIN 以内なら、
+     * イン・アウトを問わず観客が「おぉ…」と声を漏らす。
+     * @param {number} inside 線までの内側への距離(m、負なら外)
+     */
+    nearLine: (inside) => {
+      if (Math.abs(inside) <= AUDIO.CROWD.OOH.MARGIN) crowdVoices(AUDIO.CROWD.OOH);
+    },
+    /** ポイントの合間のざわめき。on＝合間（決着後・リプレイ・休憩）、off＝構えてからラリー中。 */
+    murmur: (on) => murmur(on),
     /** ネットコードに当たる鈍い音（低く長め＝テープ/ガットの damped な振動）。 */
     netIn: () => layered(AUDIO.NET_IN),
     /** 必殺技の発動。音程が上がっていくので、直後に鳴る打球音と混ざっても聞き分けられる。 */
