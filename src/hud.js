@@ -5,8 +5,10 @@
   const { pointLabel } = RallyOne.scoring;
   const {
     GUIDE, SERVE, WIND, STAMINA, SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, getRating,
-    SPECIAL, SPECIAL_MOVES,
+    SPECIAL, SPECIAL_MOVES, PRACTICE,
   } = RallyOne.config;
+  /** 練習モードのレッスン一覧の見出し（config.PRACTICE.LESSONS の group ごと） */
+  const LESSON_GROUPS = { basic: '基本', special: '必殺技' };
   /** ガイドで「タイミングが効かない」と伝えるときの打ち方の呼び名。 */
   const STROKE_LABEL = {
     smash: 'スマッシュ',
@@ -108,6 +110,15 @@
         staminaRowYouMate: $('staminaRowYouMate'),
         staminaRowCpuMate: $('staminaRowCpuMate'),
         shade: $('shade'),
+        hud: $('hud'),
+        lsKicker: $('lsKicker'),
+        lsTitle: $('lsTitle'),
+        lsText: $('lsText'),
+        lsProgress: $('lsProgress'),
+        practiceBtn: $('practiceBtn'),
+        practiceMenu: $('practiceMenu'),
+        lessonList: $('lessonList'),
+        practiceBack: $('practiceBack'),
         call: $('call'),
         callBig: $('callBig'),
         callSub: $('callSub'),
@@ -585,6 +596,126 @@
 
     hideStartScreen() {
       this.el.start.style.display = 'none';
+    }
+
+    /**
+     * 試合・練習からスタート画面へ戻る（練習モードの Esc）。試合中にだけ出ていた表示
+     * （コール・暗転幕・溜めゲージ・技の予告・スマッシュの案内・ガイド・リプレイの札・
+     * レッスンの札）も引っ込める。
+     */
+    showStartScreen() {
+      this.el.start.style.display = '';
+      this.hideCall();
+      this.setReplay(false);
+      this.setShade(0);
+      this.setCharge(0);
+      this.setSpecialTip(null);
+      this.setSmashTip(null);
+      this.setSwingGuide(null, 0);
+      this.setPractice(null);
+    }
+
+    /* ------------------------------------------------------ 練習モード */
+
+    /**
+     * スタート画面の練習モードの入口と、レッスン一覧を組み立てる（main.js から一度だけ呼ぶ）。
+     * 行は config.PRACTICE.LESSONS の並びどおりで、group ごとに見出しを挟む。
+     * @param {{onOpen:Function, onSelect:(index:number)=>void, onBack:Function}} handlers
+     */
+    buildLessons(handlers) {
+      this.lessonRows = [];
+      let group = null;
+      PRACTICE.LESSONS.forEach((lesson, i) => {
+        if (lesson.group !== group) {
+          group = lesson.group;
+          const head = document.createElement('div');
+          head.className = 'pmGroup';
+          head.textContent = LESSON_GROUPS[group] || group;
+          this.el.lessonList.append(head);
+        }
+        const row = document.createElement('div');
+        row.className = 'lessonRow';
+        row.title = lesson.text;
+        const no = document.createElement('span');
+        no.className = 'no';
+        no.textContent = `${i + 1}`;
+        const name = document.createElement('span');
+        name.className = 'name';
+        name.textContent = lesson.title;
+        const done = document.createElement('span');
+        done.className = 'done';
+        done.textContent = '✓';
+        row.append(no, name, done);
+        row.addEventListener('click', () => handlers.onSelect(i));
+        this.el.lessonList.append(row);
+        this.lessonRows.push(row);
+      });
+      this.el.practiceBtn.addEventListener('click', () => handlers.onOpen());
+      this.el.practiceBack.addEventListener('click', () => handlers.onBack());
+    }
+
+    /**
+     * 設定（#menuBody）を隠してレッスン一覧を出す。
+     * @param {number} cursor いま選んでいる行（↑↓ で動かす）
+     * @param {Set<string>} cleared クリアしたレッスンの key（✓ を付ける）
+     */
+    showLessons(cursor, cleared) {
+      this.el.menuBody.style.display = 'none';
+      this.el.start.classList.add('lessons');
+      this.el.practiceMenu.classList.add('on');
+      this.renderLessons(cursor, cleared);
+    }
+
+    hideLessons() {
+      this.el.start.classList.remove('lessons');
+      this.el.practiceMenu.classList.remove('on');
+      this.el.menuBody.style.display = '';
+    }
+
+    /** @param {number} cursor @param {Set<string>} cleared */
+    renderLessons(cursor, cleared) {
+      this.lessonRows.forEach((row, i) => {
+        row.classList.toggle('cur', i === cursor);
+        row.classList.toggle('cleared', cleared.has(PRACTICE.LESSONS[i].key));
+      });
+      const cur = this.lessonRows[cursor];
+      if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: 'nearest' });
+    }
+
+    /**
+     * 練習中のレッスンの札（スコアボードの代わりに左上へ出す）。毎フレーム呼ばれるので、
+     * 中身が変わったときだけ組み立て直す。null なら試合の表示に戻す。
+     * @param {object|null} practice game.practice
+     */
+    setPractice(practice) {
+      const key = practice
+        ? `${practice.lesson.key}:${practice.done}:${practice.tries}:${practice.cleared}`
+        : '';
+      if (key === this.practiceKey) return;
+      this.practiceKey = key;
+      this.el.hud.classList.toggle('practice', !!practice);
+      if (!practice) return;
+      const { lesson, done, cleared } = practice;
+      const index = PRACTICE.LESSONS.indexOf(lesson);
+      this.el.lsKicker.textContent = `練習 ${index + 1} / ${PRACTICE.LESSONS.length} · ${LESSON_GROUPS[lesson.group] || ''}`;
+      this.el.lsTitle.textContent = lesson.title;
+      this.el.lsText.textContent = lesson.text;
+      const dots = [];
+      for (let i = 0; i < lesson.goal; i++) {
+        const dot = document.createElement('span');
+        dot.className = `dot${i < done ? ' on' : ''}`;
+        dots.push(dot);
+      }
+      const count = document.createElement('span');
+      count.textContent = ` 成功 ${done} / ${lesson.goal}`;
+      dots.push(count);
+      if (cleared) {
+        const clear = document.createElement('span');
+        clear.className = 'clear';
+        clear.textContent = 'クリア！';
+        dots.push(clear);
+      }
+      this.el.lsProgress.replaceChildren(...dots);
     }
 
     /**

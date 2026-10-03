@@ -76,6 +76,19 @@
    * （構えのキーに触れただけで振り返りが消えてしまわないよう、リプレイのスキップと同じ考え方）。
    */
   const CLOSE_MATCH_STATS = ['Space', 'Enter'];
+  /**
+   * 練習モード。スタート画面の P でレッスン一覧を開き、一覧の中は矢印で選んで Space/Enter で
+   * 始める（一覧は2列なので ←→ は隣、↑↓ は上下の行＝2つ先）。練習中は N で次のレッスン、
+   * Esc でレッスン一覧へ戻る（どちらも試合中は何もしない）。
+   */
+  const OPEN_PRACTICE = ['KeyP'];
+  const LESSON_MOVE = {
+    ArrowLeft: -1, ArrowRight: 1, ArrowUp: -2, ArrowDown: 2,
+  };
+  const LESSON_START = ['Space', 'Enter'];
+  const LESSON_BACK = ['Escape', 'Backspace'];
+  const NEXT_LESSON = ['KeyN'];
+  const BACK_TO_MENU = ['Escape'];
   /** ブラウザのスクロールを止めたいキー */
   const SWALLOW = MOVE_LEFT.concat(MOVE_RIGHT, MOVE_UP, MOVE_DOWN, SWING_CODES, SKIP_REPLAY);
 
@@ -96,7 +109,10 @@
      *   onToggleGuide:Function, onCycleSpecials:Function,
      *   onSelectToss:Function, isAwaitingToss:Function,
      *   onSkipReplay:Function, isStarted:Function,
-     *   isMatchStatsOpen:Function, onCloseMatchStats:Function}} handlers
+     *   isMatchStatsOpen:Function, onCloseMatchStats:Function,
+     *   onOpenPractice:Function, isLessonMenuOpen:Function, onLessonCursor:(step:number)=>void,
+     *   onLessonStart:Function, onLessonBack:Function,
+     *   isPracticing:Function, onNextLesson:Function, onBackToMenu:Function}} handlers
      */
     attach(handlers) {
       addEventListener('keydown', (e) => {
@@ -108,6 +124,20 @@
             if (TOSS_KEYS[e.code]) handlers.onSelectToss(TOSS_KEYS[e.code]);
             return; // トスの結果待ちの間は、他の開始キーには反応しない
           }
+          // レッスン一覧を開いている間は、一覧の操作だけ（試合の開始キーには反応しない）
+          if (handlers.isLessonMenuOpen()) {
+            if (LESSON_MOVE[e.code]) handlers.onLessonCursor(LESSON_MOVE[e.code]);
+            else if (LESSON_START.indexOf(e.code) !== -1) handlers.onLessonStart();
+            else if (LESSON_BACK.indexOf(e.code) !== -1) handlers.onLessonBack();
+            return;
+          }
+          if (OPEN_PRACTICE.indexOf(e.code) !== -1) {
+            handlers.onOpenPractice();
+            return;
+          }
+          // Esc はスタート画面では何もしない。一覧から Esc で戻った直後にもう一度押しても
+          // （下の「どのキーでも開始」に落ちて）試合が始まってしまわないように。
+          if (LESSON_BACK.indexOf(e.code) !== -1) return;
           // S / D は「その形式を選んでそのまま開始」。Space など他のキーは
           // 「いま選ばれている形式で開始」なので、形式を指定したいときはこの2つを使う。
           if (e.code === 'KeyS') handlers.onStartSingles();
@@ -124,6 +154,16 @@
         if (handlers.isMatchStatsOpen()) {
           if (CLOSE_MATCH_STATS.indexOf(e.code) !== -1) handlers.onCloseMatchStats();
           return;
+        }
+        if (handlers.isPracticing()) {
+          if (NEXT_LESSON.indexOf(e.code) !== -1) {
+            handlers.onNextLesson();
+            return;
+          }
+          if (BACK_TO_MENU.indexOf(e.code) !== -1) {
+            handlers.onBackToMenu();
+            return;
+          }
         }
         // ポイント間のリプレイをスキップする合図。リプレイ中でなければ何もしない
         // （world.js#skipReplay() 参照）。Space は試合中この用途にしか使わない。
@@ -181,6 +221,15 @@
           handlers.onChargeRelease();
         }
       });
+    }
+
+    /**
+     * 握っている溜めキーを忘れる（練習モードでレッスンを替える／スタート画面へ戻るとき、
+     * main.js が Game を作り直す直前に呼ぶ）。前の Game で握ったキーの keyup が、
+     * スタート画面にいる間に来ると拾われず、次の Game で B/V/C が効かなくなるため。
+     */
+    resetCharge() {
+      this.chargeKey = null;
     }
 
     any(codes) {

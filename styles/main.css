@@ -14,6 +14,24 @@ canvas{display:block}
 
 #scorewrap{position:absolute;top:14px;left:14px}
 
+/* 練習モード中は、スコアボードまわり（得点・スタッツ・風・スタミナ・技の残り）の代わりに
+   レッスンの札を出す（hud.setPractice() が #hud に .practice を付け外しする） */
+#lesson{display:none;position:absolute;top:14px;left:14px;width:min(360px,calc(100vw - 28px));
+  background:rgba(9,20,34,.82);border-left:4px solid var(--ball);border-radius:2px;
+  padding:10px 14px;box-shadow:0 6px 24px rgba(0,0,0,.35)}
+#hud.practice #lesson{display:block}
+#hud.practice #scorewrap,#hud.practice #head{display:none}
+.lsKicker{font-size:10px;letter-spacing:.2em;color:var(--dim)}
+.lsTitle{font-size:18px;font-weight:700;margin-top:2px}
+.lsText{font-size:12px;line-height:1.6;margin-top:6px}
+.lsProgress{margin-top:8px;font-size:12px;letter-spacing:.06em;font-variant-numeric:tabular-nums}
+.lsProgress .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;
+  border:1px solid var(--ball);vertical-align:-1px}
+.lsProgress .dot.on{background:var(--ball)}
+.lsProgress .clear{margin-left:6px;color:var(--ball);font-weight:700}
+.lsFoot{margin-top:8px;font-size:10px;color:var(--dim)}
+.lsFoot b{color:var(--line);font-weight:600}
+
 /* チェンジエンズの暗転幕（opacity は hud.setShade() が毎フレーム入れる） */
 #shade{position:absolute;inset:0;background:var(--ink);opacity:0}
 
@@ -324,6 +342,34 @@ canvas{display:block}
 
 /* コイントスに人間が勝ったときだけ出るサーブ／レシーブの選択（既定は非表示）。
    このときは設定（#menuBody）を隠して、選択だけを残す。 */
+/* 練習モードへの入口。試合開始より一段控えめにする */
+.playBtn.sub{margin-top:8px;border-color:var(--dim);color:var(--line);opacity:.75;
+  font-size:11px;padding:8px 20px}
+.playBtn.sub:hover{opacity:1;background:var(--line);color:var(--ink)}
+.playBtn.sub kbd{display:inline-block;margin-left:8px;padding:0 4px;border:1px solid currentColor;
+  border-radius:2px;font:inherit;font-size:9px;opacity:.7;vertical-align:1px}
+
+/* 練習モードのレッスン一覧（既定は非表示）。出すときは #menuBody を隠す */
+#practiceMenu{display:none;margin-top:10px;text-align:left}
+#practiceMenu.on{display:block}
+/* 一覧を出している間は、タイトル下の説明文を畳んで一覧に場所を譲る */
+#start.lessons .card > p{display:none}
+.pmHead{font-size:15px;font-weight:700;letter-spacing:.06em;margin-bottom:4px}
+.pmHead span{margin-left:10px;font-size:11px;font-weight:400;color:var(--dim)}
+.pmGroup{font-size:10px;letter-spacing:.2em;color:var(--dim);margin:6px 0 1px}
+#lessonList{display:grid;grid-template-columns:1fr 1fr;gap:3px 8px}
+#lessonList .pmGroup{grid-column:1/-1}
+.lessonRow{display:flex;align-items:center;gap:8px;cursor:pointer;
+  border:1px solid rgba(232,238,245,.18);border-radius:2px;padding:3px 8px;font-size:12px;
+  transition:border-color .12s,background-color .12s}
+.lessonRow:hover{border-color:var(--ball)}
+.lessonRow.cur{border-color:var(--ball);background:rgba(216,242,74,.10)}
+.lessonRow .no{flex:0 0 18px;font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums}
+.lessonRow .name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lessonRow .done{color:var(--ball);font-size:11px;visibility:hidden}
+.lessonRow.cleared .done{visibility:visible}
+.pmFoot{margin-top:8px;font-size:10px;color:var(--dim);text-align:center}
+
 #tossChoice{display:none;margin-top:14px;font-size:12px;color:var(--dim);letter-spacing:.06em}
 #tossChoice.on{display:block}
 .tossSegs{margin-top:8px}

@@ -7,8 +7,8 @@
 
   const {
     ATTRS, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, FX, HALF_L, HALF_W, NET, PHYSICS,
-    PLAYER, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, TIMING, TIMING_AIM,
-    TRAIL, VOLLEY, WIND, shotSkill,
+    PLAYER, PRACTICE, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, TIMING,
+    TIMING_AIM, TRAIL, VOLLEY, WIND, shotSkill,
   } = RallyOne.config;
   const {
     approach2D, clamp, lerp, mpsToKmh, rand, signOr,
@@ -908,6 +908,15 @@
        * スタミナをどこまで戻したか(0〜1)。tickChangeover() が進める。
        */
       this.changeover = null;
+      /**
+       * 練習モード（startPractice()）の進み具合。試合中は null。
+       * { lesson, done, tries, rep, cleared, shot, fired, target }：lesson＝config.PRACTICE の
+       * レッスン、done／tries＝成功した本数／打った本数、rep＝何本目か（立ち位置・出す球を
+       * 順に使い回す）、cleared＝目標の本数に届いたか、shot／fired＝この1本で自分が打った
+       * 打ち方（hit()/serve() が入れる）と出た必殺技（spendSpecial() が入れる）、
+       * target＝移動のレッスンの目印（表示もここを読む）。
+       */
+      this.practice = null;
     }
 
     actor(who) {
@@ -1354,7 +1363,8 @@
      * 従来とまったく同じゲーム、という約束を壊さないため。SPECIAL.AI 参照）。
      */
     aiSpecialsOn() {
-      if (!CPU.SPECIALS) return false;
+      // 練習モードの CPU は球出し役なので、技は使わない（レッスンで技を装備していても）
+      if (!CPU.SPECIALS || this.practice) return false;
       return !SPECIAL.AI.REQUIRE_PLAYER_SPECIALS || this.specials.length > 0;
     }
 
@@ -1439,6 +1449,7 @@
      */
     spendSpecial(move, label, who = 'you') {
       const actor = this.actor(who);
+      if (this.practice && who === 'you') this.practice.fired = move;
       if (who === 'you') this.specialUses[move] = this.usesLeft(move) - 1;
       else actor.specialUses[move] = this.usesLeft(move, who) - 1;
       this.stats[TEAM_OF[who]].specials++;
@@ -1949,18 +1960,28 @@
      * @param {string} [faultReason] セカンドサーブのときだけ渡す（'ネット'|'アウト'）
      */
     beginServe(faultReason) {
-      this.clearTimers();
+      this.resetPointState();
       this.phase = 'serve';
+      // この1点に何がかかっているか（ブレークポイント／セットポイント）。スコアと
+      // サーバーだけで決まる＝ポイント中は変わらないので、ここで一度だけ求める
+      // （セカンドサーブでもう一度通っても同じ結果になる）。
+      this.stakes = pointStakes(this.match, this.server);
+      this.placeForServe(faultReason);
+    }
+
+    /**
+     * 1本の球を始める前の後始末（タイマー・ボール・溜め・技・反応の遅れを持ち越さない）。
+     * サーブ待ち（beginServe）と、練習モードの球出し前（nextRep）の両方から呼ぶ。
+     * phase はここでは変えない（呼び出し側が決める）。
+     */
+    resetPointState() {
+      this.clearTimers();
       this.tossActive = false;
       this.aiTossActive = false;
       this.serveSwing = null;
       this.serveInFlight = false;
       this.cpuNetRush = false;
       this.rallyShots = 0; // このサーブ（フォールトからのやり直しも含む）から数え直す
-      // この1点に何がかかっているか（ブレークポイント／セットポイント）。スコアと
-      // サーバーだけで決まる＝ポイント中は変わらないので、ここで一度だけ求める
-      // （セカンドサーブでもう一度通っても同じ結果になる）。
-      this.stakes = pointStakes(this.match, this.server);
 
       const ball = this.ball;
       ball.live = false;
@@ -2014,7 +2035,14 @@
         this.dashCommit[w] = false;
         this.diveCommit[w] = false;
       });
+    }
 
+    /**
+     * サーバー／レシーバー（ダブルスは両者の相方も）をスタンスへ置き、案内を出して、
+     * CPU/AI のサーブなら予約する（beginServe() の後半）。
+     * @param {string} [faultReason] セカンドサーブのときだけ渡す（'ネット'|'アウト'）
+     */
+    placeForServe(faultReason) {
       const side = this.match.serveSide; // クロス(-1)から始まり、ポイントごとに逆クロス(+1)と交互になる
       const serverTeam = this.server;
       const receiverTeam = opponent(serverTeam);
@@ -2306,6 +2334,7 @@
       this.lastShotBy[team] = kick
         ? SPECIAL_LABEL.kickServe
         : shotLabel('serve', spin, false, serveCourse(magnitude));
+      if (this.practice && who === 'you') this.practice.shot = { stroke: 'serve', spin, lob: false };
       this.resetTrail();
 
       // レシーブ側の人間が、サーブが来る前からラケットを引いて待っていた場合
@@ -2611,6 +2640,8 @@
       this.lastShotBy[TEAM_OF[who]] = special
         ? (player.specialLabel || SPECIAL_LABEL[special])
         : shotLabel(stroke, spin, shot.lob);
+      // 練習モードは、この1本が狙いどおりの打ち方だったかを決着のときに見る（practiceMiss()）
+      if (this.practice && who === 'you') this.practice.shot = { stroke, spin, lob: !!shot.lob };
       // 音程はチーム単位（誰が打っても同じ）。音色は打ち方(stroke)とスピンで変わる。
       this.hooks.sound('hit', TEAM_OF[who], stroke, charge, spin);
     }
@@ -3184,6 +3215,10 @@
 
     endPoint(winner, reason) {
       if (this.phase === 'over') return;
+      if (this.practice) {
+        this.endRep(winner, reason); // 練習は得点をつけず、この1本の成否だけを数える
+        return;
+      }
       // ダブルフォルト＝サーバー側の失点。エース＝サーブがリターンに一度も触れられずに
       // (serveInFlight のまま)2バウンドで決まった場合（＝サーバー側の得点）。
       const isAce = reason === 'ツーバウンド' && this.serveInFlight;
@@ -3304,6 +3339,178 @@
       });
     }
 
+    /* ---------------------------------------------------------- 練習モード */
+
+    /**
+     * 練習モード（チュートリアル）を始める。得点・スタッツ・チェンジエンズは動かさず、
+     * レッスン（config.PRACTICE.LESSONS）の球を1本ずつ出し続ける。試合の start() と同じく
+     * 1つの Game で1回だけ（別のレッスンへ移るときは main.js が Game を作り直す）。
+     * @param {string} key レッスンの key
+     */
+    startPractice(key) {
+      const lesson = PRACTICE.LESSONS.find((l) => l.key === key);
+      if (this.started || !lesson) return;
+      this.started = true;
+      this.doubles = false;
+      this.practice = {
+        lesson, done: 0, tries: 0, rep: 0, cleared: false, shot: null, fired: null, target: null,
+      };
+      // そのレッスンの技だけを装備する（優先度が上の技が先に出て、練習したい技を横取りしない）
+      this.setSpecials(lesson.special ? [lesson.special] : []);
+      this.wind = 0; // 無風（ポイントが進まないので newPoint() の風の揺らぎも起きない）
+      this.hooks.wind(0);
+      this.nextRep();
+    }
+
+    /** 練習の次の1本を用意する（立ち位置へ置き、球を出す／サーブを待つ／目印を出す）。 */
+    nextRep() {
+      const p = this.practice;
+      const L = p.lesson;
+      p.shot = null;
+      p.fired = null;
+      p.target = null;
+      // 1本ごとに疲れも技の回数も戻す（練習なので尽きない）
+      ACTORS.forEach((who) => { this.actor(who).stamina = 1; });
+      this.refreshSpecials();
+      if (L.kind === 'serve' || L.kind === 'return') {
+        this.server = L.kind === 'serve' ? 'you' : 'cpu';
+        // サーブのサイドは合計ポイントの奇偶で決まる（match.serveSide）。得点はつけないので、
+        // デュース／アドを1本ごとに入れ替えるためだけにここを使う。
+        this.match.points = { you: p.rep % 2, cpu: 0 };
+        // レシーブの練習の CPU は、遅く確実なセカンドサーブ（SERVE.SECOND_*）で打ってくる。
+        // 練習ではフォールトしてもダブルフォルトにならない（serveFault()）。
+        this.serveNumber = L.kind === 'return' ? 2 : 1;
+        this.beginServe();
+        return;
+      }
+      // 自分のサーブではない＝球が出る前から溜めキーを押して待てる（chargeStart()）
+      this.server = 'cpu';
+      this.resetPointState();
+      this.phase = 'rally';
+      this.hooks.clearCall();
+      // 移動のレッスンは走った先から次の目印へ続けて動く（最初の1本だけ立ち位置へ置く）
+      if (L.kind !== 'move' || p.rep === 0) {
+        const at = L.start[p.rep % L.start.length];
+        Object.assign(this.you, {
+          x: at.x, z: at.z, vx: 0, vz: 0, speed: 0,
+        });
+      }
+      const { FEEDER } = PRACTICE;
+      Object.assign(this.cpu, { x: FEEDER.x, z: FEEDER.z, speed: 0 });
+      // 出すまでは球出し役の手元に止めておく（live=false のまま）
+      Object.assign(this.ball, {
+        x: FEEDER.x, y: FEEDER.y, z: FEEDER.z, px: FEEDER.x, py: FEEDER.y, pz: FEEDER.z,
+      });
+      if (L.kind === 'move') {
+        p.target = L.targets[p.rep % L.targets.length];
+        return;
+      }
+      const feed = L.feeds[p.rep % L.feeds.length];
+      this.after(PRACTICE.FEED_DELAY, () => this.feedBall(feed));
+    }
+
+    /**
+     * 球出し役（CPU）が1球出す。打ち返されてきた球とまったく同じ扱い（ball.last='cpu'）
+     * なので、当たり判定・構え・スマッシュの先回り印・必殺技の予告は試合と同じに働く。
+     * @param {{to:{x:number,z:number}, t:number, spin?:string, clearance?:number,
+     *   from?:{x?:number,y?:number,z?:number}}} feed config.PRACTICE のレッスンの feeds の1つ
+     */
+    feedBall(feed) {
+      if (!this.practice || this.phase !== 'rally') return;
+      const { FEEDER } = PRACTICE;
+      const from = Object.assign({ x: FEEDER.x, y: FEEDER.y, z: FEEDER.z }, feed.from);
+      const spin = feed.spin || 'flat';
+      const ball = this.ball;
+      Object.assign(ball, {
+        x: from.x, y: from.y, z: from.z, px: from.x, py: from.y, pz: from.z,
+        live: true, last: 'cpu', bounces: 0, age: 0, sinceBounce: 0,
+        spin, curve: 0, wind: 0, kick: false, reactBonus: 0,
+        impact: FX.IMPACT_DURATION, impactPower: 0,
+      }, solveShot(from, { x: feed.to.x, y: BALL_R, z: feed.to.z }, feed.t, feed.clearance, spin));
+      this.rallyShots = 1;
+      this.resetTrail();
+      this.resetChase(); // バギーホイップの「相手が打ってから走った距離」はここから数える
+      // 球が出る前から構えていたなら、フォア／バックはここで決め直す（押した瞬間は球が
+      // 止まっていて、どちらへ来るか分からなかった）
+      if (this.you.charging) this.you.chargeStroke = classifyStroke('you', ball, this.you);
+      this.cpu.anim = PLAYER.SWING_ANIM;
+      this.cpu.stroke = 'forehand';
+      this.cpu.spin = spin;
+      this.hooks.sound('hit', 'cpu', 'forehand', 0, spin);
+    }
+
+    /** 移動のレッスン：目印に入ったら成功。毎フレーム update() から呼ぶ。 */
+    tickPractice() {
+      const p = this.practice;
+      if (!p || !p.target || this.phase !== 'rally') return;
+      if (Math.hypot(this.you.x - p.target.x, this.you.z - p.target.z) > PRACTICE.MOVE_RADIUS) return;
+      p.target = null;
+      this.phase = 'over';
+      this.scoreRep(true);
+    }
+
+    /**
+     * 練習の1本が決着した（endPoint() の代わり）。CPU は打ち返さないので、自分の球が入れば
+     * 必ず相手コートで2バウンドして winner==='you' になる。そのうえで狙いどおりの打ち方
+     * だったかを見る。入らなかったときは決まり方（ネット／アウト／届かず）がそのまま理由。
+     */
+    endRep(winner, reason) {
+      this.phase = 'over';
+      this.ball.live = false;
+      ACTORS.forEach((w) => { this.actor(w).dive = null; });
+      const why = winner === 'you'
+        ? this.practiceMiss()
+        : (reason === 'ツーバウンド' ? '届かなかった' : reason);
+      this.scoreRep(!why, why);
+    }
+
+    /**
+     * 入った1本が、レッスンの need を満たしていたか。満たしていれば null、そうでなければ
+     * 何を変えればよいかの一言（lesson.hint）。
+     */
+    practiceMiss() {
+      const { lesson, shot, fired } = this.practice;
+      const need = lesson.need || {};
+      if (need.special) return fired === need.special ? null : lesson.hint;
+      if (!shot) return null;
+      const ok = (!need.strokes || need.strokes.indexOf(shot.stroke) !== -1)
+        && (!need.spin || shot.spin === need.spin)
+        && (need.lob === undefined || shot.lob === need.lob);
+      return ok ? null : lesson.hint;
+    }
+
+    /**
+     * 練習の1本の成否を数え、コールを出して次の1本を予約する。目標の本数に届いたら
+     * 「レッスンクリア」（その後も同じレッスンを続けられる。次へ進むのは main.js の N）。
+     * @param {boolean} ok
+     * @param {string} [why] 失敗の理由（コールの補足）
+     */
+    scoreRep(ok, why) {
+      const p = this.practice;
+      const { goal } = p.lesson;
+      p.tries++;
+      if (ok) p.done++;
+      const cleared = ok && !p.cleared && p.done >= goal;
+      const last = PRACTICE.LESSONS.indexOf(p.lesson) === PRACTICE.LESSONS.length - 1;
+      // サーブは入ったときに球速も添える（試合ではスコアボード脇に出る数字）
+      const kmh = ok && p.shot && p.shot.stroke === 'serve' && this.lastServeKmh
+        ? ` · ${Math.round(this.lastServeKmh)}km/h` : '';
+      if (cleared) {
+        p.cleared = true;
+        this.hooks.call('レッスンクリア！', last
+          ? '最後のレッスン！ N か Esc でレッスン一覧へ'
+          : 'N で次のレッスンへ ／ このまま続けて練習してもよい');
+      } else if (ok) {
+        this.hooks.call('ナイス！', `${p.cleared ? `${p.done}本目` : `${p.done} / ${goal}`}${kmh}`);
+      } else {
+        this.hooks.call('もう一度', why);
+      }
+      // 試合と同じ観客の反応（クリアは長いラリーの末のウィナー並みに沸く）
+      this.hooks.sound('point', ok ? 'you' : 'cpu', ok ? 'winner' : 'error', cleared ? 12 : 1, null);
+      p.rep++;
+      this.after(cleared ? PRACTICE.CLEAR_PAUSE : PRACTICE.NEXT_REP, () => this.nextRep());
+    }
+
     /* -------------------------------------------------------- 毎フレーム */
 
     update(dt) {
@@ -3320,6 +3527,7 @@
       this.ball.impact = Math.max(0, this.ball.impact - dt);
 
       this.movePlayers(dt);
+      this.tickPractice();
 
       // 物理は固定ステップで刻む（フレームレート非依存）
       for (let remaining = dt; remaining > 0; remaining -= STEP) {
@@ -3812,7 +4020,8 @@
       // へ歩いて戻ってしまうと、実際にサーブが来る頃には構えが崩れてしまう。
       // フォールトのコール中（'fault'）も同じ：どうせ直後の beginServe() でスタンスへ
       // 置き直されるので、その1秒ほどのために定位置へ歩き出させない。
-      if (this.phase === 'serve' || this.phase === 'fault') {
+      // 練習モードの CPU は球出し役なので、その場から動かない（打ち返しもしない。checkSwings()）
+      if (this.phase === 'serve' || this.phase === 'fault' || this.practice) {
         this.cpu.speed = 0;
         return;
       }
@@ -4164,6 +4373,20 @@
      * @param {string} reason 'ネット'|'アウト'
      */
     serveFault(reason) {
+      if (this.practice) {
+        // 練習ではダブルフォルトにしない：自分のサーブなら失敗として数えて打ち直し、
+        // CPU のサーブ（レシーブの練習）なら数えずにもう一度打たせる。
+        this.phase = 'fault';
+        this.serveInFlight = false;
+        this.ball.live = false;
+        if (this.server === 'you') {
+          this.scoreRep(false, `フォールト（${reason}）`);
+        } else {
+          this.hooks.call('フォールト', 'CPU のサーブをもう一度');
+          this.after(TIMING.FAULT_CALL, () => this.nextRep());
+        }
+        return;
+      }
       if (this.serveNumber !== 1) {
         this.endPoint(opponent(this.server), 'ダブルフォルト');
         return;
@@ -4238,7 +4461,8 @@
       // CPU は届く範囲なら自動で振る。ダブルスでは応答すべき側（doublesResponder）を
       // 先に試し、その人が実際には届かなかったときだけ相方に回す（同じく見逃し防止）。
       // サーブリターン中はレシーバー固定なので相方には回さない。
-      if (ball.last !== 'cpu' && ball.z > PLAYER.NET_MARGIN) {
+      // 練習モードの CPU は打ち返さない＝自分の球は、入れば相手コートで2バウンドして決着する
+      if (!this.practice && ball.last !== 'cpu' && ball.z > PLAYER.NET_MARGIN) {
         const responder = this.doubles ? this.doublesResponder('cpu') : 'cpu';
         const order = !this.doubles || this.serveInFlight
           ? [responder]

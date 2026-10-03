@@ -33,6 +33,15 @@
   <!-- チェンジエンズの暗転幕。#hud の先頭に置く＝スコアボードやコールはこの上に重なって
        見えたまま（中継で休憩中もスコアが出ているのと同じ）。濃さは hud.setShade() が入れる。 -->
   <div id="shade"></div>
+  <!-- 練習モードのレッスン（題・やること・成功した本数）。練習中だけ #hud.practice が付いて、
+       スコアボードの代わりに左上へ出る。中身は hud.setPractice() が game.practice から入れる。 -->
+  <div id="lesson">
+    <div class="lsKicker" id="lsKicker"></div>
+    <div class="lsTitle" id="lsTitle"></div>
+    <div class="lsText" id="lsText"></div>
+    <div class="lsProgress" id="lsProgress"></div>
+    <div class="lsFoot"><b>N</b> 次のレッスン ／ <b>Esc</b> レッスン一覧へ</div>
+  </div>
   <div id="scorewrap">
     <div id="bug">
       <div class="nm" id="n1">YOU</div><div class="gm" id="g1">0</div><div class="pt" id="p1">0</div>
@@ -94,7 +103,8 @@
 <div id="start"><div class="card">
   <h1>RALLY <span>ONE</span></h1>
   <p>3Dテニス v0.1 — ループの1周目。<br>
-     ボールが自コートで2バウンドしたら失点。ラインを割っても失点。</p>
+     ボールが自コートで2バウンドしたら失点。ラインを割っても失点。<br>
+     はじめてなら <b>P</b> で練習モード（操作を1つずつ覚えるチュートリアル）。</p>
 
   <!-- 設定＋開始ボタン。マウスだけで完結するが、各ボタンの <kbd> が示すキーでも同じ操作が
        できる（キー操作は input.js、クリックは hud.js#buildMenu が同じハンドラを呼ぶ）。
@@ -165,6 +175,16 @@
     </div>
 
     <div class="playBtn" id="playBtn">試合開始<kbd>Space</kbd></div>
+    <div class="playBtn sub" id="practiceBtn">練習モード（チュートリアル）<kbd>P</kbd></div>
+  </div>
+
+  <!-- 練習モードのレッスン一覧（#tossChoice と同じく #menuBody と差し替えて出す）。
+       行は hud.js#buildLessons が config.PRACTICE.LESSONS から組み立てる。 -->
+  <div id="practiceMenu">
+    <div class="pmHead">練習モード<span>得点なし。操作を1つずつ覚える</span></div>
+    <div id="lessonList"></div>
+    <div class="pmFoot">矢印キーで選ぶ ／ Space・Enter で始める ／ Esc で戻る（クリックでも始められる）</div>
+    <div class="playBtn sub" id="practiceBack">戻る<kbd>Esc</kbd></div>
   </div>
 
   <div id="tossChoice">

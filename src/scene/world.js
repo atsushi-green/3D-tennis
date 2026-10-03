@@ -77,6 +77,8 @@
     const trail = scene3d.createTrail();
     const smashHint = scene3d.createSmashHint();
     const swingGuide = scene3d.createSwingGuide();
+    const practiceTarget = scene3d.createPracticeTarget();
+    scene.add(practiceTarget);
     scene.add(
       you, cpu, youMate, cpuMate, ballMesh,
       ...GHOST_KEYS.map((key) => dashGhosts[key].mesh),
@@ -341,6 +343,8 @@
       scene3d.placeSmashHint(smashHint, state.smashHint);
       // ガイド付きモードの「いま離したらここへ飛ぶ」。それ以外は state.swingGuide が null。
       scene3d.placeSwingGuide(swingGuide, state.swingGuide, state.you);
+      // 練習モードの移動のレッスンの目印（それ以外は出さない）
+      scene3d.placePracticeTarget(practiceTarget, state.practice && state.practice.target);
 
       syncCamera(state.you, dt);
     }

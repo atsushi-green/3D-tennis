@@ -8733,5 +8733,230 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   }
 }
 
+// ===================================================================== 練習モード
+{
+  const { PRACTICE, SPECIAL_MOVES, CHARGE, SPECIAL } = R.config;
+  const { predictAtZ, integrate } = R.physics;
+  const DT = 1 / 120;
+
+  // --- レッスンの定義：必殺技は全部そろい、種類ごとに必要なものを持っている ---
+  {
+    const keys = PRACTICE.LESSONS.map((l) => l.key);
+    ok(new Set(keys).size === keys.length, `lesson keys are unique, got ${keys.join()}`);
+    const taught = PRACTICE.LESSONS.filter((l) => l.special).map((l) => l.special);
+    ok(SPECIAL_MOVES.every((m) => taught.indexOf(m.key) !== -1),
+      `every special move has a lesson, missing ${SPECIAL_MOVES.filter((m) => taught.indexOf(m.key) === -1).map((m) => m.key)}`);
+    const broken = PRACTICE.LESSONS.filter((l) => !l.title || !l.text || !(l.goal > 0)
+      || (l.kind === 'move' && !(l.targets && l.targets.length && l.start))
+      || (l.kind === 'feed' && !(l.feeds && l.feeds.length && l.start && l.start.length))
+      || ['move', 'serve', 'return', 'feed'].indexOf(l.kind) === -1);
+    ok(broken.length === 0, `every lesson has what its kind needs, broken: ${broken.map((l) => l.key)}`);
+  }
+
+  /** ボットの1コマぶんの入力（人間がやれる操作だけ）でレッスンを進める */
+  const practise = (key, maxTries, bot) => {
+    const input = { moveX: 0, moveZ: 0, lob: false };
+    const calls = [];
+    const g = new R.Game({ input, hooks: { ...noHooks, call: (b, s) => calls.push(`${b}|${s || ''}`) } });
+    g.startPractice(key);
+    let s = { rep: -1 };
+    for (let f = 0; f < 120 * 30 * maxTries && g.practice.tries < maxTries; f++) {
+      if (g.practice.rep !== s.rep) {
+        s = { rep: g.practice.rep, t: 0, pressed: false, released: false };
+        Object.assign(input, { moveX: 0, moveZ: 0, lob: false });
+      }
+      bot(g, input, s);
+      g.update(DT);
+      s.t += DT;
+    }
+    return { g, calls };
+  };
+  /** input.moveX は world の逆向き（INPUT_X_TO_WORLD=-1） */
+  const steerX = (input, g, x, dead = 0.08) => {
+    const dx = x - g.you.x;
+    input.moveX = Math.abs(dx) > dead ? (dx > 0 ? -1 : 1) : 0;
+  };
+  /** 球が自分の深さを通る x へ寄る（球を体の横 0.6m に置く） */
+  const track = (input, g, bounces) => {
+    const at = predictAtZ(g.ball, g.you.z, 3, bounces);
+    if (!at) { input.moveX = 0; return; }
+    steerX(input, g, at.x - (at.x >= g.you.x ? 0.6 : -0.6));
+  };
+  const incoming = (g) => g.phase === 'rally' && g.ball.live && g.ball.last === 'cpu';
+  /** 球が出る前から押して待ち、球を追って、届くところ（predictContact）で離す */
+  const stroke = (spin, { lob = false, drop = false, bounces = 1 } = {}) => (g, input, s) => {
+    input.lob = lob;
+    if (g.phase === 'rally' && !g.ball.live && !drop && !s.pressed) { g.chargeStart(spin); s.pressed = true; }
+    if (!incoming(g) || s.released) { input.moveX = 0; return; }
+    track(input, g, bounces);
+    if (g.predictContact() !== null) {
+      if (drop) g.chargeStart(spin); // ドロップは溜めずにすぐ離す
+      g.chargeRelease();
+      s.released = true;
+    }
+  };
+  const serveBot = (kick) => (g, input, s) => {
+    if (g.phase !== 'serve' || g.servingPlayer() !== 'you') return;
+    if (!s.pressed && s.t > 0.3) { g.chargeStart(kick ? 'top' : 'flat', kick); s.pressed = true; s.at = s.t; }
+    if (s.pressed && !s.released && s.t - s.at >= SERVE.CHARGE_SWEET_T) { g.chargeRelease(); s.released = true; }
+  };
+  /** 必殺技：技の予告（specialArmed＝HUD の ⚡）が出たら離す。steer＝球が出てからの動き方 */
+  const special = (key, { spin = 'flat', press = 'pre', steer = () => {} } = {}) => (g, input, s) => {
+    if (g.phase === 'rally' && !g.ball.live && press === 'pre' && !s.pressed) { g.chargeStart(spin); s.pressed = true; }
+    if (!incoming(g) || s.released) { input.moveX = 0; input.moveZ = 0; return; }
+    if (!s.pressed && (press === 'feed' || (press === 'cross' && g.ball.z < 0))) { g.chargeStart(spin); s.pressed = true; }
+    steer(g, input);
+    const armed = g.specialArmed;
+    if (s.pressed && armed && armed.move === key) { g.chargeRelease(); s.released = true; }
+  };
+  /** 落ちてくる球が y=h を下向きに通る地点と時刻（ノーバウンドのまま） */
+  const descentTo = (ball, h) => {
+    const b = { ...ball };
+    for (let t = 0; t < 4; t += 1 / 240) {
+      const py = b.y;
+      integrate(b, 1 / 240);
+      if (b.vy < 0 && py >= h && b.y < h) return { x: b.x, z: b.z, t };
+    }
+    return null;
+  };
+  const BOTS = {
+    move: (g, input) => {
+      const t = g.practice.target;
+      if (!t) { Object.assign(input, { moveX: 0, moveZ: 0 }); return; }
+      steerX(input, g, t.x, 0.1);
+      input.moveZ = Math.abs(t.z - g.you.z) > 0.1 ? Math.sign(t.z - g.you.z) : 0;
+    },
+    serve: serveBot(false),
+    return: (g, input, s) => {
+      if (!s.pressed && g.phase === 'serve') { g.chargeStart('top'); s.pressed = true; }
+      if (!incoming(g) || s.released) { input.moveX = 0; return; }
+      track(input, g, 1);
+      if (g.predictContact() !== null) { g.chargeRelease(); s.released = true; }
+    },
+    flat: stroke('flat'),
+    top: stroke('top'),
+    slice: stroke('slice'),
+    drop: stroke('slice', { drop: true }),
+    lob: stroke('top', { lob: true }),
+    volley: stroke('flat', { bounces: 0 }),
+    // スマッシュ：コートの輪（smashHint）へ先回りして止まり、半分以上溜めてから離す
+    smash: (g, input, s) => {
+      if (g.phase === 'rally' && !g.ball.live && !s.pressed) { g.chargeStart('flat'); s.pressed = true; }
+      if (!incoming(g) || s.released) { Object.assign(input, { moveX: 0, moveZ: 0 }); return; }
+      const h = g.smashHint;
+      if (h) {
+        steerX(input, g, h.x, 0.15);
+        input.moveZ = Math.abs(h.z - g.you.z) > 0.15 ? Math.sign(h.z - g.you.z) : 0;
+      }
+      if (g.predictContact() !== null && g.you.chargeTime >= CHARGE.MAX_TIME * 0.55) {
+        g.chargeRelease();
+        s.released = true;
+      }
+    },
+    kickServe: serveBot(true),
+    hawkEye: special('hawkEye', { steer: (g, input) => track(input, g, 1) }),
+    driveVolley: special('driveVolley', { steer: (g, input) => track(input, g, 0) }),
+    divingVolley: special('divingVolley'),
+    // 球が頭の高さ（2.5m）まで落ちてくる地点へ、間に合うように走り出す
+    dunkSmash: special('dunkSmash', {
+      steer: (g, input) => {
+        const p = descentTo(g.ball, 2.5);
+        if (!p) return;
+        steerX(input, g, p.x, 0.1);
+        input.moveZ = p.t <= (p.z - 0.4 - g.you.z) / (PLAYER.SPEED * 0.85) + 0.15 ? 1 : 0;
+      },
+    }),
+    rising: special('rising'),
+    shukuchi: special('shukuchi', { press: 'cross' }),
+    buggyWhip: special('buggyWhip', { spin: 'top', steer: (g, input) => track(input, g, 1) }),
+    jackknife: special('jackknife', { press: 'feed' }),
+    tweener: special('tweener', {
+      steer: (g, input) => {
+        input.moveZ = -1;
+        const at = predictAtZ(g.ball, g.you.z - 1, 3, 1);
+        if (at) steerX(input, g, at.x, 0.15);
+      },
+    }),
+  };
+
+  // --- どのレッスンも、人間がやれる操作だけで目標の本数に届く（球出し・立ち位置の確かめ） ---
+  {
+    const failed = [];
+    for (const L of PRACTICE.LESSONS) {
+      const { g } = practise(L.key, L.goal * 3, BOTS[L.key]);
+      if (!g.practice.cleared) failed.push(`${L.key} ${g.practice.done}/${g.practice.tries}`);
+    }
+    ok(failed.length === 0, `every lesson can be cleared within 3x its goal, failed: ${failed.join(', ')}`);
+  }
+
+  // --- 練習は得点をつけない（スコア・スタッツ・チェンジエンズ・リプレイの元になる状態が動かない） ---
+  {
+    const { g } = practise('flat', 6, BOTS.flat);
+    ok(g.practice.tries === 6, `precondition: six reps were played, got ${g.practice.tries}`);
+    ok(g.match.games.you === 0 && g.match.games.cpu === 0 && g.match.points.you === 0 && g.match.points.cpu === 0,
+      `practice never scores, got games ${JSON.stringify(g.match.games)} points ${JSON.stringify(g.match.points)}`);
+    ok(g.stats.you.points === 0 && g.stats.cpu.points === 0 && g.matchStats.points === 0,
+      'practice never touches the match stats');
+    ok(!g.endsSwapped && g.changeover === null, 'practice never changes ends');
+    ok(g.cpu.x === PRACTICE.FEEDER.x && g.cpu.z === PRACTICE.FEEDER.z,
+      `the feeder stays put, got ${g.cpu.x},${g.cpu.z}`);
+  }
+
+  // --- 打ち方が違えば、入っても成功にせず「何を変えればよいか」を出す ---
+  {
+    const { g, calls } = practise('flat', 3, stroke('top'));
+    ok(g.practice.done === 0, `topspin does not count in the flat lesson, got ${g.practice.done}`);
+    const hint = PRACTICE.LESSONS.find((l) => l.key === 'flat').hint;
+    ok(calls.some((c) => c === `もう一度|${hint}`), `and the call says what to change, got ${JSON.stringify(calls)}`);
+  }
+
+  // --- 必殺技のレッスンはその技だけを装備し、何本打っても回数が尽きない ---
+  {
+    const { g } = practise('hawkEye', 4, BOTS.hawkEye);
+    ok(g.specials.join() === 'hawkEye', `only the lesson's move is equipped, got ${g.specials.join()}`);
+    ok(g.practice.done === 4, `the move fires on every rep (uses refill), got ${g.practice.done}/4`);
+  }
+
+  // --- サーブの練習：フォールトしてもダブルフォルトにならず、1本目から打ち直す ---
+  {
+    const calls = [];
+    const g = new R.Game({ input: fakeInput, hooks: { ...noHooks, call: (b, s) => calls.push(`${b}|${s || ''}`) } });
+    g.startPractice('serve');
+    ok(g.phase === 'serve' && g.servingPlayer() === 'you', 'the serve lesson starts on your serve');
+    const side = g.match.serveSide;
+    g.serveFault('ネット');
+    ok(g.practice.tries === 1 && g.practice.done === 0, 'a fault counts as a miss');
+    for (let i = 0; i < 120 * 3 && g.phase !== 'serve'; i++) g.update(DT);
+    ok(g.phase === 'serve' && g.serveNumber === 1, `then you serve again as a first serve, got ${g.phase} #${g.serveNumber}`);
+    ok(g.match.serveSide === -side, 'from the other court (deuce / ad alternate)');
+    g.serveFault('アウト');
+    ok(!calls.some((c) => c.startsWith('ダブルフォルト')) && g.match.points.cpu === 0,
+      'two faults in a row are not a double fault');
+  }
+
+  // --- レシーブの練習：CPU のフォールトは数えずに打ち直す ---
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.startPractice('return');
+    ok(g.phase === 'serve' && g.servingPlayer() === 'cpu', 'the return lesson starts on the CPU serve');
+    g.serveFault('アウト');
+    ok(g.practice.tries === 0, `a CPU fault is not counted against you, got ${g.practice.tries}`);
+    for (let i = 0; i < 120 * 3 && g.phase !== 'serve'; i++) g.update(DT);
+    ok(g.phase === 'serve' && g.servingPlayer() === 'cpu', 'and the CPU serves again');
+  }
+
+  // --- 移動の練習：目印に入れば成功、次の目印は走った先から続ける ---
+  {
+    const { g } = practise('move', 2, BOTS.move);
+    ok(g.practice.done === 2, `reaching the targets counts, got ${g.practice.done}`);
+    Object.assign(g.input, { moveX: 0, moveZ: 0 }); // 2つ目に入った瞬間に手を離す
+    for (let i = 0; i < 120 * 3 && !g.practice.target; i++) g.update(DT);
+    const L = PRACTICE.LESSONS.find((l) => l.key === 'move');
+    const reached = L.targets[1];
+    ok(Math.hypot(g.you.x - reached.x, g.you.z - reached.z) <= PRACTICE.MOVE_RADIUS + 0.2,
+      `the next target starts from where you ran to, got ${g.you.x.toFixed(2)},${g.you.z.toFixed(2)}`);
+  }
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);

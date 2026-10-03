@@ -1857,6 +1857,206 @@
     CPU_SERVE_CHANCE: 0.75, // CPUがトスに勝ったとき、サーブを選ぶ確率（高め）
   };
 
+  /**
+   * 練習モード（チュートリアル）。得点をつけず、レッスンごとに決まった球を出し続けて、
+   * 操作を1つずつ覚えてもらう（進め方は Game#startPractice / nextRep / scoreRep）。
+   *
+   * レッスンの種類（kind）：
+   * - move：コート上の目印（target）まで動く。球は出ない
+   * - serve：自分がサーブする（デュース／アドを交互に）。フォールトしてもダブルフォルトにはならない
+   * - return：CPU のサーブを返す（CPU のフォールトは数えずに打ち直し）
+   * - feed：CPU が球出し役になって、feeds の球を順番に出す。CPU は打ち返さず、その場から動かない
+   * 成功は「自分の打った球が相手コートに入った（サーブはボックスに入った）」うえで、need を
+   * 満たしていること。need を満たさずに入ったときは hint を出す（＝何を変えればよいか）。
+   * - need.strokes：打ち方（game.js の stroke）がこのどれか
+   * - need.spin：球種（'flat'|'top'|'slice'|'drop'）
+   * - need.lob：ロブ（Shift）だったか
+   * - need.special：その必殺技が出たか（レッスン中はその技だけを装備し、回数は毎回戻す）
+   * start（立ち位置）と feeds（出す球）は配列で、1本ごとに順番に使い回す。
+   * 球は FEEDER（相手のベースライン付近）から、to（着地点、world 座標。-x が画面の右＝
+   * 自分のフォア側）へ t 秒で落ちる初速で出す（physics.solveShot）。from で出す位置を変えられる。
+   * 立ち位置・球は、実際にその技を出せることを tests/smoke.mjs の練習用ボットで確かめてある。
+   */
+  const PRACTICE = (() => {
+    const FH = -1; // 自分のフォア側（world -x＝画面の右）
+    const BH = 1;
+    const GROUND = ['forehand', 'backhand'];
+    const VOLLEY_STROKES = ['volley-forehand', 'volley-backhand'];
+    const label = (key) => SPECIAL_MOVES.find((m) => m.key === key).label;
+    // グラウンドストロークの基本の球：ベースラインの少し内側に弾み、フォア・バックへ交互に来る
+    const RALLY_START = [{ x: 0, z: -(HALF_L - 0.4) }];
+    const RALLY_FEEDS = [
+      { to: { x: FH * 2.0, z: -7.6 }, t: 1.25, spin: 'top' },
+      { to: { x: BH * 2.0, z: -7.6 }, t: 1.25, spin: 'top' },
+    ];
+    const special = (key, lesson) => Object.assign({
+      key, group: 'special', title: label(key), special: key, need: { special: key }, goal: 2,
+    }, lesson);
+    return {
+      FEEDER: { x: 0, y: 1.0, z: HALF_L - 1.0 }, // 球出し役（CPU）が球を出す位置
+      FEED_DELAY: 1.2,  // 構え直してから球が出るまで(秒)。押しっぱなしで待つ時間もここ
+      NEXT_REP: 1.5,    // 1本の結果（ナイス！／もう一度）を見せてから次の1本まで(秒)
+      CLEAR_PAUSE: 2.6, // レッスンをクリアしたときは、コールを読めるよう少し長く置く
+      MOVE_RADIUS: 0.6, // 移動のレッスン：目印の中心からこの距離に入れば成功(m)
+      TARGET_COLOR: 0xffe14a,
+      LESSONS: [
+        {
+          key: 'move', group: 'basic', title: '移動', kind: 'move', goal: 4,
+          text: '←→↑↓ で黄色い輪まで走ろう。止まらずに斜めにも動ける',
+          start: [{ x: 0, z: -(HALF_L - 0.4) }],
+          targets: [
+            { x: FH * 3.0, z: -9.5 }, { x: BH * 3.0, z: -9.5 },
+            { x: 0, z: -4.0 }, { x: FH * 2.0, z: -(HALF_L + 0.5) },
+          ],
+        },
+        {
+          key: 'serve', group: 'basic', title: 'サーブ', kind: 'serve', goal: 3,
+          text: 'B/V/C を押しっぱなしでトス → ゲージの線で離す。←→ でコース（T・ボディ・ワイド）、'
+            + '↑↓ で深さ。線を越えて溜めすぎるとフォールトしやすい',
+          hint: 'サービスボックスに入れよう',
+        },
+        {
+          key: 'return', group: 'basic', title: 'レシーブ', kind: 'return', goal: 3,
+          text: 'CPU のサーブを返す。サーブが来る前から B/V/C を押して構えておき、'
+            + '弾んだ球が届くところで離す。←→ で球の正面へ',
+          hint: '相手コートに返そう',
+        },
+        {
+          key: 'flat', group: 'basic', title: 'フラット', kind: 'feed', goal: 3,
+          text: 'B を押しっぱなしで溜め、球が届くところで離す。足を止めて溜めるほど速く深い球になる',
+          hint: 'B（フラット）で打とう',
+          start: RALLY_START, feeds: RALLY_FEEDS,
+          need: { strokes: GROUND, spin: 'flat', lob: false },
+        },
+        {
+          key: 'top', group: 'basic', title: 'トップスピン', kind: 'feed', goal: 3,
+          text: 'V で打つと、山なりに越えて沈み、高く弾む安全な球になる',
+          hint: 'V（トップスピン）で打とう',
+          start: RALLY_START, feeds: RALLY_FEEDS,
+          need: { strokes: GROUND, spin: 'top', lob: false },
+        },
+        {
+          key: 'slice', group: 'basic', title: 'スライス', kind: 'feed', goal: 3,
+          text: 'C を少し溜めてから離すと、低く滑るスライスになる（溜めずに離すとドロップショット）',
+          hint: 'C を少し溜めてから離そう',
+          start: RALLY_START, feeds: RALLY_FEEDS,
+          need: { strokes: GROUND, spin: 'slice', lob: false },
+        },
+        {
+          key: 'drop', group: 'basic', title: 'ドロップショット', kind: 'feed', goal: 3,
+          text: 'C を押してすぐ離す（ほとんど溜めない）と、ネット際に落ちて弾まないドロップショット',
+          hint: 'C を溜めずにすぐ離そう',
+          start: RALLY_START, feeds: RALLY_FEEDS,
+          need: { strokes: GROUND, spin: 'drop' },
+        },
+        {
+          key: 'lob', group: 'basic', title: 'ロブ', kind: 'feed', goal: 3,
+          text: 'Shift を押しながら打つと、高く上がって相手の頭を越すロブになる',
+          hint: 'Shift を押しながら打とう',
+          start: RALLY_START, feeds: RALLY_FEEDS,
+          need: { strokes: GROUND, lob: true },
+        },
+        {
+          key: 'volley', group: 'basic', title: 'ボレー', kind: 'feed', goal: 3,
+          text: 'ネット前で、弾む前の球を打つ。球の正面ではなく、少し横（フォア／バック側）で捉えると角度がつく',
+          hint: '弾む前に打とう（ネットの前で）',
+          start: [{ x: 0, z: -3.2 }],
+          feeds: [
+            { to: { x: FH * 1.6, z: -7.0 }, t: 0.9, spin: 'flat' },
+            { to: { x: BH * 1.6, z: -7.0 }, t: 0.9, spin: 'flat' },
+          ],
+          need: { strokes: VOLLEY_STROKES },
+        },
+        {
+          key: 'smash', group: 'basic', title: 'スマッシュ', kind: 'feed', goal: 3,
+          text: '上がった球はコートの輪（落下点）へ先回りして止まり、溜めてから離すと頭上から叩くスマッシュ',
+          hint: '高い球の下で止まって、しっかり溜めよう',
+          start: [{ x: 0, z: -4.5 }],
+          feeds: [{ to: { x: 0, z: -7.5 }, t: 1.6, spin: 'top' }],
+          need: { strokes: ['smash'] },
+        },
+        special('kickServe', {
+          kind: 'serve',
+          text: 'B/V/C の代わりに K でトスを上げ、溜めて離す。高く跳ねて相手を押し下げ、溜めすぎてもフォールトしない',
+          hint: 'K でトスを上げよう',
+        }),
+        special('hawkEye', {
+          kind: 'feed',
+          text: '球の来るところで足を止め、しっかり溜めてから打つ（ゲージ半分以上）。サイドライン際へ正確に落ちる',
+          hint: '止まって、ゲージ半分以上溜めて打とう',
+          start: [{ x: 0, z: -(HALF_L - 0.4) }],
+          feeds: [
+            { to: { x: FH * 1.2, z: -7.8 }, t: 1.4, spin: 'top' },
+            { to: { x: BH * 1.2, z: -7.8 }, t: 1.4, spin: 'top' },
+          ],
+        }),
+        special('driveVolley', {
+          kind: 'feed',
+          text: '後ろで、弾む前の浮いた球（胸くらいの高さ）を打つ。ボレーなのに強打になる',
+          hint: '弾む前に、胸の高さで打とう',
+          start: [{ x: 0, z: -8.5 }],
+          feeds: [{ to: { x: FH * 0.6, z: -11.0 }, t: 1.2, spin: 'top' }],
+        }),
+        special('divingVolley', {
+          kind: 'feed',
+          text: 'ネット前で、普通では届かない横の球に飛びつく。球が近づいたら（⚡ が出たら）離す',
+          hint: '⚡ 飛びつきボレー が出たら離そう',
+          start: [{ x: 0, z: -3.0 }],
+          feeds: [
+            { to: { x: FH * 3.5, z: -9.0 }, t: 1.0, spin: 'flat' },
+            { to: { x: BH * 3.5, z: -9.0 }, t: 1.0, spin: 'flat' },
+          ],
+        }),
+        special('dunkSmash', {
+          kind: 'feed',
+          text: '上がった球が落ちてくるところへ、↑ で前に走り込みながら頭上で打つ（溜めは要らない）。'
+            + '早く走りすぎず、輪へ間に合うように走り出し、⚡ が出たら離す',
+          hint: '↑ で前へ走り込みながら、⚡ が出たら離そう',
+          start: [{ x: 0, z: -9.0 }],
+          feeds: [{ to: { x: 0, z: -4.5 }, t: 1.9, spin: 'top' }],
+        }),
+        special('rising', {
+          kind: 'feed',
+          text: 'ベースライン上で、目の前で弾んだ直後（上がりばな）を叩く。弾む瞬間に離す',
+          hint: '下がらずに、弾んだ直後を打とう',
+          start: [{ x: 0, z: -(HALF_L - 0.2) }],
+          feeds: [
+            { to: { x: FH * 0.9, z: -9.5 }, t: 0.95, spin: 'flat' },
+            { to: { x: BH * 0.9, z: -9.5 }, t: 0.95, spin: 'flat' },
+          ],
+        }),
+        special('shukuchi', {
+          kind: 'feed',
+          text: '走っても間に合わない球で、球がネットを越えたら押して離す。打点まで瞬間移動する',
+          hint: '球がネットを越えたら、すぐ押して離そう',
+          start: [{ x: FH * 4.0, z: -10.0 }],
+          feeds: [{ from: { x: 0, y: 1.0, z: 9.0 }, to: { x: BH * 4.0, z: -9.0 }, t: 0.62, spin: 'flat' }],
+        }),
+        special('buggyWhip', {
+          kind: 'feed',
+          text: 'フォア側（→）へ大きく振られた球を、走ってきた勢いのまま V で打つ。空中で曲がる',
+          hint: '→ へ走って追いつき、V で打とう（止まってから0.35秒以内）',
+          start: [{ x: 0, z: -(HALF_L - 0.4) }],
+          feeds: [{ to: { x: FH * 3.8, z: -8.5 }, t: 1.25, spin: 'top' }],
+        }),
+        special('jackknife', {
+          kind: 'feed',
+          text: 'バック側（←）へ高く弾んだ球を、B で足を止めて溜め、胸より高いところで叩く。早めに下がって待つ',
+          hint: 'B で止まって溜め、高いところで打とう',
+          start: [{ x: BH * 1.6, z: -(HALF_L + 1.2) }],
+          feeds: [{ to: { x: BH * 2.0, z: -8.5 }, t: 1.5, spin: 'top' }],
+        }),
+        special('tweener', {
+          kind: 'feed',
+          text: '頭を越された球を ↓ で追いかけ、背中側で打つ（股抜き）。追いかけている間は速く走れる',
+          hint: '↓ で追いかけ、⚡ が出たら離そう',
+          start: [{ x: 0, z: -4.0 }],
+          feeds: [{ to: { x: 0, z: -10.5 }, t: 1.5, spin: 'top' }],
+        }),
+      ],
+    };
+  })();
+
   /** 見た目 */
   const THEME = {
     BG: 0x0b1a2b,
@@ -3254,7 +3454,7 @@
 
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
-    BOUNDS, CPU, DOUBLES, RULES, TIMING, CHANGEOVER, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
+    BOUNDS, CPU, DOUBLES, RULES, TIMING, CHANGEOVER, PRACTICE, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT, GUIDE,
     SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, STAMINA, TOSS, OFFICIALS,
     STANDS, SPECTATORS, MOTION,
