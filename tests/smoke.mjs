@@ -3948,7 +3948,10 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   ok(events.length > 20, `doubles: calls fired: ${events.length}`);
   ok(Number.isFinite(g.ball.x) && Number.isFinite(g.ball.y), 'doubles: ball stays finite');
   ok(Number.isFinite(g.youMate.x) && Number.isFinite(g.cpuMate.x), 'doubles: mates stay finite');
-  ok(g.timers.length <= 1, `doubles: timers do not leak: ${g.timers.length}`);
+  // シングルス版と同じく、セットが決まった直後だけは MATCH_STATS と NEXT_MATCH の2本が
+  // 同時に待つのが正常。最後の1フレームがたまたまその瞬間に当たると2本になる（以前は
+  // 1本以下で見ていたため、試合の進み方しだいでまれに落ちていた）。
+  ok(g.timers.length <= 2, `doubles: timers do not leak: ${g.timers.length}`);
 }
 
 // --- CPU/AIの強さプリセット（Easy/Normal/Hard）：スタート画面の難易度選択が実際にCPUの値へ反映される ---
@@ -5659,7 +5662,9 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
       const r = hitAs(who);
       const plain = g.cpu.stroke === 'forehand' || g.cpu.stroke === 'backhand';
       const kmh = R.math.mpsToKmh(Math.hypot(g.ball.vx, g.ball.vz));
-      if (who === 'cpu' && plain && !g.cpu.special && attack > 0.75) attacks.push({ y, dx, kmh });
+      // 球がこちらのベースラインに届くまでの時間（返せるかどうかの目安）
+      const reach = R.physics.predictAtZ(g.ball, -HALF_L, undefined, 1);
+      if (who === 'cpu' && plain && !g.cpu.special && attack > 0.75) attacks.push({ y, dx, kmh, t: reach ? reach.t : 0 });
       if (who === 'cpu' && g.cpu.stroke === 'smash' && !g.cpu.special && slowBall) smashes.push(kmh);
       return r;
     };
@@ -5682,14 +5687,18 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     const avg = (f) => attacks.reduce((s, a) => s + f(a), 0) / attacks.length;
     ok(attacks.length >= 20, `the CPU gets plenty of chance balls, got ${attacks.length}`);
     ok(avg((a) => a.y) > 0.95, `it lets them rise before hitting, contact ${avg((a) => a.y).toFixed(2)}m`);
-    ok(avg((a) => a.kmh) > 105, `and hits them hard, ${avg((a) => a.kmh).toFixed(0)} km/h`);
+    ok(avg((a) => a.kmh) > 100, `and hits them hard, ${avg((a) => a.kmh).toFixed(0)} km/h`);
+    // 強すぎても返せない：以前は 144km/h・0.52秒でこちらのベースラインに届き、反応して
+    // 全速で走っても 3% しか届かなかった（ユーザー報告「強打が強すぎて全く返せない」）
+    ok(avg((a) => a.kmh) < 125 && avg((a) => a.t) > 0.6,
+      `but stays returnable: ${avg((a) => a.kmh).toFixed(0)} km/h, reaching your baseline in ${avg((a) => a.t).toFixed(2)}s`);
     // 球は体の真正面ではなく横を通る（ユーザー報告「CPU はボールが自分の身体の真正面に
     // くるように移動して打っている」。以前の平均は 0.08m）
     ok(avg((a) => a.dx) > 0.5, `and meets them beside the body, not in front of it: |dx| ${avg((a) => a.dx).toFixed(2)}m`);
     // 山なりの球は、バウンド前にスマッシュで叩かれることも多い。前へ走り込んで叩く
     // スマッシュが「走らされた」扱いで当てるだけ（55〜65km/h）になっていた（平均 92km/h）
     const smashKmh = smashes.reduce((a, b) => a + b, 0) / smashes.length;
-    ok(smashes.length >= 5 && smashKmh > 120,
+    ok(smashes.length >= 5 && smashKmh > 85,
       `the CPU's smashes on loopy balls are hard too: ${smashKmh.toFixed(0)} km/h over ${smashes.length}`);
   }
   applyCpuLevel('normal');
@@ -5730,7 +5739,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   applyCpuLevel('normal');
 }
 
-// --- スマッシュ：前へ走り込んで叩く1本は追い込まれていない（全力で叩く）。下がりながらは弱まる ---
+// --- スマッシュ：前へ走り込んで叩く1本は、下がりながら打つ1本より強い（追い込まれていない） ---
 {
   const { CPU, applyCpuLevel } = R.config;
   applyCpuLevel('extreme');
@@ -5751,9 +5760,13 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   const forward = smashAfter(5);
   ok(forward.g.cpu.stroke === 'smash', `precondition: a smash, got ${forward.g.cpu.stroke}`);
   const back = smashAfter(-5);
-  ok(forward.landing.t < back.landing.t - 0.2,
-    `a smash after running forward flies much faster than one after backpedalling: ${forward.landing.t.toFixed(2)}s vs ${back.landing.t.toFixed(2)}s`);
-  ok(forward.g.ball.impactPower === 1, `and comes with the full-power flash, got ${forward.g.ball.impactPower}`);
+  ok(forward.landing.t < back.landing.t - 0.1,
+    `a smash after running forward flies faster than one after backpedalling: ${forward.landing.t.toFixed(2)}s vs ${back.landing.t.toFixed(2)}s`);
+  ok(forward.g.ball.impactPower > back.g.ball.impactPower,
+    `and comes with a bigger flash, got ${forward.g.ball.impactPower} vs ${back.g.ball.impactPower}`);
+  // ただし全部は打ち消さない：全部打ち消すと 0.35秒で届く 150km/h 超になり、返せなかった
+  ok(CPU.SMASH_FORWARD_RELIEF < 1 && forward.landing.t > CPU.SMASH_T + 0.05,
+    `a forward smash is not the fastest possible one, ${forward.landing.t.toFixed(2)}s vs SMASH_T ${CPU.SMASH_T}`);
   applyCpuLevel('normal');
 }
 

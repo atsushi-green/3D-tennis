@@ -2614,8 +2614,9 @@
       // スマッシュが「走らされた」扱いになり、決め球のはずが 55〜65km/h の当てるだけの
       // 球になっていた（ユーザー報告「溜めずに打つ山なりの球を強打してこない」。実測：
       // Extreme で山なりの球への返球の3割がスマッシュで、その平均が 92km/h）。
-      const smashStretch = player.runFwd > 0 ? 0 : stretch
-        * (1 - clamp(player.settleT / CPU.SMASH_SETTLE_T, 0, 1));
+      const smashStretch = stretch
+        * (1 - clamp(player.settleT / CPU.SMASH_SETTLE_T, 0, 1))
+        * (player.runFwd > 0 ? 1 - CPU.SMASH_FORWARD_RELIEF : 1);
       // ダブルスはラリーが長引きやすく、同じロブ選択率・同じ山なり化の度合いでも
       // 1ポイント中の絶対数が増えて目立つため、DOUBLES.LOB_SCALE / ARC_SCALE で
       // 抑える（config.js のコメント参照）。
