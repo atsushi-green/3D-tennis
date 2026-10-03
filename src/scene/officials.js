@@ -13,11 +13,16 @@
   /** 腕を下ろしているときの、体から外へ開く角度(rad)。 */
   const ARM_REST_Z = 0.12;
 
+  /** ズボン（脚）の色。 */
+  const TROUSERS = 0x1c2531;
+
   const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
 
   /**
    * 主審・線審・ボールボーイに共通の簡易な人型（胴＋頭＋腕2本＋脚2本）。
-   * @param {{uniform:number, scale?:number, seated?:boolean}} opts seated＝椅子に座る主審用。脚を省く。
+   * @param {{uniform:number, scale?:number, seated?:boolean}} opts seated＝椅子に座る主審用。
+   *   原点が座面になり、脚は太ももを前へ水平に出して膝から下を垂らす。
+   *   userData.lap に膝の前後位置と足裏の高さ（審判台が足置きを合わせる）。
    */
   function createFigure({ uniform, scale = 1, seated = false }) {
     const group = new THREE.Group();
@@ -56,11 +61,38 @@
       [-1, 1].forEach((side) => {
         const leg = new THREE.Mesh(
           new THREE.CylinderGeometry(0.055 * scale, 0.05 * scale, 0.7 * scale, 8),
-          mat(0x1c2531),
+          mat(TROUSERS),
         );
         leg.position.set(side * 0.08 * scale, 0.35 * scale, 0);
         group.add(leg);
       });
+    } else {
+      // 座った脚：太ももは股関節から前（+z）へ水平に、すねは膝から真下へ。足は靴の箱を置く
+      const hipY = 0.07 * scale;
+      const thighLen = 0.4 * scale;
+      const shinLen = 0.42 * scale;
+      const footH = 0.06 * scale;
+      [-1, 1].forEach((side) => {
+        const x = side * 0.09 * scale;
+        const thigh = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.065 * scale, 0.055 * scale, thighLen, 8),
+          mat(TROUSERS),
+        );
+        thigh.rotation.x = -Math.PI / 2; // 円柱の軸（+y）を -z へ倒す＝太い上端が股関節側
+        thigh.position.set(x, hipY, thighLen / 2);
+        const shin = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.05 * scale, 0.045 * scale, shinLen, 8),
+          mat(TROUSERS),
+        );
+        shin.position.set(x, hipY - shinLen / 2, thighLen);
+        const foot = new THREE.Mesh(
+          new THREE.BoxGeometry(0.1 * scale, footH, 0.2 * scale),
+          mat(TROUSERS),
+        );
+        foot.position.set(x, hipY - shinLen - footH / 2, thighLen + 0.05 * scale);
+        group.add(thigh, shin, foot);
+      });
+      group.userData.lap = { kneeZ: thighLen, soleY: hipY - shinLen - footH };
     }
 
     return group;
@@ -71,46 +103,72 @@
     return Math.atan2(-x, -z);
   }
 
-  /** 主審が座る審判台。脚・座面・背もたれ・昇降用ステップ＋座った主審を1グループにまとめる。 */
+  /**
+   * 主審が座る審判台。脚・座面・背もたれ・足置き・昇降用ステップ＋座った主審を1グループに
+   * まとめる。+z が正面（コート側）。座面は奥側だけにして、主審はその前の縁から膝を出し、
+   * すねを一段下の足置きへ垂らす（実際の審判台と同じ作り）。前の脚は足置きの高さまで。
+   */
   function createUmpireChair() {
     const { CHAIR } = OFFICIALS;
     const group = new THREE.Group();
     const fp = CHAIR.FOOTPRINT;
+    const width = fp * 2 + 0.15;
+    const rear = -fp - 0.075; // 座面・足置きの奥の縁
+    const front = fp + 0.075; // 足置きの手前の縁
 
-    [[-fp, -fp], [fp, -fp], [-fp, fp], [fp, fp]].forEach(([lx, lz]) => {
-      const leg = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.045, 0.045, CHAIR.HEIGHT, 8),
-        mat(THEME.UMPIRE_CHAIR),
-      );
-      leg.position.set(lx, CHAIR.HEIGHT / 2, lz);
-      group.add(leg);
-    });
+    const umpire = createFigure({ uniform: THEME.OFFICIAL_UNIFORM, seated: true });
+    umpire.position.set(0, CHAIR.HEIGHT + 0.04, -fp + CHAIR.SIT_BACK);
+    const { kneeZ, soleY } = umpire.userData.lap;
+    const footrestY = umpire.position.y + soleY - 0.02; // 足置きの板の中心（厚み0.04の上面に足裏が乗る）
 
+    [[-fp, -fp, CHAIR.HEIGHT], [fp, -fp, CHAIR.HEIGHT], [-fp, fp, footrestY], [fp, fp, footrestY]]
+      .forEach(([lx, lz, h]) => {
+        const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, h, 8), mat(THEME.UMPIRE_CHAIR));
+        leg.position.set(lx, h / 2, lz);
+        group.add(leg);
+      });
+
+    const seatFront = rear + CHAIR.SEAT_DEPTH;
     const seat = new THREE.Mesh(
-      new THREE.BoxGeometry(fp * 2 + 0.15, 0.08, fp * 2 + 0.15),
+      new THREE.BoxGeometry(width, 0.08, CHAIR.SEAT_DEPTH),
       mat(THEME.UMPIRE_CHAIR),
     );
-    seat.position.y = CHAIR.HEIGHT;
+    seat.position.set(0, CHAIR.HEIGHT, (rear + seatFront) / 2);
     group.add(seat);
+    // 座面の前の縁を足置きから支える柱（左右の端。主審の脚とは重ならない）
+    [-fp, fp].forEach((lx) => {
+      const h = CHAIR.HEIGHT - footrestY;
+      const strut = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, h, 8), mat(THEME.UMPIRE_CHAIR));
+      strut.position.set(lx, footrestY + h / 2, seatFront - 0.045);
+      group.add(strut);
+    });
 
     const back = new THREE.Mesh(
-      new THREE.BoxGeometry(fp * 2 + 0.15, 0.5, 0.06),
+      new THREE.BoxGeometry(width, 0.5, 0.06),
       mat(THEME.UMPIRE_CHAIR),
     );
     back.position.set(0, CHAIR.HEIGHT + 0.29, -fp);
     group.add(back);
 
-    for (let i = 1; i <= 3; i++) {
+    // 足置き：膝の少し手前から正面の縁まで（座面の真下の奥側は空けておく）
+    const restBack = umpire.position.z + kneeZ - 0.15;
+    const footrest = new THREE.Mesh(
+      new THREE.BoxGeometry(width, 0.04, front - restBack),
+      mat(THEME.UMPIRE_CHAIR),
+    );
+    footrest.position.set(0, footrestY, (restBack + front) / 2);
+    group.add(footrest);
+
+    // 昇降用ステップ：足置きまでを3等分した2段（いちばん上の段は足置きそのもの）
+    for (let i = 1; i <= 2; i++) {
       const step = new THREE.Mesh(
         new THREE.BoxGeometry(fp * 1.6, 0.03, 0.14),
         mat(THEME.UMPIRE_CHAIR),
       );
-      step.position.set(0, (i * CHAIR.HEIGHT) / 4, fp + 0.05);
+      step.position.set(0, (i * footrestY) / 3, fp + 0.05);
       group.add(step);
     }
 
-    const umpire = createFigure({ uniform: THEME.OFFICIAL_UNIFORM, seated: true });
-    umpire.position.y = CHAIR.HEIGHT + 0.08;
     group.add(umpire);
 
     group.position.set(CHAIR.X, 0, CHAIR.Z);
