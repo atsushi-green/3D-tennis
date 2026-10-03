@@ -740,6 +740,8 @@
         // 溜めのキーが無いので、チャンスボールを叩きにいく度合い（chanceAttack）を入れる：
         // chargeFrac は構えている間（updatePrep）、swingCharge は打った瞬間（hit）。
         chargeFrac: 0, swingCharge: 0,
+        // 目標地点に着いて待っているか（moveTowards。着いた後は目標の小さな揺れを追わない）
+        parked: false,
         attr: ATTRS[who], netDir: NET_DIR[who],
       });
       this.cpu = aiActor(0, CPU.HOME_Z, 'cpu');
@@ -4389,10 +4391,23 @@
      * 長さで割ってから進める。これを直すまで CPU の斜め移動は 5.8→8.2m/s と設定値を
      * 超えており、実速度から求める stretch（＝ぎりぎり度）が斜めに動いた瞬間に必ず
      * 1（＝最弱の返球）へ振り切れていた。
+     *
+     * 一度目標にぴったり着いたら（actor.parked）、その後は目標が CPU.ARRIVE_RADIUS 以内で
+     * 動いても追わない＝着いたらそこで待つ。走って向かっている間は目標まで正確に寄せる。
+     * 目標は球の弾道の先読みで、その先読みは物理の刻み（PHYSICS.STEP）と画面のフレームの
+     * 刻みのずれで毎フレーム数cm前後に揺れる（60fps はちょうど4刻みなので揺れないが、
+     * 144Hz などの画面や、フレーム時間が不揃いなときに揺れる）。揺れをそのまま追うと、
+     * 着いた後も1フレームだけ全速で数cm動く小刻みな動きが続き、「止まって待てている」
+     * （settleT）にならず走った距離（chaseDist）も膨らむ＝余裕のある球まで「走らされた」
+     * 弱い返球・ロブになっていた（ユーザー報告。実測：144fps で待てた時間 0.00秒、
+     * ゆるい球への返球 45km/h。60fps では 0.9秒・139km/h）。
      */
     moveTowards(actor, before, target, speed, dt) {
-      const dx = target.x - actor.x;
-      const dz = target.z - actor.z;
+      const toX = target.x - actor.x;
+      const toZ = target.z - actor.z;
+      const stay = actor.parked && Math.hypot(toX, toZ) <= CPU.ARRIVE_RADIUS;
+      const dx = stay ? 0 : toX;
+      const dz = stay ? 0 : toZ;
       const dist = Math.hypot(dx, dz);
       // 能力値「移動速度」×スタミナ。どちらも倍率なので掛ける順序には依存しない。
       const cappedSpeed = speed * actor.attr.speed * this.staminaSpeedMult(actor.stamina);
@@ -4401,6 +4416,7 @@
         actor.x += (dx / dist) * step;
         actor.z += (dz / dist) * step;
       }
+      actor.parked = stay || step >= dist; // 待っている／このフレームで目標に着いた
       const moved = Math.hypot(actor.x - before.x, actor.z - before.z);
       actor.speed = moved / dt;
       actor.chaseDist += moved;

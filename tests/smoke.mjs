@@ -5424,9 +5424,60 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   ok(Math.abs(g.cpu.chaseDist - moved) < 1e-9, `the move is accumulated into chaseDist, got ${g.cpu.chaseDist}`);
 
   // 目標を通り過ぎない（残り距離が step より短いときはぴったり止まる）
-  Object.assign(g.cpu, { x: 0, z: 0, chaseDist: 0 });
+  Object.assign(g.cpu, { x: 0, z: 0, chaseDist: 0, parked: false });
   g.moveTowards(g.cpu, { x: 0, z: 0 }, { x: 0.01, z: 0 }, speed, dt);
   ok(g.cpu.x === 0.01 && g.cpu.z === 0, `stops exactly on the target, got (${g.cpu.x}, ${g.cpu.z})`);
+
+  // 着いた後は、目標が数cm揺れても追わない（＝止まって待てている）。先読みの目標は
+  // フレームの刻みと物理の刻みのずれで揺れ、追うと 144Hz の画面などで CPU が
+  // いつまでも「待てていない・走らされた」扱いになっていた（ユーザー報告）
+  ok(g.cpu.parked, 'arriving on the target parks the CPU');
+  Object.assign(g.cpu, { settleT: 0, chaseDist: 0 });
+  g.moveTowards(g.cpu, { x: 0.01, z: 0 }, { x: 0.06, z: 0 }, speed, dt);
+  ok(g.cpu.x === 0.01 && g.cpu.speed === 0 && g.cpu.chaseDist === 0 && g.cpu.settleT > 0,
+    `a few cm of target jitter does not move a parked CPU, got x=${g.cpu.x} speed=${g.cpu.speed}`);
+  g.moveTowards(g.cpu, { x: 0.01, z: 0 }, { x: 1, z: 0 }, speed, dt);
+  ok(g.cpu.x > 0.01 && !g.cpu.parked, `but a real change of target still gets chased, got x=${g.cpu.x}`);
+}
+
+// --- CPU の返球はフレームレートで変わらない（60fps 以外の画面で弱くなっていた） ---
+// 実測（修正前、Extreme・溜めずに打った球）：60fps では待てた時間 1.2秒・返球 152km/h、
+// 144fps では 0.00秒・36km/h でロブ47%（ユーザー報告「ゆるいフラットショットとロブが
+// 返ってくる」）。CPU が先読みの揺れを毎フレーム追い、止まれていなかった。
+{
+  const { applyCpuLevel } = R.config;
+  applyCpuLevel('extreme');
+  const softReturn = (nextDt) => {
+    const g = new R.Game({ input: { moveX: 0, moveZ: 0, lob: false }, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.wind = 0; g.windZ = 0;
+    g.you.x = 0; g.you.z = -HALF_L;
+    g.cpu.x = 0; g.cpu.z = HALF_L + 0.5;
+    Object.assign(g.ball, {
+      x: 0.6, y: 0.9, z: -HALF_L + 0.3, vx: 0, vy: 1, vz: -5,
+      bounces: 1, live: true, last: 'cpu', spin: 'flat', wind: 0, windZ: 0, curve: 0,
+    });
+    g.you.swingCharge = 0; g.you.chargeSpin = 'flat'; g.you.chargeStroke = null;
+    g.hit('you');
+    let settle = 0;
+    for (let i = 0; i < 2000 && g.ball.last === 'you' && g.phase === 'rally'; i++) {
+      settle = g.cpu.settleT;
+      g.update(nextDt());
+    }
+    return { settle, kmh: R.math.mpsToKmh(Math.hypot(g.ball.vx, g.ball.vz)), lob: /ロブ/.test(g.lastShotBy.cpu) };
+  };
+  const rates = { '60fps': () => 1 / 60, '144fps': () => 1 / 144, 'uneven': () => 1 / 240 + Math.random() * (1 / 40 - 1 / 240) };
+  Object.entries(rates).forEach(([name, nextDt]) => {
+    const rs = Array.from({ length: 20 }, () => softReturn(nextDt));
+    const settle = rs.reduce((a, r) => a + r.settle, 0) / rs.length;
+    const drives = rs.filter((r) => !r.lob);
+    const kmh = drives.reduce((a, r) => a + r.kmh, 0) / Math.max(1, drives.length);
+    ok(settle > 0.5, `${name}: the CPU settles before hitting a soft ball, waited ${settle.toFixed(2)}s`);
+    ok(kmh > 110 && drives.length >= 18, `${name}: and hits it hard, ${kmh.toFixed(0)} km/h, ${rs.length - drives.length}/20 lobs`);
+  });
+  applyCpuLevel('normal');
 }
 
 // --- CPU/AI の返球の強さ（stretch）は「その球を追って走った距離」で決まる ---

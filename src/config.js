@@ -1234,6 +1234,10 @@
     // 「もう動かずに待てている」とみなす速さ(m/s)。これ以下で動いた1フレームは
     // 待ち時間（actor.settleT）に積む（game.js#moveTowards）。
     SETTLE_SPEED: 0.35,
+    // 目標地点からこの距離(m)以内なら動かない＝着いたとみなして待つ（game.js#moveTowards）。
+    // 先読みした目標は、フレームの刻みと物理の刻みのずれで数cm（実測 144fps で最大約5cm）
+    // 揺れるので、それより大きく、届く距離（PLAYER.CPU_REACH）よりは十分小さくする。
+    ARRIVE_RADIUS: 0.15,
     STRETCH_T: 1.35,          // 飛翔時間（山なり）
     STRETCH_AIM_X_MIN: 0.5,   // 浅く・中央寄りの弱気な返球
     STRETCH_AIM_X_MAX: 1.6,
