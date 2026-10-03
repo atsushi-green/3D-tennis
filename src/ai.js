@@ -239,14 +239,17 @@
    * 繰り返すだけで、結局一度もネットに立てなかった。
    * 頭を越されるロブ（通過点が高すぎる）やどこでも間に合わない球では null を返し、
    * 呼び出し側は通常の追い方（＝下がって1バウンドさせる）に戻る。
+   * 探すのはノーバウンドで返してよい深さ（CPU.NET_RUSH_VOLLEY_Z）まで。そこより後ろで
+   * 待っても振れない（game.js#aiCanReturnNow）。
    * @param {1|-1} side 詰めている選手がいる陣地（1＝cpu 陣地 z>0）
    * @returns {{x:number, z:number}|null}
    */
   function netRushPosition(ball, side, player) {
     if (ball.bounces > 0) return null;
     const near = side * CPU.NET_APPROACH_Z;
+    const far = side * Math.min(Math.abs(player.z), CPU.NET_RUSH_VOLLEY_Z);
     for (let i = 0; i <= CPU.NET_RUSH_STEPS; i++) {
-      const z = lerp(near, player.z, i / CPU.NET_RUSH_STEPS);
+      const z = lerp(near, far, i / CPU.NET_RUSH_STEPS);
       const at = predictAtZ(ball, z, CPU.NET_RUSH_LEAD_T);
       if (at && at.y < PLAYER.CPU_REACH_Y && at.y > PLAYER.CPU_REACH_Y_MIN) {
         const runT = Math.hypot(at.x - player.x, z - player.z) / PLAYER.CPU_CHASE;

@@ -161,15 +161,27 @@
   }
 
   /**
+   * その CPU/AI がノーバウンドで返してよい（＝ボレーする）深さの限界(m、ネットから)。
+   * ふだんはネット際（PLAYER.VOLLEY_Z）だけだが、シングルスの cpu がネットへ詰めている
+   * 最中（cpuNetRush）は CPU.NET_RUSH_VOLLEY_Z まで広がる。ai.netRushPosition() は
+   * ネット際まで詰め切れない球をそれより後ろで迎え撃たせるので、そこで振れないと
+   * 体の正面へ来た球を素通りさせてしまう（ユーザー報告）。
+   */
+  function aiVolleyZ(g, who) {
+    return who === 'cpu' && !g.doubles && g.cpuNetRush ? CPU.NET_RUSH_VOLLEY_Z : PLAYER.VOLLEY_Z;
+  }
+
+  /**
    * CPU/AI がその球を「今」返してよいか（ノーバウンドで手を出してよいか）。
-   * 原則は1バウンド待ってから返すが、ネット際（PLAYER.VOLLEY_Z 以内）にいるならボレー、
+   * 原則は1バウンド待ってから返すが、ネット際（volleyZ 以内。aiVolleyZ()）にいるならボレー、
    * 頭上へ上がってきた球（CPU.SMASH_MIN_Y 以上でコートの中）ならスマッシュで叩ける。
    * 後者を許さないと、ai.js#smashApproach() が先回りさせた位置に立っていても
    * 打点が高いまま素通りさせてしまい、結局バウンド後に打ち直すことになる。
+   * @param {number} volleyZ ノーバウンドで返してよい深さの限界（aiVolleyZ()）
    */
-  function aiCanReturnNow(actor, ball) {
+  function aiCanReturnNow(actor, ball, volleyZ) {
     return ball.bounces >= 1
-      || Math.abs(actor.z) <= PLAYER.VOLLEY_Z
+      || Math.abs(actor.z) <= volleyZ
       || (ball.y >= CPU.SMASH_MIN_Y && ball.vy <= CPU.SMASH_FALLING_VY
         && Math.abs(actor.z) <= CPU.SMASH_Z_MAX);
   }
@@ -534,7 +546,7 @@
         && Math.abs(player.z) <= CPU.SMASH_Z_MAX;
     const volley = !smash && ball.bounces === 0 && (who === 'you'
       ? player.z > -COURT.SERVICE
-      : Math.abs(player.z) <= PLAYER.VOLLEY_Z);
+      : Math.abs(player.z) <= aiVolleyZ(g, who));
     return { smash, volley };
   }
 
@@ -2577,7 +2589,7 @@
       // サービスラインより前（ネット寄り）で、ノーバウンドの球を返すときはボレー。
       // フォア/バックの区別はテイクバックのモーションにだけ使い、実際の威力・角度は
       // 溜めではなくボールとの左右距離で決まる（playerShot() 側で計算する）。
-      // CPU/AI がノーバウンドで返せるのは元々ネット際（PLAYER.VOLLEY_Z 以内。
+      // CPU/AI がノーバウンドで返せるのは元々ネット際（aiVolleyZ() 以内。
       // checkSwings() のゲート）だけなので、その1本がそのままボレーになる。
       const isVolley = special ? special === 'divingVolley' : natural.volley;
       // ツイーナー（股抜き）とジャックナイフ（跳んで高い打点を叩く）は、
@@ -4790,7 +4802,7 @@
      */
     swingAiAt(who, ball) {
       const actor = this.actor(who);
-      if (!aiCanReturnNow(actor, ball)) return false;
+      if (!aiCanReturnNow(actor, ball, aiVolleyZ(this, who))) return false;
       if (ball.y >= PLAYER.CPU_REACH_Y || ball.y <= PLAYER.CPU_REACH_Y_MIN) return false;
       const reach = reactReach(ball.age, actor.attr.reach);
       if (reaches(ball, actor, reach)) {

@@ -6471,6 +6471,58 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     'an already-bounced ball is chased normally');
 }
 
+// --- ネットへ詰めている途中の cpu は、ネット際（VOLLEY_Z）より後ろで迎え撃った球もボレーで返す ---
+// 以前は netRushPosition() が選んだ迎撃点（サービスライン付近）に立っていても、ノーバウンドで
+// 打てるのは VOLLEY_Z 以内だけだったため、体の正面へ来た球を素通りさせていた（ユーザー報告）。
+{
+  const { CPU } = R.config;
+  const { solveShot } = R.physics;
+  /** 中盤(z=8)にいる cpu の正面へ、ベースラインからドライブを打ち込む。cpu が当てた瞬間を返す */
+  const driveAtCpu = (netRush) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(false, 'cpu');
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.cpuNetRush = netRush;
+    g.cpu.x = 0; g.cpu.z = 8;
+    g.you.x = 0; g.you.z = -HALF_L + 0.5;
+    const from = { x: 0, y: 1.0, z: -HALF_L + 1 };
+    const v = solveShot(from, { x: -1, y: R.config.PHYSICS.BALL_R, z: 8 }, 0.9);
+    Object.assign(g.ball, {
+      ...from, px: from.x, py: from.y, pz: from.z, ...v, bounces: 0, age: 0, last: 'you', live: true,
+      spin: 'flat', wind: 0, windZ: 0, curve: 0, shotSpeed: Math.hypot(v.vx, v.vz), reactBonus: 0,
+    });
+    g.lastBallOwnerSeen = 'cpu';
+    let contact = null;
+    const hit = g.hit.bind(g);
+    g.hit = (who) => { contact = contact || { bounces: g.ball.bounces, z: g.cpu.z }; hit(who); };
+    for (let i = 0; i < 60 * 4 && !contact && g.phase === 'rally'; i++) g.update(1 / 60);
+    return { g, contact };
+  };
+
+  const rush = driveAtCpu(true);
+  ok(!!rush.contact && rush.contact.bounces === 0,
+    `a rushing cpu volleys the ball coming straight at it, got ${JSON.stringify(rush.contact)}`);
+  ok(!!rush.contact && rush.contact.z > PLAYER.VOLLEY_Z,
+    `precondition: it met the ball behind the usual volley zone, got z=${rush.contact && rush.contact.z.toFixed(2)}`);
+  ok(/^volley-/.test(rush.g.cpu.stroke), `and it is a volley, got ${rush.g.cpu.stroke}`);
+
+  // 詰めていない（ベースラインへ戻る普段の）cpu は、これまでどおり中盤ではノーバウンドで手を出さない
+  const stay = driveAtCpu(false);
+  ok(!stay.contact || stay.contact.bounces >= 1,
+    `a cpu that is not rushing still lets the ball bounce first, got ${JSON.stringify(stay.contact)}`);
+
+  // 迎撃点はノーバウンドで返してよい深さ（NET_RUSH_VOLLEY_Z）より後ろにはならない
+  const deep = { x: 0, z: CPU.NET_RUSH_VOLLEY_Z + 1.5 };
+  const lobbish = {
+    x: 0, y: 1.0, z: -HALF_L + 1, bounces: 0, age: 0, spin: 'flat', wind: 0,
+    ...solveShot({ x: 0, y: 1.0, z: -HALF_L + 1 }, { x: 0, y: R.config.PHYSICS.BALL_R, z: HALF_L + 3 }, 1.0),
+  };
+  const meet = R.ai.netRushPosition(lobbish, 1, deep);
+  ok(!meet || meet.z <= CPU.NET_RUSH_VOLLEY_Z + 1e-9,
+    `the rush intercept stays where a volley is allowed, got ${meet && meet.z.toFixed(2)}`);
+}
+
 // --- 選手ごとの能力値：既定（すべて3）ならどの倍率も 1.0＝これまでと完全に同じ挙動 ---
 {
   const {
