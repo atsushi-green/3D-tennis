@@ -371,7 +371,7 @@
    *   呼び出し側は返り値と一緒に `ball.curve = curve` も設定すること（integrate() 参照）。
    */
   function solveShot(from, target, baseT, clearance, spin, curve) {
-    const margin = clearance === undefined ? 0.30 : clearance;
+    const margin = clearance === undefined ? PHYSICS.NET_CLEARANCE : clearance;
     const c = curve || 0;
     const g = spinGravity(spin);
     const velocityFor = (t) => ({

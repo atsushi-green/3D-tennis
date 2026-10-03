@@ -457,6 +457,7 @@
     return {
       target: shotTarget(opponent.x, dir, stretch, skill.out),
       flight: rallyFlight(stretch * arcScale, attack) * skill.power,
+      clearance: rallyClearance(attack),
       lob: false,
     };
   }
@@ -468,6 +469,15 @@
    */
   function rallyFlight(tight, attack) {
     return lerp(lerp(CPU.SHOT_T, CPU.STRETCH_T, tight), CPU.CHANCE_T, attack);
+  }
+
+  /**
+   * グラウンドストロークでネットの上に取る余裕。チャンスボールを叩く度合いの分だけ
+   * CPU.CHANCE_CLEARANCE へ詰める（低い打点からでも飛翔時間が伸びず、速い球のまま通る）。
+   * 叩きにいかないなら undefined＝solveShot() の既定（PHYSICS.NET_CLEARANCE）。
+   */
+  function rallyClearance(attack) {
+    return attack > 0 ? lerp(PHYSICS.NET_CLEARANCE, CPU.CHANCE_CLEARANCE, attack) : undefined;
   }
 
   /* ---------------------------------------------- ダブルス（雁行陣） */
@@ -747,6 +757,7 @@
     return {
       target: shotTarget(front.x, dir, tight, skill.out),
       flight: rallyFlight(tight * arcScale, attack) * skill.power,
+      clearance: rallyClearance(attack),
       lob: false,
     };
   }
@@ -758,11 +769,13 @@
    * トップスピン／スライスを混ぜる。
    * @param {boolean} [second] セカンドサーブ。実際のテニスと同じく、ほとんど回転をかけて
    *   （しかも多くはトップスピン＝キック）確実に入れにいく比率へ差し替える。
+   * @param {number} [attack] チャンスボールを叩きにいく度合い(0〜1。cpuShot() と同じ)。
+   *   その分だけスライス（遅く滑る、つなぎの球）をやめてトップスピンにする。既定0。
    * @returns {'flat'|'top'|'slice'}
    */
-  function aiSpin(second) {
+  function aiSpin(second, attack = 0) {
     const flatChance = second ? SERVE.SECOND_FLAT_CHANCE : CPU.SPIN_FLAT_CHANCE;
-    const topShare = second ? SERVE.SECOND_TOP_SHARE : CPU.SPIN_TOP_SHARE;
+    const topShare = lerp(second ? SERVE.SECOND_TOP_SHARE : CPU.SPIN_TOP_SHARE, 1, attack);
     if (Math.random() < flatChance) return 'flat';
     return Math.random() < topShare ? 'top' : 'slice';
   }

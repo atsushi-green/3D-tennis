@@ -5556,6 +5556,80 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
       `a soft ball gets hit harder than a full-power one: ${soft.kmh.toFixed(0)} vs ${hardHit.kmh.toFixed(0)} km/h`);
     ok(soft.lobRate < 0.1, `and the CPU does not lob it back, got ${(soft.lobRate * 100).toFixed(0)}%`);
   }
+
+  // 弾んで上がってくるチャンスボールは、届くうちのいちばん高いところまで引きつけて叩く
+  {
+    applyCpuLevel('extreme');
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.cpu.x = 0; g.cpu.z = 9;
+    g.cpu.settleT = 1;
+    Object.assign(g.ball, {
+      x: 0.2, y: 0.6, z: 7.6, vx: 0, vy: 3, vz: 3, bounces: 1, sinceBounce: 0.1, age: 1,
+      live: true, last: 'you', spin: 'flat', wind: 0, windZ: 0, curve: 0, shotSpeed: CPU.CHANCE_SPEED_SLOW,
+    });
+    ok(g.chanceAttack(g.cpu) > 0, 'precondition: a chance ball');
+    ok(g.holdForChance(g.cpu, g.ball), 'a rising chance ball is not hit at knee height');
+    g.ball.shotSpeed = CPU.CHANCE_SPEED_FAST;
+    ok(!g.holdForChance(g.cpu, g.ball), 'a ball that is no chance is hit as soon as it is in reach (as before)');
+    g.ball.shotSpeed = CPU.CHANCE_SPEED_SLOW;
+    g.ball.vy = -0.5;
+    ok(!g.holdForChance(g.cpu, g.ball), 'once the ball starts to drop, the CPU swings');
+    // 叩きにいく1本はスライスに逃げず、ネットのすぐ上を低く通す
+    let slices = 0;
+    for (let i = 0; i < 300; i++) if (R.ai.aiSpin(false, 1) === 'slice') slices++;
+    ok(slices === 0, `a full chance is never sliced, got ${slices}/300`);
+    const shot = R.ai.cpuShot({ x: 0, z: -HALF_L }, -1, 0, 0, 1, undefined, 1);
+    ok(Math.abs(shot.clearance - CPU.CHANCE_CLEARANCE) < 1e-9 && CPU.CHANCE_CLEARANCE < R.config.PHYSICS.NET_CLEARANCE,
+      `and clears the net by less than a rally ball, got ${shot.clearance}`);
+    ok(R.ai.cpuShot({ x: 0, z: -HALF_L }, -1, 0, 0, 1).clearance === undefined,
+      'a normal rally ball keeps the default net clearance');
+  }
+
+  // 実際の試合の流れ：溜めずに山なりの球を打ち返し続ける人間に、Extreme が強打で返す。
+  // ユーザー報告「溜めずに打つ山なりの球を、まだ強打してこない（Extreme）」。上の
+  // 1本だけ打たせるテストは通っていたのに、試合では AI が弾み際の膝の高さで捉えて
+  // ネットを越すために飛翔時間が伸び、平均 89km/h のままだった。
+  {
+    applyCpuLevel('extreme');
+    const input = { moveX: 0, moveZ: 0, lob: false };
+    const g = new R.Game({ input, hooks: noHooks });
+    g.start();
+    const attacks = [];
+    const hitAs = g.hit.bind(g);
+    g.hit = (who) => {
+      const attack = who === 'cpu' ? g.chanceAttack(g.cpu) : 0;
+      const y = g.ball.y;
+      const r = hitAs(who);
+      const plain = g.cpu.stroke === 'forehand' || g.cpu.stroke === 'backhand';
+      if (who === 'cpu' && plain && !g.cpu.special && attack > 0.75) {
+        attacks.push({ y, kmh: R.math.mpsToKmh(Math.hypot(g.ball.vx, g.ball.vz)) });
+      }
+      return r;
+    };
+    for (let i = 0; i < 60 * 300; i++) {
+      if (g.phase === 'serve' && g.servingPlayer() === 'you' && !g.tossActive && !g.serveSwing) g.chargeStart('flat');
+      else if (g.phase === 'serve' && g.tossActive && g.you.charging && g.you.chargeTime > 0.45) g.chargeRelease();
+      if (g.phase === 'rally' && g.ball.live && g.ball.last !== 'you') {
+        // 着地点の少し後ろへ、足の速さの範囲で寄る。届くようになったら溜めずに打つ
+        const land = R.physics.predictLanding(g.ball);
+        const tz = R.math.clamp(land.z - 1.6, -HALF_L - 1.5, -2);
+        const dx = land.x - g.you.x;
+        const dz = tz - g.you.z;
+        const k = Math.min(1, (PLAYER.SPEED / 60) / (Math.hypot(dx, dz) || 1));
+        g.you.x += dx * k; g.you.z += dz * k;
+        const c = g.predictContact();
+        if (c && c.t < 0.03 && !g.you.charging && g.you.swing <= 0 && c.bounces > 0) tap(g);
+      }
+      g.update(1 / 60);
+    }
+    const avg = (f) => attacks.reduce((s, a) => s + f(a), 0) / attacks.length;
+    ok(attacks.length >= 20, `the CPU gets plenty of chance balls, got ${attacks.length}`);
+    ok(avg((a) => a.y) > 0.95, `it lets them rise before hitting, contact ${avg((a) => a.y).toFixed(2)}m`);
+    ok(avg((a) => a.kmh) > 105, `and hits them hard, ${avg((a) => a.kmh).toFixed(0)} km/h`);
+  }
   applyCpuLevel('normal');
 }
 

@@ -2664,7 +2664,7 @@
       // ドロップショットだけは playerShot() が専用の spin('drop') を返す（弾道・バウンドとも
       // 通常のスライスとは別扱いにするため）。それ以外は上記のとおり。
       const spin = shot.spin || (stroke === 'forehand' || stroke === 'backhand'
-        ? (who === 'you' ? this.you.chargeSpin : aiSpin())
+        ? (who === 'you' ? this.you.chargeSpin : aiSpin(false, attack))
         : 'flat');
 
       // シングルスの cpu のネットへの詰め（moveSinglesCpu() 参照）。ダブルスは元々2人とも
@@ -2685,8 +2685,8 @@
       }
 
       this.resetChase(); // ここから相手側の「この球を追った距離」を数え直す
-      // shot.clearance を返すのはドロップショットだけ（ネットぎりぎりを狙う）。
-      // 他は undefined ＝ solveShot() の既定の余裕を使う。
+      // shot.clearance を返すのは、ネットぎりぎりを通す球だけ（ドロップショット・技・
+      // AI がチャンスボールを叩く1本）。他は undefined ＝ solveShot() の既定の余裕を使う。
       // shot.curve を返すのはバギーホイップだけ（飛翔中ずっと横に曲がる）。solveShot にも
       // 同じ値を渡して「曲がったうえで狙い通りに落ちる」初速を解かせる。
       const curve = shot.curve || 0;
@@ -4329,6 +4329,31 @@
     }
 
     /**
+     * チャンスボールを、まだ振らずに引きつけるか。AI はふつう球がリーチに入った最初の
+     * 瞬間に振るので、弾んで上がってくる球は頂点のずっと手前の低い打点（膝の高さ）で
+     * 捉えてしまう。そこからだとネットを越すために飛翔時間が伸び、速く打とうとしても
+     * ゆるい球になる（CPU.CHANCE_HOLD_RISE のコメント参照）。
+     * 叩きにいける球（chanceAttack() > 0）が弾んで上がっている間は、**いまの立ち位置から
+     * 届くうちで**いちばん高くなる点を先読みし、そこまで CHANCE_HOLD_RISE 以上高く
+     * 捉えられるなら待つ。届く範囲から外れる前の最後の点がいちばん高いなら、そこで振る
+     * （＝待ったせいで届かなくなることはない）。
+     * @param {object} actor 打つ AI
+     * @returns {boolean} 待つなら true
+     */
+    holdForChance(actor, ball) {
+      if (ball.bounces < 1 || ball.vy <= 0 || this.chanceAttack(actor) <= 0) return false;
+      let peak = ball.y;
+      const inReach = (at) => at.y < PLAYER.CPU_REACH_Y
+        && reaches(at, actor, reactReach(ball.age + at.t, actor.attr.reach));
+      predictWindow(ball, (at) => {
+        const ok = inReach(at);
+        if (ok) peak = Math.max(peak, at.y);
+        return ok;
+      }, 1, 0);
+      return peak - ball.y >= CPU.CHANCE_HOLD_RISE;
+    }
+
+    /**
      * cpu/cpuMate/youMate 共通の移動：目標位置へ一定速度で寄せ、実速度も記録する（歩行アニメ用）。
      * x と z に別々に step を割り振ると斜めが √2 倍速くなってしまうので、人間の移動
      * （movePlayers() の `len = Math.hypot(mx, mz)` による正規化）と同じく、進む向きの
@@ -4694,7 +4719,8 @@
      * 反応に使える時間ぶんに狭めた守備範囲で判定する（ai.reactReach 参照）。
      * 打たれてすぐ届く球（スマッシュ・至近距離のボレー）は体の近くしか触れない。
      * 能力値「リーチ・読み」の倍率は選手ごとに違うので、1人ずつ求める。
-     * @returns {boolean} 実際に振ったら true
+     * @returns {boolean} 実際に振ったら true（チャンスボールを引きつけて待っている間も
+     *   true＝この選手が打つ球なので、ダブルスの相方に横取りさせない）
      */
     swingAiAt(who, ball) {
       const actor = this.actor(who);
@@ -4702,6 +4728,7 @@
       if (ball.y >= PLAYER.CPU_REACH_Y || ball.y <= PLAYER.CPU_REACH_Y_MIN) return false;
       const reach = reactReach(ball.age, actor.attr.reach);
       if (reaches(ball, actor, reach)) {
+        if (this.holdForChance(actor, ball)) return true;
         this.hit(who);
         return true;
       }
