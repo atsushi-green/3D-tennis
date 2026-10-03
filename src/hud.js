@@ -103,6 +103,7 @@
         stakes: $('stakes'),
         wind: $('wind'),
         serveSpeed: $('serveSpeed'),
+        matchLevel: $('matchLevel'),
         staminaFillYou: $('staminaFillYou'),
         staminaFillCpu: $('staminaFillCpu'),
         staminaFillYouMate: $('staminaFillYouMate'),
@@ -471,6 +472,23 @@
     /** スタート画面のCPUの強さ表示を切り替える（実際の適用は config.applyCpuLevel が行う）。 */
     setDifficulty(level) {
       this.el.diffOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === level));
+    }
+
+    /**
+     * 試合画面の右上に、対戦しているCPU/AIの強さを出す（試合を始めるときに main.js が呼ぶ）。
+     * 表記はスタート画面のボタンの文字（<kbd> を除いた部分）をそのまま使う＝二重管理しない。
+     * @param {string} level config.CPU_LEVELS のキー（'easy'|'normal'|'hard'|'extreme'）
+     */
+    setMatchLevel(level) {
+      const opt = this.el.diffOpts.find((el) => el.dataset.level === level);
+      const el = this.el.matchLevel;
+      el.dataset.level = level;
+      el.replaceChildren();
+      if (!opt) return;
+      const lbl = document.createElement('span');
+      lbl.className = 'lbl';
+      lbl.textContent = 'CPU';
+      el.append(lbl, opt.firstChild.textContent.trim());
     }
 
     /** スタート画面のサーフェス表示を切り替える（実際の適用は config.applySurface が行う）。 */

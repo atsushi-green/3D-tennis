@@ -64,7 +64,11 @@
       <div class="staminaRow" id="staminaRowCpuMate"><div class="staminaLabel">CPU2</div><div class="staminaBar"><div class="staminaFill" id="staminaFillCpuMate"></div></div></div>
     </div>
   </div>
-  <div id="head">1 set match · <span id="setinfo">first to 6</span></div>
+  <div id="head">1 set match · <span id="setinfo">first to 6</span>
+    <!-- 対戦しているCPU/AIの強さ（スタート画面の「CPUの強さ」）。試合を始めるときに
+         hud.setMatchLevel() が入れる。練習モード中は #head ごと隠れる。 -->
+    <div id="matchLevel"></div>
+  </div>
   <div id="call"><div class="big" id="callBig"></div><div class="sub" id="callSub"></div><div class="shot" id="callShot"></div></div>
   <div id="replayTag"><span class="dot"></span>リプレイ<span class="markTag">ボールマーク確認</span><span class="skip">SPACE でスキップ</span></div>
   <!-- 画面下は縦積み（上から：ガイド／スマッシュの案内／溜めバー／操作一覧）。

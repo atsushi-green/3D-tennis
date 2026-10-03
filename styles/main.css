@@ -136,6 +136,19 @@ canvas{display:block}
   position:absolute;top:14px;right:14px;text-align:right;
   font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)
 }
+/* 対戦しているCPU/AIの強さ。試合中ずっと出ているので主張は控えめに、段階だけ色で分ける
+   （Easy＝緑・Normal＝白・Hard＝橙・Extreme＝赤）。スコアボード脇の札と同じ地の色・縁取り。 */
+#matchLevel{
+  display:table;margin:6px 0 0 auto;padding:4px 10px; /* 見出しの下の行に右寄せ */
+  background:rgba(9,20,34,.6);border-radius:2px;
+  border-right:3px solid currentColor;
+  font-size:12px;font-weight:700;letter-spacing:.1em;color:var(--line);
+}
+#matchLevel:empty{display:none}
+#matchLevel .lbl{font-weight:400;color:var(--dim);margin-right:8px}
+#matchLevel[data-level="easy"]{color:#5fbf6a}
+#matchLevel[data-level="hard"]{color:#f2a65a}
+#matchLevel[data-level="extreme"]{color:#ff6b6b}
 
 /* ポイントごとのコール（ポイント／アウト／ゲーム …） */
 #call{

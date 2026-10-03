@@ -79,6 +79,7 @@
     applyCpuStyle(cpuStyle); // 必ず applyCpuLevel() の後（config.js のコメント参照）
     applySurface(surface);
     hud.hideStartScreen();
+    hud.setMatchLevel(cpuLevel);
     game.setGuide(guide);
     game.setSpecials(specials);
     game.start(wantDoubles, initialServer);
