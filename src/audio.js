@@ -336,46 +336,113 @@
   }
 
   /**
-   * ポイントの合間のざわめき（AUDIO.CROWD.MURMUR）。一度だけ組み立てて鳴らし続け、
-   * murmur(on) で音量の目標だけを切り替える（ラリー中は 0 へ静まる）。
+   * ポイントの合間のざわめき（AUDIO.CROWD.MURMUR のコメント参照）。話し手の声の通り道
+   * （のこぎり波 → F1・F2 → 音量 → 左右）を一度だけ組み、あとは呼ばれるたびに各話し手の音節を
+   * LOOKAHEAD 秒先まで予約し、全体の音量の目標を切り替える。
    */
-  let bed = null;
+  let babble = null;
+
+  function buildBabble(ac) {
+    const M = AUDIO.CROWD.MURMUR;
+    const master = ac.createGain();
+    master.gain.value = 0;
+    const lowpass = ac.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    lowpass.frequency.value = M.LOWPASS_HZ;
+    lowpass.Q.value = 0.5;
+    master.connect(lowpass).connect(ac.destination);
+    // 会場の響き：帰還ディレイを並べて薄く足す
+    M.ECHO_DELAYS.forEach((sec) => {
+      const delay = ac.createDelay(1);
+      delay.delayTime.value = sec;
+      const feedback = ac.createGain();
+      feedback.gain.value = M.ECHO_FEEDBACK;
+      const wet = ac.createGain();
+      wet.gain.value = M.ECHO_WET;
+      lowpass.connect(delay);
+      delay.connect(feedback).connect(delay);
+      delay.connect(wet).connect(ac.destination);
+    });
+
+    const bandpass = (hz) => {
+      const bp = ac.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = hz;
+      bp.Q.value = M.FORMANT_Q;
+      return bp;
+    };
+    const talkers = [];
+    for (let i = 0; i < M.TALKERS; i++) {
+      const female = Math.random() < M.FEMALE_RATIO;
+      const range = female ? M.PITCH_F : M.PITCH_M;
+      const osc = ac.createOscillator();
+      osc.type = 'sawtooth';
+      const pitch = rand(range[0], range[1]);
+      osc.frequency.value = pitch;
+      const f1 = bandpass(M.VOWELS[0][0]);
+      const f2 = bandpass(M.VOWELS[0][1]);
+      const f2Level = ac.createGain();
+      f2Level.gain.value = M.F2_GAIN;
+      const amp = ac.createGain();
+      amp.gain.value = 0;
+      osc.connect(f1).connect(amp);
+      osc.connect(f2).connect(f2Level).connect(amp);
+      if (ac.createStereoPanner) {
+        const pan = ac.createStereoPanner();
+        pan.pan.value = rand(-M.PAN, M.PAN);
+        amp.connect(pan).connect(master);
+      } else {
+        amp.connect(master);
+      }
+      osc.start();
+      talkers.push({
+        osc, f1, f2, amp, pitch, formant: female ? M.FORMANT_SCALE_F : 1, nextT: 0,
+      });
+    }
+    return { master, talkers, on: false, offAt: 0 };
+  }
+
+  /** 1人の話し手の音節を until まで予約する（母音・声の高さ・強さを音節ごとに選び直す）。 */
+  function scheduleTalker(t, now, until) {
+    const M = AUDIO.CROWD.MURMUR;
+    if (t.nextT < now) t.nextT = now + rand(0, M.SYLLABLE[1]); // 久しぶりに話し出す＝ばらけて始める
+    while (t.nextT < until) {
+      const at = t.nextT;
+      if (Math.random() < M.PAUSE_CHANCE) {
+        t.amp.gain.setTargetAtTime(0, at, 0.05); // 息継ぎ
+        t.nextT = at + rand(M.PAUSE[0], M.PAUSE[1]);
+        continue;
+      }
+      const dur = rand(M.SYLLABLE[0], M.SYLLABLE[1]);
+      const vowel = M.VOWELS[Math.floor(Math.random() * M.VOWELS.length)];
+      const peak = rand(M.LOUDNESS[0], M.LOUDNESS[1]);
+      t.osc.frequency.setTargetAtTime(t.pitch * rand(1 - M.INTONATION, 1 + M.INTONATION), at, dur * 0.4);
+      t.f1.frequency.setTargetAtTime(vowel[0] * t.formant, at, M.GLIDE_TC);
+      t.f2.frequency.setTargetAtTime(vowel[1] * t.formant, at, M.GLIDE_TC);
+      // 音節の頭で立ち上がり、後半で次の子音へ向けてすぼまる
+      t.amp.gain.setTargetAtTime(peak, at, 0.025);
+      t.amp.gain.setTargetAtTime(peak * 0.03, at + dur * 0.55, dur * 0.18);
+      t.nextT = at + dur;
+    }
+  }
+
   function murmur(on) {
-    if (!bed && !on) return;
+    if (!babble && !on) return;
     const ac = context();
     if (!ac) return;
     const M = AUDIO.CROWD.MURMUR;
     try {
-      if (!bed) {
-        const gain = ac.createGain();
-        gain.gain.value = 0;
-        gain.connect(ac.destination);
-        const buffer = noiseBuffer(ac);
-        M.BANDS.forEach((hz, i) => {
-          const src = ac.createBufferSource();
-          src.buffer = buffer;
-          src.loop = true;
-          const bp = ac.createBiquadFilter();
-          bp.type = 'bandpass';
-          bp.frequency.value = hz;
-          bp.Q.value = M.Q;
-          // 音節くらいの速さの揺れ（BAND_GAIN × (1 ± AM_DEPTH)）
-          const am = ac.createGain();
-          am.gain.value = M.BAND_GAIN[i];
-          const lfo = ac.createOscillator();
-          lfo.frequency.value = M.SYLLABLE_HZ[i];
-          const depth = ac.createGain();
-          depth.gain.value = M.AM_DEPTH * M.BAND_GAIN[i];
-          lfo.connect(depth).connect(am.gain);
-          src.connect(bp).connect(am).connect(gain);
-          src.start(0, (buffer.duration * i) / M.BANDS.length); // 帯域ごとに別の区間から
-          lfo.start();
-        });
-        bed = { gain, on: false };
+      if (!babble) babble = buildBabble(ac);
+      const now = ac.currentTime;
+      if (babble.on !== on) {
+        babble.on = on;
+        if (!on) babble.offAt = now;
+        babble.master.gain.setTargetAtTime(on ? M.VOL : 0, now, on ? M.RISE_TC : M.HUSH_TC);
       }
-      if (bed.on === on) return;
-      bed.on = on;
-      bed.gain.gain.setTargetAtTime(on ? M.VOL : 0, ac.currentTime, on ? M.RISE_TC : M.HUSH_TC);
+      // 静まりきるまでは話し続け、その後は予約をやめる（音量は 0 なので聞こえない）
+      if (on || now - babble.offAt < M.HUSH_TC * 6) {
+        babble.talkers.forEach((t) => scheduleTalker(t, now, now + M.LOOKAHEAD));
+      }
     } catch (e) {
       /* 音が出ないだけなのでゲームは続行 */
     }
