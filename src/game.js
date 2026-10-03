@@ -615,6 +615,7 @@
      * @param {object} deps.input RallyOne.Input
      * @param {{sound:Function, call:Function, clearCall:Function, score:Function,
      *   wind:Function, serveSpeed:Function, matchEnd:Function}} deps.hooks
+     *   wind(x, z) は風の横成分・前後成分（m/s²。z>0 が人間のチームにとっての追い風）。
      *   matchEnd は「1セットが終わって、その振り返り（スタッツ）を出す番」になったときに
      *   matchSummary() の結果を渡して1回だけ呼ばれる（表示側が画面を出す）。
      */
@@ -637,6 +638,7 @@
         // の「弾んだ直後の上がりばなか」の判定に使う（physics.predictWindow も同じ数え方をする）。
         sinceBounce: 0,
         wind: 0,        // 横風（m/s²、vxに継続的に加算）。サーブの飛翔中は常に0、返球後だけ this.wind になる
+        windZ: 0,       // 前後の風（m/s²、vzに継続的に加算）。wind と同じく返球後だけ this.windZ になる
       };
       this.you = {
         x: 0, z: -HALF_L - 0.6, vx: 0, vz: 0, // vx/vz は実速度（加速度で目標速度に近づける）
@@ -886,13 +888,25 @@
       this.matchStats = { points: 0, longestRally: 0, totalShots: 0 };
 
       /**
-       * このポイント中に吹いている風（横方向の加速度、m/s²）。newPoint() で決め直す。
+       * このポイント中に吹いている風（加速度、m/s²）。wind＝横(±x)、windZ＝前後(±z。+z＝
+       * 人間のチームから相手側へ吹く＝人間にとっての追い風)。newPoint() で決め直す。
        * サーブの飛翔（トス〜1本目の着地）は風の影響を受けない（サーブ自体のバランス調整を
-       * 崩さないため）。ball.wind は beginServe() で0にリセットし、hit()（サーブの返球も含む）
-       * のたびにこの値へ差し替えることで、「サーブは常に無風、返ってきてからのラリーだけ
-       * 風に流される」という区別を作っている。
+       * 崩さないため）。ball.wind/windZ は beginServe() で0にリセットし、hit()（サーブの返球も
+       * 含む）のたびにこの値へ差し替えることで、「サーブは常に無風、返ってきてからのラリー
+       * だけ風に流される」という区別を作っている。
        */
       this.wind = 0;
+      this.windZ = 0;
+      /**
+       * この会場に吹いている卓越風（試合を通してほぼ一定の向きと強さ）。angle は +z（人間の
+       * チームから相手側）を0とし、+x 側へ回る向き（rad）。ゲームの座標で持つので、チェンジ
+       * エンズで選手が入れ替わるたびに π 回す（swapEnds()）。ポイントごとの風は、ここから
+       * windStrength・windAngleOff だけ揺れたもの（newPoint() が前のポイントから少しずつ動かす）。
+       */
+      const baseStrength = rand(WIND.BASE_MIN, WIND.BASE_MAX);
+      this.windBase = { angle: rand(-Math.PI, Math.PI), strength: baseStrength };
+      this.windStrength = baseStrength;
+      this.windAngleOff = 0;
       /**
        * 両チームが試合開始時と反対のエンドにいるか（チェンジエンズのたびに反転する）。
        * ゲームの座標は常に「人間のチームが手前（-z）」のままにしておき、入れ替わるのは会場の
@@ -1857,12 +1871,7 @@
       this.serveNumber = 1;
       this.lastShotBy = { you: null, cpu: null };
       this.lastServeKmh = null;
-      // 風は毎ポイント、前のポイントの風から WIND.DRIFT_ACCEL の範囲だけ変える（無関係な
-      // 値へ決め直すと点ごとに向きが唐突に入れ替わって見えるため）。フォールトによる
-      // セカンドサーブ（beginServe の再実行）をまたいでも同じポイント中は吹き続ける
-      // （beginServe() 側では ball.wind を0に戻すだけ）。
-      this.wind = clamp(this.wind + rand(-WIND.DRIFT_ACCEL, WIND.DRIFT_ACCEL), -WIND.MAX_ACCEL, WIND.MAX_ACCEL);
-      this.hooks.wind(this.wind);
+      this.driftWind();
       this.hooks.serveSpeed(null); // 前のポイントのサーブ速度表示を消す
       // スタミナはポイント間で少し回復するが、そのセットで消化したゲーム数が増えるほど
       // 回復量そのものが目減りする（staminaRecoverAmount()）＝長いセットの終盤ほど
@@ -1939,9 +1948,41 @@
     /** コートを入れ替わる。会場の向きは表示側が endsSwapped を見て回す。 */
     swapEnds() {
       this.endsSwapped = !this.endsSwapped;
-      // 風は会場に吹いているので、選手から見た向き（ゲームの座標の ±x）は逆になる。
-      // 強さはそのままで、続く newPoint() がいつもどおりそこから少しだけ揺らす。
-      this.wind = -this.wind;
+      // 風は会場に吹いているので、選手から見た向き（ゲームの座標）は横も前後も逆になる
+      // ＝風上と風下のエンドが入れ替わる。強さはそのままで、続く newPoint() がいつもどおり
+      // そこから少しだけ揺らす。
+      this.windBase.angle += Math.PI;
+      this.setWindVector();
+    }
+
+    /**
+     * ポイントごとの風の揺らぎ。前のポイントの風から強さを WIND.DRIFT_ACCEL、向きを
+     * WIND.ANGLE_DRIFT の範囲だけ動かす（無関係な値へ決め直すと点ごとに向きが唐突に
+     * 入れ替わって見えるため）。どちらも卓越風（windBase）から GUST_RANGE／ANGLE_SPREAD
+     * より離れない＝試合を通して風向きはほぼ一定。フォールトによるセカンドサーブ
+     * （beginServe の再実行）をまたいでも同じポイント中は吹き続ける（beginServe() 側では
+     * ball.wind/windZ を0に戻すだけ）。
+     */
+    driftWind() {
+      const base = this.windBase.strength;
+      this.windStrength = clamp(
+        this.windStrength + rand(-WIND.DRIFT_ACCEL, WIND.DRIFT_ACCEL),
+        Math.max(0, base - WIND.GUST_RANGE),
+        Math.min(WIND.MAX_ACCEL, base + WIND.GUST_RANGE),
+      );
+      this.windAngleOff = clamp(
+        this.windAngleOff + rand(-WIND.ANGLE_DRIFT, WIND.ANGLE_DRIFT),
+        -WIND.ANGLE_SPREAD, WIND.ANGLE_SPREAD,
+      );
+      this.setWindVector();
+    }
+
+    /** windBase・windStrength・windAngleOff から、このポイントの風（wind/windZ）を作って知らせる。 */
+    setWindVector() {
+      const angle = this.windBase.angle + this.windAngleOff;
+      this.wind = this.windStrength * Math.sin(angle);
+      this.windZ = this.windStrength * Math.cos(angle);
+      this.hooks.wind(this.wind, this.windZ);
     }
 
     /**
@@ -1989,6 +2030,7 @@
       ball.vx = ball.vy = ball.vz = 0;
       ball.spin = 'flat'; // 前のポイントのスピンを持ち越さない
       ball.wind = 0; // サーブの飛翔中（1本目の着地まで）は無風にする。返球後は hit() で this.wind に差し替える
+      ball.windZ = 0;
       ball.curve = 0; // 前の打球の曲がり（バギーホイップ）を持ち越さない
 
       // 自分のサーブなら、前のトスの溜めを持ち越さないよう完全に解除する。
@@ -2608,9 +2650,10 @@
       // だけ、相手の反応がこの秒数ぶん余計に遅れる（updateReactTimers）。他の1打では 0 に
       // 戻す＝前の1打を持ち越さない。
       ball.reactBonus = shot.reactBonus || 0;
-      // サーブの返球も含め、ここで打たれた球は以降このポイントの風(this.wind)にさらされる
-      // （サーブ自体の飛翔だけは beginServe() が ball.wind=0 にしているので無風のまま）。
+      // サーブの返球も含め、ここで打たれた球は以降このポイントの風(this.wind/windZ)に
+      // さらされる（サーブ自体の飛翔だけは beginServe() が0にしているので無風のまま）。
       ball.wind = this.wind;
+      ball.windZ = this.windZ;
       ball.last = TEAM_OF[who]; // スコア判定はチーム単位。誰が打ったかは player.stroke 側で個別に持つ
       ball.bounces = 0;
       ball.age = 0; // ここから相手の「反応に使える時間」を数え直す
@@ -3357,8 +3400,9 @@
       };
       // そのレッスンの技だけを装備する（優先度が上の技が先に出て、練習したい技を横取りしない）
       this.setSpecials(lesson.special ? [lesson.special] : []);
-      this.wind = 0; // 無風（ポイントが進まないので newPoint() の風の揺らぎも起きない）
-      this.hooks.wind(0);
+      // 無風（ポイントが進まないので newPoint() の風の揺らぎも起きない）
+      this.windStrength = 0;
+      this.setWindVector();
       this.nextRep();
     }
 
@@ -3424,7 +3468,7 @@
       Object.assign(ball, {
         x: from.x, y: from.y, z: from.z, px: from.x, py: from.y, pz: from.z,
         live: true, last: 'cpu', bounces: 0, age: 0, sinceBounce: 0,
-        spin, curve: 0, wind: 0, kick: false, reactBonus: 0,
+        spin, curve: 0, wind: 0, windZ: 0, kick: false, reactBonus: 0,
         impact: FX.IMPACT_DURATION, impactPower: 0,
       }, solveShot(from, { x: feed.to.x, y: BALL_R, z: feed.to.z }, feed.t, feed.clearance, spin));
       this.rallyShots = 1;

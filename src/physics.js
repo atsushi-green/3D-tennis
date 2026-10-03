@@ -38,7 +38,8 @@
    * 1ステップ進める。p* に進める前の位置を残す（ネット通過判定に使う）。
    * 横方向の加速度は2種類あり、どちらも未設定なら0：
    * - `b.wind` 風。打った側は狙いに織り込まない（＝解いた通りの初速で飛ばした後、風に
-   *   さらされて実際の着地点だけがずれる）ので、ここでの加算だけで完結する。
+   *   さらされて実際の着地点だけがずれる）ので、ここでの加算だけで完結する。風の前後成分
+   *   （追い風／向かい風）は `b.windZ` として同じ扱いで vz に足す。
    * - `b.curve` 打球そのものの曲がり（必殺技バギーホイップの横回転）。こちらは
    *   「曲がった上で狙い通りに落ちる」必要があるので、solveShot() が初速を解く段階で
    *   同じ値を織り込む（＝曲がるぶんを見越して内側へ打ち出す）。バウンドで失われる
@@ -50,6 +51,7 @@
     b.pz = b.z;
     b.vy += spinGravity(b.spin) * dt;
     b.vx += ((b.wind || 0) + (b.curve || 0)) * dt;
+    b.vz += (b.windZ || 0) * dt;
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     b.z += b.vz * dt;
@@ -155,6 +157,7 @@
       spin: b.spin, // スピンで実効重力が変わるので、予測にも同じ重力を使わないと着地点がずれる
       // 風で流されるぶんも予測に織り込まないと、CPU の追跡が実際の着地点とずれる
       wind: b.wind,
+      windZ: b.windZ,
       curve: b.curve, // 打球の曲がり（バギーホイップ）。同じ理由で予測にも織り込む
     };
     const dt = PHYSICS.STEP;
@@ -186,6 +189,7 @@
       vx: b.vx, vy: b.vy, vz: b.vz,
       spin: b.spin,
       wind: b.wind,
+      windZ: b.windZ,
       curve: b.curve, // 打球の曲がり（バギーホイップ）。予測にも織り込まないと着地点がずれる
     };
     const dt = PHYSICS.STEP;
@@ -217,6 +221,7 @@
       vx: b.vx, vy: b.vy, vz: b.vz,
       spin: b.spin,
       wind: b.wind,
+      windZ: b.windZ,
       curve: b.curve, // 打球の曲がり（バギーホイップ）。予測にも織り込まないと着地点がずれる
     };
     const dt = PHYSICS.STEP;
@@ -265,6 +270,7 @@
       vx: b.vx, vy: b.vy, vz: b.vz,
       spin: b.spin,
       wind: b.wind,
+      windZ: b.windZ,
       curve: b.curve, // 打球の曲がり（バギーホイップ）。予測にも織り込まないと着地点がずれる
     };
     const dt = PHYSICS.STEP;
@@ -328,6 +334,7 @@
       vx: b.vx, vy: b.vy, vz: b.vz,
       spin: b.spin,
       wind: b.wind,
+      windZ: b.windZ,
       curve: b.curve, // 打球の曲がり（バギーホイップ）。予測にも織り込まないと着地点がずれる
     };
     const dt = PHYSICS.STEP;

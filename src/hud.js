@@ -492,18 +492,23 @@
     }
 
     /**
-     * 風向き・強さの表示（ポイントごとに Game#newPoint() から呼ばれる）。
-     * @param {number} accel 横方向の加速度(m/s²)。world +x はカメラの都合で画面の左に映るので、
-     *   正の値（+x方向）は左向きの矢印にする。
+     * 風向き・強さの表示（ポイントごとに Game#newPoint() から呼ばれる）。矢印は画面上の
+     * 向き（8方位）で、横より前後が強いときは自分（手前のチーム）から見た追い風／向かい風も添える。
+     * @param {number} x 横方向の加速度(m/s²)。world +x はカメラの都合で画面の左に映る。
+     * @param {number} z 前後方向の加速度(m/s²)。+z は画面の奥＝自分の打つ向き（追い風）。
      */
-    setWind(accel) {
-      const abs = Math.abs(accel);
-      if (abs < WIND.DISPLAY_THRESHOLD) {
+    setWind(x, z) {
+      const strength = Math.hypot(x, z);
+      if (strength < WIND.DISPLAY_THRESHOLD) {
         this.el.wind.textContent = '無風';
         return;
       }
-      const arrow = accel > 0 ? '←' : '→';
-      this.el.wind.textContent = `風 ${arrow} ${abs.toFixed(1)}`;
+      // 画面の右＝-x、上＝+z。右から反時計回りに45°刻み。
+      const ARROWS = ['→', '↗', '↑', '↖', '←', '↙', '↓', '↘'];
+      const sector = Math.round(Math.atan2(z, -x) / (Math.PI / 4));
+      const arrow = ARROWS[(sector + 8) % 8];
+      const kind = Math.abs(z) <= Math.abs(x) ? '横風' : (z > 0 ? '追い風' : '向かい風');
+      this.el.wind.textContent = `風 ${arrow} ${strength.toFixed(1)} ${kind}`;
     }
 
     /**

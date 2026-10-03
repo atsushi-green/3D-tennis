@@ -1432,6 +1432,9 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   const hitWith = (charge) => {
     const g = new R.Game({ input: fakeInput, hooks: noHooks });
     g.start();
+    // 溜めの差だけを見るので無風にする（滞空の長い溜めなしの球ほど追い風／向かい風で深さが変わる）
+    g.windStrength = 0;
+    g.setWindVector();
     g.phase = 'rally';
     g.you.x = 0; g.you.z = -5;
     g.ball.x = 0.3; g.ball.y = 1.0; g.ball.z = -5;
@@ -2902,7 +2905,13 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   // 第1ゲーム：最後の1点の後、暗転しきってから入れ替わり、明けたら幕が消える
   for (let p = 0; p < 3; p++) { winPoint('you'); settle(); }
   ok(!g.endsSwapped, 'precondition: no change during the first game');
-  g.wind = 0.5;
+  // 斜め（+x 寄りの追い風）に吹かせておく。入れ替わった後は横も前後も逆向きになるはず
+  // （ポイント間の揺らぎは向き ±WIND.ANGLE_SPREAD までなので、符号は変わらない）。
+  g.windBase = { angle: Math.PI / 4, strength: 0.5 };
+  g.windStrength = 0.5;
+  g.windAngleOff = 0;
+  g.setWindVector();
+  ok(g.wind > 0 && g.windZ > 0, 'precondition: a diagonal tailwind blowing toward +x');
   calls.length = 0;
   winPoint('you');
   let shadeAtSwap = null;
@@ -2919,7 +2928,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     `the shade fades out and back in, got max ${maxShade} / now ${g.changeoverShade()}`);
   ok(calls.some((c) => c === 'チェンジエンズ|第1ゲームの後は休憩なし'),
     `the change after the first game is called with no rest, got ${JSON.stringify(calls)}`);
-  ok(g.wind < 0, `the wind blows the other way once the ends change, got ${g.wind}`);
+  ok(g.wind < 0 && g.windZ < 0,
+    `the wind blows the other way once the ends change (a headwind now), got ${g.wind}, ${g.windZ}`);
   ok(g.phase === 'serve' && g.match.games.you === 1, 'the next point is ready to serve after the change');
 
   // 第2ゲーム：入れ替わらない。休憩もないのでスタミナはポイント間の分だけ戻る
@@ -4407,29 +4417,77 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
 {
   const { WIND } = R.config;
   let notified;
-  const hooksWithWind = { ...noHooks, wind: (v) => { notified = v; } };
+  const hooksWithWind = { ...noHooks, wind: (x, z) => { notified = { x, z }; } };
   for (let i = 0; i < 20; i++) {
     const g = new R.Game({ input: fakeInput, hooks: hooksWithWind });
     g.start();
-    ok(g.wind >= -WIND.MAX_ACCEL && g.wind <= WIND.MAX_ACCEL,
-      `Game#wind stays within +-WIND.MAX_ACCEL, got ${g.wind}`);
-    ok(notified === g.wind, `hooks.wind() is called with the same value as Game#wind, got ${notified} vs ${g.wind}`);
+    ok(Math.hypot(g.wind, g.windZ) <= WIND.MAX_ACCEL + 1e-9,
+      `the wind is never stronger than WIND.MAX_ACCEL, got ${g.wind}, ${g.windZ}`);
+    ok(notified.x === g.wind && notified.z === g.windZ,
+      `hooks.wind() is called with both components of Game#wind, got ${JSON.stringify(notified)} vs ${g.wind}, ${g.windZ}`);
   }
 }
 
-// --- 風：無関係な値へ飛ばず、前のポイントから WIND.DRIFT_ACCEL の範囲だけ変わる（ドリフト） ---
+// --- 風：無関係な値へ飛ばず、前のポイントから強さ・向きとも少しだけ変わる（ドリフト）。
+//     試合を通して卓越風（windBase）の向きから ANGLE_SPREAD 以上は振れない ---
 {
   const { WIND } = R.config;
-  const g = new R.Game({ input: fakeInput, hooks: noHooks });
-  g.start();
-  for (let i = 0; i < 50; i++) {
-    const before = g.wind;
-    g.newPoint();
-    const delta = Math.abs(g.wind - before);
-    ok(delta <= WIND.DRIFT_ACCEL + 1e-9,
-      `wind changes by at most WIND.DRIFT_ACCEL per point, got delta=${delta} (before=${before}, after=${g.wind})`);
-    ok(g.wind >= -WIND.MAX_ACCEL && g.wind <= WIND.MAX_ACCEL, `drifted wind still stays within +-WIND.MAX_ACCEL, got ${g.wind}`);
+  for (let m = 0; m < 10; m++) {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    ok(g.windBase.strength >= WIND.BASE_MIN && g.windBase.strength <= WIND.BASE_MAX,
+      `each match draws its prevailing wind within BASE_MIN..BASE_MAX, got ${g.windBase.strength}`);
+    g.start();
+    const baseDir = { x: Math.sin(g.windBase.angle), z: Math.cos(g.windBase.angle) };
+    for (let i = 0; i < 100; i++) {
+      const before = { strength: g.windStrength, off: g.windAngleOff };
+      g.newPoint();
+      ok(Math.abs(g.windStrength - before.strength) <= WIND.DRIFT_ACCEL + 1e-9,
+        `the strength changes by at most WIND.DRIFT_ACCEL per point, got ${before.strength} -> ${g.windStrength}`);
+      ok(Math.abs(g.windAngleOff - before.off) <= WIND.ANGLE_DRIFT + 1e-9,
+        `the direction changes by at most WIND.ANGLE_DRIFT per point, got ${before.off} -> ${g.windAngleOff}`);
+      ok(Math.abs(g.windStrength - g.windBase.strength) <= WIND.GUST_RANGE + 1e-9 && g.windStrength >= 0,
+        `the strength stays within GUST_RANGE of the prevailing wind, got ${g.windStrength} vs ${g.windBase.strength}`);
+      const strength = Math.hypot(g.wind, g.windZ);
+      ok(strength <= WIND.MAX_ACCEL + 1e-9 && Math.abs(strength - g.windStrength) < 1e-9,
+        `the wind vector has the drifted strength, got ${strength} vs ${g.windStrength}`);
+      if (strength > 1e-6) {
+        const cos = (g.wind * baseDir.x + g.windZ * baseDir.z) / strength;
+        ok(cos >= Math.cos(WIND.ANGLE_SPREAD) - 1e-9,
+          `the wind keeps blowing from the prevailing direction all match, got cos=${cos.toFixed(3)}`);
+      }
+    }
   }
+}
+
+// --- 風：integrate() は b.windZ（前後の風）を vz に継続的に加算する。未設定なら従来どおり ---
+{
+  const { integrate } = R.physics;
+  const tail = { x: 0, y: 1, z: 0, vx: 0, vy: 0, vz: 5, windZ: 0.6 };
+  const head = { x: 0, y: 1, z: 0, vx: 0, vy: 0, vz: 5, windZ: -0.6 };
+  const calm = { x: 0, y: 1, z: 0, vx: 0, vy: 0, vz: 5 };
+  for (let i = 0; i < 60; i++) {
+    integrate(tail, 1 / 60);
+    integrate(head, 1 / 60);
+    integrate(calm, 1 / 60);
+  }
+  ok(calm.vz === 5, `no windZ field leaves vz untouched (backward compatible), vz=${calm.vz}`);
+  ok(tail.z > calm.z && head.z < calm.z,
+    `a tailwind carries the ball further and a headwind holds it back: tail=${tail.z.toFixed(3)} calm=${calm.z.toFixed(3)} head=${head.z.toFixed(3)}`);
+}
+
+// --- 風：predictLanding() も b.windZ を織り込む。追い風のロブは向かい風より1m以上深く落ちる ---
+{
+  const { predictLanding, solveShot } = R.physics;
+  const from = { x: 0, y: 1, z: -10 };
+  // 相手のベースライン手前 1.5m を狙った高いロブ（無風で解いた初速のまま、風だけ変える）
+  const lob = { ...from, ...solveShot(from, { x: 0, y: R.config.PHYSICS.BALL_R, z: HALF_L - 1.5 }, 2.2, 3), spin: 'flat' };
+  const calm = predictLanding({ ...lob, windZ: 0 });
+  const tail = predictLanding({ ...lob, windZ: 0.5 });
+  const head = predictLanding({ ...lob, windZ: -0.5 });
+  ok(Math.abs(calm.z - (HALF_L - 1.5)) < 0.15, `precondition: the calm lob lands on target, got ${calm.z.toFixed(2)}`);
+  ok(tail.z - head.z > 1.0,
+    `with the wind behind it the lob lands much deeper: tail=${tail.z.toFixed(2)} head=${head.z.toFixed(2)}`);
+  ok(tail.z > HALF_L - 0.6, `so a lob aimed 1.5m inside can sail long-ish downwind, got ${tail.z.toFixed(2)}`);
 }
 
 // --- 風：サーブの飛翔（トス〜1本目の着地）は常に無風。返球された瞬間から this.wind が乗る ---
@@ -4437,14 +4495,17 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start();
   g.wind = 0.6; // 強制的に非0の風にしておく
+  g.windZ = -0.4;
   tossAndHit(g); // フォールトなく1本目のサーブを打つ
-  ok(g.ball.wind === 0, `the serve itself flies with zero wind regardless of Game#wind, got ${g.ball.wind}`);
+  ok(g.ball.wind === 0 && g.ball.windZ === 0,
+    `the serve itself flies with zero wind regardless of Game#wind, got ${g.ball.wind}, ${g.ball.windZ}`);
 
   // レシーバーが返球すると、以降 ball.wind は Game#wind に切り替わる
   g.you.z = -HALF_L - 0.6;
   g.ball.x = 0; g.ball.y = 1; g.ball.z = -2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
   g.hit('you');
-  ok(g.ball.wind === g.wind, `after the return, ball.wind matches the point's wind, got ${g.ball.wind} vs ${g.wind}`);
+  ok(g.ball.wind === g.wind && g.ball.windZ === g.windZ,
+    `after the return, the ball carries the point's wind, got ${g.ball.wind}, ${g.ball.windZ} vs ${g.wind}, ${g.windZ}`);
 }
 
 // --- 風：ラリー中の通常の打球にも Game#wind がそのまま乗る ---
@@ -4452,10 +4513,12 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start();
   g.wind = -0.4;
+  g.windZ = 0.3;
   g.you.z = -HALF_L - 0.6;
   g.ball.x = 0; g.ball.y = 1; g.ball.z = -2; g.ball.bounces = 1; g.ball.vx = 0; g.ball.vz = 0;
   g.hit('you');
-  ok(g.ball.wind === -0.4, `a groundstroke picks up the current point wind, got ${g.ball.wind}`);
+  ok(g.ball.wind === -0.4 && g.ball.windZ === 0.3,
+    `a groundstroke picks up the current point wind, got ${g.ball.wind}, ${g.ball.windZ}`);
 }
 
 // --- 予測の着地点が、実際に弾む座標とぴったり一致する ---
@@ -6236,6 +6299,10 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     const g = new R.Game({ input, hooks: noHooks });
     g.setSpecials(specials);
     g.start();
+    // 技そのものの狙いを見るので無風にする（風は会場ごとに1点目から吹いていて、横風なら
+    // サイドラインぎりぎりの鷹の目は外へ流されうる）。
+    g.windStrength = 0;
+    g.setWindVector();
     g.phase = 'rally';
     g.ball.live = true;
     g.ball.last = 'cpu';

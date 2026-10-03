@@ -63,7 +63,7 @@
       call: (big, sub, shot) => hud.showCall(big, sub, shot),
       clearCall: () => hud.hideCall(),
       score: () => hud.renderScore(game.match, game.server, game.stats),
-      wind: (accel) => hud.setWind(accel),
+      wind: (x, z) => hud.setWind(x, z),
       serveSpeed: (kmh) => hud.setServeSpeed(kmh),
       // 1セットが終わって振り返りを出す番になった（game.js が TIMING.MATCH_STATS 後に呼ぶ）。
       // ここでは受け取っておくだけで、実際に出すのはフレームループ（リプレイ再生中に
