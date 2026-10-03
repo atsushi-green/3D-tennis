@@ -172,9 +172,12 @@
    *   （＝ポーチできる態勢を保つ）。
    * @param {number} [smashNearZ] ロブを叩きにいく範囲のネット側の限界。そのまま
    *   smashApproach() に渡す（省略時はネット際まで詰めて叩く既定のまま）。
+   * @param {boolean} [sideStep] 球の通り道から横へずれて、体の横で打てる位置に立つか
+   *   （hitSide()）。既定 true。サーブリターンでは false：速いサーブに横へ動き出すと、
+   *   体の正面に来たサーブを返せなくなり、逆にコースいっぱいのサーブにも届いてしまう。
    * @returns {{x:number, z:number}}
    */
-  function chasePosition(ball, side = 1, player, smashNearZ) {
+  function chasePosition(ball, side = 1, player, smashNearZ, sideStep = true) {
     if (player && inReachOf(player, ball)) {
       return { x: player.x, z: player.z };
     }
@@ -198,11 +201,31 @@
     // 打点が後方限界（CHASE_Z_MAX）より奥＝そこで待つことは物理的にできない。leadFrom() と
     // 同じ理由で、深さを手前へ寄せたら横位置もその深さでの弾道の x に取り直す。
     const z = clamp(landing.z, zMin, zMax);
-    const x = z === landing.z ? landing.x : pathXAt(ball, z, landing.x);
+    const pathX = z === landing.z ? landing.x : pathXAt(ball, z, landing.x);
+    // 球の通り道の真上ではなく、球が体の横（打点）を通る位置に立つ。
+    const x = player && sideStep ? pathX - hitSide(pathX, player, side) * CPU.HIT_SIDE_X : pathX;
     return {
       x: clamp(x, -CPU.CHASE_X_LIMIT, CPU.CHASE_X_LIMIT),
       z,
     };
+  }
+
+  /**
+   * グラウンドストロークで、球を体のどちら側に通すか（world の x の向き。+1 なら球が
+   * 選手の +x 側を通る）。以前は球の通り道の真上に立っていたため、球がいつも体の
+   * 真正面に飛び込んできて、そこから打っていた（ユーザー報告「CPU はボールが自分の
+   * 身体の真正面にくるように移動して打っている」）。実際の選手と同じく、球が体の
+   * 横（CPU.HIT_SIDE_X 離れたところ）を通る位置に立つ。
+   * どちらの側かは、いまの位置から近いほう。ただしフォアハンド側を CPU.FOREHAND_BIAS
+   * ぶん優先する（時間があればフォアに回り込む）。
+   * @param {number} pathX その深さで球が通る x
+   * @param {1|-1} side 選手がいる陣地（1＝cpu 陣地 z>0）。フォアハンド側の world の x の
+   *   向きと一致する（cpu は +x、you 側の AI は −x。game.js の RACKET_SIDE と同じ）
+   */
+  function hitSide(pathX, player, side) {
+    const toForehand = Math.abs(pathX - side * CPU.HIT_SIDE_X - player.x);
+    const toBackhand = Math.abs(pathX + side * CPU.HIT_SIDE_X - player.x);
+    return toForehand <= toBackhand + CPU.FOREHAND_BIAS ? side : -side;
   }
 
   /**

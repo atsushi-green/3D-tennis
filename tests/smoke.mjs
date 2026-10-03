@@ -5602,10 +5602,11 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     g.hit = (who) => {
       const attack = who === 'cpu' ? g.chanceAttack(g.cpu) : 0;
       const y = g.ball.y;
+      const dx = Math.abs(g.ball.x - g.cpu.x);
       const r = hitAs(who);
       const plain = g.cpu.stroke === 'forehand' || g.cpu.stroke === 'backhand';
       if (who === 'cpu' && plain && !g.cpu.special && attack > 0.75) {
-        attacks.push({ y, kmh: R.math.mpsToKmh(Math.hypot(g.ball.vx, g.ball.vz)) });
+        attacks.push({ y, dx, kmh: R.math.mpsToKmh(Math.hypot(g.ball.vx, g.ball.vz)) });
       }
       return r;
     };
@@ -5629,8 +5630,69 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     ok(attacks.length >= 20, `the CPU gets plenty of chance balls, got ${attacks.length}`);
     ok(avg((a) => a.y) > 0.95, `it lets them rise before hitting, contact ${avg((a) => a.y).toFixed(2)}m`);
     ok(avg((a) => a.kmh) > 105, `and hits them hard, ${avg((a) => a.kmh).toFixed(0)} km/h`);
+    // 球は体の真正面ではなく横を通る（ユーザー報告「CPU はボールが自分の身体の真正面に
+    // くるように移動して打っている」。以前の平均は 0.08m）
+    ok(avg((a) => a.dx) > 0.5, `and meets them beside the body, not in front of it: |dx| ${avg((a) => a.dx).toFixed(2)}m`);
   }
   applyCpuLevel('normal');
+}
+
+// --- 強打の演出：AI がチャンスボールを叩いた1本は、人間のフル溜めと同じく閃光・打球音・
+// 振り抜きが大きい（AI には溜めが無く、以前は常に0＝速くなっても見た目も音もつなぎの球だった） ---
+{
+  const { CPU, applyCpuLevel } = R.config;
+  applyCpuLevel('extreme');
+  const hitWith = (shotSpeed) => {
+    const sounds = [];
+    const g = new R.Game({ input: fakeInput, hooks: { ...noHooks, sound: (...a) => sounds.push(a) } });
+    g.start();
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.cpu.x = 0; g.cpu.z = HALF_L - 1;
+    g.cpu.settleT = CPU.CHANCE_SETTLE_T;
+    Object.assign(g.ball, {
+      x: 0.8, y: 1.1, z: HALF_L - 1.6, vx: 0, vy: -0.2, vz: 3, bounces: 1, live: true, last: 'you',
+      spin: 'flat', wind: 0, windZ: 0, curve: 0, shotSpeed,
+    });
+    const attack = g.chanceAttack(g.cpu);
+    g.updatePrep();
+    const takeback = g.cpu.chargeFrac;
+    g.hit('cpu');
+    return { g, attack, takeback, hitSound: sounds.find((s) => s[0] === 'hit') };
+  };
+  const chance = hitWith(CPU.CHANCE_SPEED_SLOW);
+  ok(chance.attack === 1, `precondition: a full chance, got ${chance.attack}`);
+  ok(chance.takeback === 1, `the CPU winds up deep while it waits for a chance ball, got ${chance.takeback}`);
+  ok(chance.g.ball.impactPower === 1 && chance.g.cpu.swingCharge === 1,
+    `the flash and the follow-through are full power, got ${chance.g.ball.impactPower}/${chance.g.cpu.swingCharge}`);
+  ok(chance.hitSound && chance.hitSound[3] === 1, `and so is the hit sound, got ${chance.hitSound && chance.hitSound[3]}`);
+  const rally = hitWith(CPU.CHANCE_SPEED_FAST);
+  ok(rally.takeback === 0 && rally.g.ball.impactPower === 0 && rally.g.cpu.swingCharge === 0
+    && rally.hitSound[3] === 0, 'a normal rally ball stays a normal-looking shot');
+  applyCpuLevel('normal');
+}
+
+// --- 位置取り：CPU/AI は球の通り道の真上ではなく、球が体の横を通る位置に立つ ---
+{
+  const { CPU } = R.config;
+  const { solveShot, predictAtZ } = R.physics;
+  const from = { x: 0, y: 1.0, z: -HALF_L };
+  const v = solveShot(from, { x: 1.0, y: R.config.PHYSICS.BALL_R, z: 7 }, 1.3, undefined, 'flat');
+  const ball = { ...from, px: from.x, py: from.y, pz: from.z, ...v, spin: 'flat', wind: 0, windZ: 0, bounces: 0, age: 0 };
+  const onPath = R.ai.chasePosition(ball, 1);
+  const pathX = predictAtZ(ball, onPath.z, undefined, 1).x;
+  // 通り道のすぐそばにいれば、フォアハンド側（cpu は world の +x がラケット側）に球を通す
+  const near = R.ai.chasePosition(ball, 1, { x: pathX, z: onPath.z + 3, attr: { reach: 1 } });
+  ok(Math.abs(near.x - (pathX - CPU.HIT_SIDE_X)) < 0.05,
+    `the CPU stands so the ball passes its forehand side: want x=${(pathX - CPU.HIT_SIDE_X).toFixed(2)}, got ${near.x.toFixed(2)}`);
+  // バック側にずっと近ければ、回り込まずにバックで打つ
+  const far = R.ai.chasePosition(ball, 1, { x: pathX + 3, z: onPath.z + 3, attr: { reach: 1 } });
+  ok(Math.abs(far.x - (pathX + CPU.HIT_SIDE_X)) < 0.05,
+    `but takes it on the backhand when that side is much closer: want x=${(pathX + CPU.HIT_SIDE_X).toFixed(2)}, got ${far.x.toFixed(2)}`);
+  // サーブリターンは通り道の上で待つ（速いサーブに横へ動き出すと、正面のサーブを返せなくなる）
+  const ret = R.ai.chasePosition(ball, 1, { x: pathX, z: onPath.z + 3, attr: { reach: 1 } }, undefined, false);
+  ok(Math.abs(ret.x - pathX) < 0.05, `a serve return still waits on the ball's path, got ${ret.x.toFixed(2)} vs ${pathX.toFixed(2)}`);
+  ok(CPU.HIT_SIDE_X < 1.32, 'the side step stays well inside the shortest CPU reach (Easy)');
 }
 
 // --- CPU/AI の追跡目標は必ずボールの弾道の上に乗る（深さを手前に寄せたら横位置も取り直す） ---

@@ -733,6 +733,10 @@
         // dive＝その打つ前の飛び込み（人間の you.dive と同じもの）。
         // どれも Extreme でだけ立つ（SPECIAL.AI.MOVES_ALL）。
         dash: null, diveVolley: false, dive: null,
+        // 振りかぶりの深さ（表示専用。人間の chargeFrac / swingCharge と同じ意味）。AI には
+        // 溜めのキーが無いので、チャンスボールを叩きにいく度合い（chanceAttack）を入れる：
+        // chargeFrac は構えている間（updatePrep）、swingCharge は打った瞬間（hit）。
+        chargeFrac: 0, swingCharge: 0,
         attr: ATTRS[who], netDir: NET_DIR[who],
       });
       this.cpu = aiActor(0, CPU.HOME_Z, 'cpu');
@@ -1651,7 +1655,7 @@
       // 動ける範囲（youBounds() の AI 版）。ネット側の限界と後ろの限界を netDir で鏡にする。
       const nearZ = dir * PLAYER.Z_NEAR;
       const farZ = dir * -(HALF_L + PLAYER.Z_FAR_MARGIN);
-      const spot = chasePosition(ball, side, actor);
+      const spot = chasePosition(ball, side, actor, undefined, !this.serveInFlight);
       const x = clamp(spot.x, -PLAYER.X_LIMIT, PLAYER.X_LIMIT);
       const z = clamp(spot.z, Math.min(nearZ, farZ), Math.max(nearZ, farZ));
       const reach = PLAYER.CPU_REACH * actor.attr.reach;
@@ -2706,7 +2710,12 @@
       ball.bounces = 0;
       ball.age = 0; // ここから相手の「反応に使える時間」を数え直す
       // 必殺技はフル溜め扱いの演出にする（溜めずに出しても「必殺技を打った」感が出る）。
-      const fxPower = special ? SPECIAL.IMPACT_POWER : charge;
+      // 打った強さの演出（閃光・ボールの膨らみ・打球音・振り抜きの大きさ）。人間は溜め量、
+      // AI はチャンスボールを叩いた度合い（AI には溜めが無く、以前は常に0＝強打しても
+      // 見た目も音もつなぎの球のままで、速くなったことが伝わらなかった）。
+      const power = who === 'you' ? charge : attack;
+      if (who !== 'you') player.swingCharge = power;
+      const fxPower = special ? SPECIAL.IMPACT_POWER : power;
       ball.impact = FX.IMPACT_DURATION * lerp(1, FX.CHARGE_TIME_BOOST, fxPower);
       ball.impactPower = fxPower; // フラッシュの大きさに使う
       ball.kick = false; // 前のキックサーブの跳ね上げを持ち越さない
@@ -2738,7 +2747,7 @@
       // 練習モードは、この1本が狙いどおりの打ち方だったかを決着のときに見る（practiceMiss()）
       if (this.practice && who === 'you') this.practice.shot = { stroke, spin, lob: !!shot.lob };
       // 音程はチーム単位（誰が打っても同じ）。音色は打ち方(stroke)とスピンで変わる。
-      this.hooks.sound('hit', TEAM_OF[who], stroke, charge, spin);
+      this.hooks.sound('hit', TEAM_OF[who], stroke, power, spin);
     }
 
     /**
@@ -3887,6 +3896,13 @@
       this.cpu.prep = this.computePrep('cpu', PLAYER.CPU_PREP_REACH);
       this.youMate.prep = this.doubles ? this.computePrep('youMate', PLAYER.CPU_PREP_REACH) : null;
       this.cpuMate.prep = this.doubles ? this.computePrep('cpuMate', PLAYER.CPU_PREP_REACH) : null;
+      // AI の振りかぶりの深さ：チャンスボールを待っている間は、叩きにいく度合いだけ深く引く
+      // （待てている時間が延びるほど深くなる＝これから強打するのが構えで分かる）。
+      ACTORS.forEach((who) => {
+        if (who === 'you') return;
+        const actor = this.actor(who);
+        actor.chargeFrac = actor.prep ? this.chanceAttack(actor) : 0;
+      });
     }
 
     /**
@@ -4189,7 +4205,7 @@
         ? netRushPosition(this.ball, 1, this.cpu)
         : null;
       const target = incoming
-        ? rushTarget || chasePosition(this.ball, 1, this.cpu)
+        ? rushTarget || chasePosition(this.ball, 1, this.cpu, undefined, !this.serveInFlight)
         : homePosition(approachingNet);
       const speed = incoming || approachingNet ? PLAYER.CPU_CHASE : PLAYER.CPU_RECOVER;
       this.moveIfRecovered('cpu', this.cpu, cpuBefore, target, speed, dt);
@@ -4238,7 +4254,7 @@
       const cpuFront = () => frontPosition(this.doublesFoes(frontKey).back, back, DOUBLES.NET_Z_CPU);
       if (cpuTeamChasing && this.doublesResponder('cpu') === backKey) {
         if (this.reactTimers[backKey] <= 0) {
-          this.moveIfRecovered(backKey, back, backBefore, chasePosition(ball, 1, back), PLAYER.CPU_CHASE, dt);
+          this.moveIfRecovered(backKey, back, backBefore, chasePosition(ball, 1, back, undefined, !this.serveInFlight), PLAYER.CPU_CHASE, dt);
         } else {
           back.speed = 0;
         }
@@ -4249,7 +4265,7 @@
           poach || cpuFront(), poach ? PLAYER.CPU_CHASE : DOUBLES.FRONT_MOVE, dt);
       } else if (cpuTeamChasing) {
         if (this.reactTimers[frontKey] <= 0) {
-          this.moveIfRecovered(frontKey, front, frontBefore, chasePosition(ball, 1, front), PLAYER.CPU_CHASE, dt);
+          this.moveIfRecovered(frontKey, front, frontBefore, chasePosition(ball, 1, front, undefined, !this.serveInFlight), PLAYER.CPU_CHASE, dt);
         } else {
           front.speed = 0;
         }
@@ -4268,7 +4284,7 @@
         && this.doublesResponder('you') === 'youMate';
       const mateSmashNearZ = this.youMateFormation === 'back' ? DOUBLES.BACK_SMASH_Z : undefined;
       if (mateChasing && this.reactTimers.youMate <= 0) {
-        this.moveIfRecovered('youMate', this.youMate, youMateBefore, chasePosition(ball, -1, this.youMate, mateSmashNearZ), PLAYER.CPU_CHASE, dt);
+        this.moveIfRecovered('youMate', this.youMate, youMateBefore, chasePosition(ball, -1, this.youMate, mateSmashNearZ, !this.serveInFlight), PLAYER.CPU_CHASE, dt);
       } else if (mateChasing) {
         this.youMate.speed = 0;
       } else if (this.hasFrontPlayer('you')) {

@@ -1224,6 +1224,13 @@
     // しかならず、1歩詰めただけの球まで最弱の返球になっていた。
     STRETCH_DIST_MIN: 1.8,
     STRETCH_DIST_MAX: 6.5,
+    // グラウンドストロークで球を追うとき、球の通り道から横にこれだけ離れて立つ(m)
+    // （ai.js#hitSide）。球が体の横を通る＝フォア／バックの打点で捉えられる。
+    // 振り付けの打点はラケットのヘッドが体の横 ≒1m（scene/player.js#reachForBall）。
+    // 届く距離（PLAYER.CPU_REACH。Easy で 1.32m）より十分小さくしておくこと。
+    HIT_SIDE_X: 0.85,
+    // フォアハンド側に回り込む優先度(m)。バック側に立つほうがこれ以上近いときだけバックで打つ。
+    FOREHAND_BIAS: 0.6,
     // 「もう動かずに待てている」とみなす速さ(m/s)。これ以下で動いた1フレームは
     // 待ち時間（actor.settleT）に積む（game.js#moveTowards）。
     SETTLE_SPEED: 0.35,
