@@ -2386,6 +2386,13 @@
     // 離すのが遅れて球が低いところまで落ちてくれば、そのぶん空中で低くなる。
     // 一気に寄せると空中で体がカクッと沈むので、滑らかに追わせる。
     SMASH_LIFT_FOLLOW_T: 0.06,
+    // 逆に SMASH_STAND_Y より低い打点（スマッシュになる下限は PLAYER.SMASH_MIN_Y=1.8m）は、
+    // ラケットを球まで下げて打つ（scene/player.js#lowerSmash）。まず膝を沈め、足りない
+    // ぶんは肩を支点に腕を前へ倒す＝体の前で叩く形。
+    SMASH_LOW: {
+      CROUCH_MAX: 0.8, // 膝の沈み込みの上限（MOTION の crouch。0.8 で腰が約9cm 下がる）
+      TILT_MAX: 0.7,   // 腕を前へ倒す角度の上限(rad)。打点 1.8m で約0.5 倒す
+    },
     SMASH_LEG_SPLIT: 0.85,  // はさみ跳びの脚の開き(rad)
     SMASH_KNEE_TUCK: 1.05,  // 蹴り上げた脚の膝の曲げ(rad。正＝曲げる)
     SMASH_SHADOW_SHRINK: 0.5, // 頂点で影をどこまで小さくするか（1＝変えない）

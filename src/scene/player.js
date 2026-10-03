@@ -280,6 +280,12 @@
     return (GAIT.THIGH_LEN + GAIT.SHIN_LEN) * (1 - Math.cos(clamp(crouch, 0, 1) * MOTION.CROUCH.THIGH));
   }
 
+  /** crouchDrop() の逆：腰を drop(m) 下げるのに要る crouch(0〜1) */
+  function crouchFor(drop) {
+    const c = 1 - drop / (GAIT.THIGH_LEN + GAIT.SHIN_LEN);
+    return clamp(Math.acos(clamp(c, -1, 1)) / MOTION.CROUCH.THIGH, 0, 1);
+  }
+
   /**
    * 1つの振り付け（キーの並び）。
    * @param {string} id クロスフェードの判定に使う名前（同じ id の間は補間が続く）
@@ -741,6 +747,61 @@
 
   const ARM_REACH = RIG.UPPER + RIG.FORE - 0.01;
 
+  /** 打点のまわり（φ≒0.3〜1.6）でだけ効かせる重み。打点の前後で 1、離れるほど 0 */
+  function contactWeight(phi) {
+    return phi < 1
+      ? ease((phi - 0.3) / (MOTION.FWD_MAX - 0.3))
+      : 1 - ease((phi - 1.15) / 0.45);
+  }
+
+  // スマッシュの打点（φ=1）での、ラケット側の肩から見たヘッドの中心（y＝上、z＝前）。
+  // 低い打点で腕を前へ倒す角度（lowerSmash）をここから逆算する。
+  const SMASH_HEAD = (() => {
+    const p = CLIPS.smash.keys.find((k) => k.phi === 1).pose;
+    const sh = shoulderAt(p[C.TWIST], p[C.BEND]);
+    const y = p[C.HAND + 1] + p[C.DIR + 1] * RACKET.HEAD_Y - sh[1];
+    const z = p[C.HAND + 2] + p[C.DIR + 2] * RACKET.HEAD_Y - sh[2];
+    return { y, len: Math.hypot(y, z), angle: Math.atan2(z, y) };
+  })();
+
+  /** pose の向き（3成分）を、x 軸まわりに前（+z）へ t(rad) 倒す。from は回す中心 */
+  function tiltForward(out, at, t, from) {
+    const o = from || [0, 0, 0];
+    const y = out[at + 1] - o[1];
+    const z = out[at + 2] - o[2];
+    out[at + 1] = o[1] + y * Math.cos(t) - z * Math.sin(t);
+    out[at + 2] = o[2] + y * Math.sin(t) + z * Math.cos(t);
+  }
+
+  /**
+   * 跳ばずに届く高さ（SWING.SMASH_STAND_Y）より低い打点のスマッシュで、ラケットを球まで
+   * 下げる。スマッシュの振り付けは真上へ伸ばしきった1つの形で、reachForBall でも寄せない
+   * （adapt:false。真上で叩く形を崩さないため）ので、そのままだと低い打点ほどラケットが
+   * 球の上を素通りする（打点 1.8m で 0.37m 上）。
+   * 1) まず膝を沈める（SWING.SMASH_LOW.CROUCH_MAX まで）
+   * 2) 足りないぶんは、肩を支点に腕とラケットを前へ倒す（＝体の前で叩く形）
+   * 打点より高い球は跳んで届かせる（game.js#smashLift）ので、ここでは何もしない。
+   * 効かせるのは打点のまわりだけ（contactWeight）。
+   * @param {number} contactY 打点の高さ(m。地面から)
+   */
+  function lowerSmash(out, phi, contactY) {
+    const need = SWING.SMASH_STAND_Y - contactY;
+    const w = contactWeight(phi);
+    if (!(need > 0) || w <= 0) return;
+    const L = SWING.SMASH_LOW;
+    // 振り付けの打点は膝を伸ばしきっている（crouch 0）ので、沈めたい深さをそのまま足す
+    const knees = Math.min(need, crouchDrop(L.CROUCH_MAX));
+    out[C.CROUCH] = clamp(out[C.CROUCH] + crouchFor(knees) * w, 0, 1);
+    const rest = need - knees;
+    if (rest <= 0) return;
+    const H = SMASH_HEAD;
+    const t = clamp(Math.acos(clamp((H.y - rest) / H.len, -1, 1)) - H.angle, 0, L.TILT_MAX) * w;
+    tiltForward(out, C.HAND, t, shoulderAt(out[C.TWIST], out[C.BEND]));
+    tiltForward(out, C.DIR, t);
+    tiltForward(out, C.FACE, t);
+    tiltForward(out, C.ELBOW, t);
+  }
+
   /**
    * 打点のまわり（φ≒0.3〜1.6）だけ、ラケットのヘッドを実際の球の位置へ寄せる。振り付けの
    * 打点はヘッドが体の横 ≒1m にあるが、実際の打点は届く範囲（PLAYER.REACH 1.55m）の
@@ -757,9 +818,7 @@
    */
   function reachForBall(out, clip, phi, point) {
     if (!point || !clip.adapt) return;
-    const w = phi < 1
-      ? ease((phi - 0.3) / (MOTION.FWD_MAX - 0.3))
-      : 1 - ease((phi - 1.15) / 0.45);
+    const w = contactWeight(phi);
     if (w <= 0) return;
     const K = MOTION.CONTACT;
     const R = RACKET.HEAD_Y;
@@ -918,6 +977,7 @@
       const phi = afterContactPhi(clip, (span - anim) / span);
       evalClip(clip, phi, state.swingCharge || 0, out);
       reachForBall(out, clip, phi, mem.contact);
+      if (clip === CLIPS.smash && mem.contact) lowerSmash(out, phi, mem.contact.y);
       return { key: clip.id, kind: 'swing' };
     }
 
@@ -938,7 +998,10 @@
     const jackRise = mem.leapSwung ? null : leapRise(state, 'jackknife');
     if (jackRise !== null || smashRise !== null) {
       const clip = jackRise !== null ? CLIPS.jack : CLIPS.smash;
-      evalClip(clip, MOTION.FWD_MAX * ease(jackRise !== null ? jackRise : smashRise), state.chargeFrac || 0, out);
+      const phi = MOTION.FWD_MAX * ease(jackRise !== null ? jackRise : smashRise);
+      evalClip(clip, phi, state.chargeFrac || 0, out);
+      const app = clip === CLIPS.smash && ballApproach(player, state, ctx.ball);
+      if (app) lowerSmash(out, phi, app.y);
       return { key: clip.id, kind: 'prep' };
     }
 
@@ -953,6 +1016,7 @@
       const charge = state.chargeFrac || (state.swing > 0 ? state.swingCharge : 0) || 0;
       evalClip(clip, phi, charge, out);
       reachForBall(out, clip, phi, intent.point);
+      if (clip === CLIPS.smash && intent.point) lowerSmash(out, phi, intent.point.y);
       return { key: clip.id, kind: 'prep' };
     }
 
