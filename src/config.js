@@ -1726,6 +1726,42 @@
     },
 
     /**
+     * 線審の掛け声（「アウト！」「フォルト！」）。録音は持たないので、声帯の代わりの
+     * のこぎり波を3本のバンドパス（フォルマント F1〜F3）に通して母音を作り、フォルマントの
+     * 周波数を時間で動かして「ア→ウ」のように母音を滑らせる簡易な音声合成。語頭の f や
+     * 語尾の t はノイズで足す。鳴らすタイミング（着地からの遅れ）は LINE_CALL.DELAY。
+     * VOWELS は [時刻(秒), F1, F2, F3] の並びで、その間を直線で補間する。
+     */
+    LINE_CALL: {
+      // フォルマントの細いバンドパスを通すと声帯のエネルギーの大半が落ちるので、他の音より
+      // 大きめの値で、実効値がバウンド音と同じくらいになる（OfflineAudioContext で実測）。
+      VOL: 0.4,
+      PITCH_HZ: 190,       // 叫び声の出だしの高さ（大人の男性が張り上げた声）
+      PITCH_END_HZ: 135,   // 言い終わりの高さ（語尾を落とす）
+      FORMANT_Q: 9,
+      FORMANT_GAIN: [1, 0.55, 0.25], // F1〜F3 の強さ
+      ATTACK: 0.025,
+      RELEASE: 0.03,       // 母音の切り方（語尾の t で息を止める＝短く切る）
+      FRIC_HZ: 2800,       // 語頭 f の摩擦音（ハイパスのノイズ）
+      FRIC_VOL: 0.05,
+      BURST_HZ: 4200,      // 語尾 t の破裂（ハイパスのノイズ）
+      BURST_VOL: 0.07,
+      BURST_DUR: 0.035,
+      WORDS: {
+        // Out [aʊt]：ア → ウ と滑らせて t で止める
+        out: {
+          FRIC: 0,
+          VOWELS: [[0, 820, 1250, 2600], [0.09, 760, 1200, 2550], [0.21, 420, 950, 2400]],
+        },
+        // Fault [fɔːlt]：f の摩擦 → オ → l の暗い響き → t
+        fault: {
+          FRIC: 0.07,
+          VOWELS: [[0, 600, 950, 2500], [0.13, 580, 900, 2450], [0.21, 380, 1050, 2700]],
+        },
+      },
+    },
+
+    /**
      * 観客のざわめき／歓声。ポイントが決まった瞬間（既存の sfx.point と同時）に鳴らす。
      * ラリーの長さ（game.js#rallyShots）で音量・長さが伸び、決まり方（エース／ウィナー／
      * 凡ミス／ダブルフォルト）で盛り上がり方の倍率が変わる。
@@ -2134,6 +2170,35 @@
         { x: -(PLAYER.X_LIMIT + 1.0), z: COURT.SERVICE * 0.5 },
       ],
     },
+  };
+
+  /**
+   * 線審のコール。1バウンド目の判定（game.js#bounce）のたびに、担当の線審が
+   * アウト／フォールトなら「出た方向へ片腕を水平に伸ばす」、ライン際に入ったなら
+   * 「両手を体の前で下向きにそろえる（セーフ）」の合図を出す（scene/officials.js）。
+   * 腕の動きは録画の時計で動かすので、リプレイでも同じ瞬間にコールする（scene/world.js）。
+   * 声は AUDIO.LINE_CALL。
+   */
+  const LINE_CALL = {
+    // ラインからこの距離(m、球の中心で測る)以内に入った球は、ぎりぎりのインとして
+    // 「セーフ」の合図を出す。実際の線審も、際どい球にだけこの合図を出す。
+    SAFE_MARGIN: 0.15,
+    DELAY: 0.12,  // 着地からコール（声・腕）までの反応の遅れ(秒)
+    RAISE: 0.16,  // 腕を上げきるまで(秒)
+    HOLD: 1.1,    // 上げたまま保つ長さ(秒)
+    LOWER: 0.35,  // 下ろしきるまで(秒)
+    // コールで決まったポイントは、この秒数だけ通常の画面でコールを見せてからリプレイへ
+    // 切り替える（実際の中継と同じ順番）。リプレイのカメラはコート脇の片側に据えてあり、
+    // 半分の線審はカメラの背後に来て映らないため、腕の合図はここで見せる。
+    // TIMING.NEXT_POINT より短くすること（その間に次のポイントの支度が始まらないように）。
+    REPLAY_DELAY: 0.9,
+    // コールで決まったリプレイは、最後のコマで静止する長さ（REPLAY.HOLD_SEC）をこれまで延ばす
+    // （録画の秒。実際の長さは REPLAY.SPEED で割った分）。手前のベースラインの線審は通常の
+    // カメラの真横＝画面の外にいて、リプレイのカメラ（コート脇）からしか見えないため。
+    REPLAY_HOLD: 0.9,
+    ARM_YAW_MAX: 1.3,      // 指さす腕の水平方向の振れ幅の上限(rad)。体を貫かないように
+    SAFE_ARM_PITCH: -1.25, // セーフ：両腕を前へ出す角度(rad。負で前方)
+    SAFE_ARM_IN: 0.35,     // セーフ：両手を体の前で寄せる角度(rad)
   };
 
   /**
@@ -2897,7 +2962,9 @@
    * 検知する）にその内容を固定して再生する。低いサイドの視点（ローアングル）で見せる。
    */
   const REPLAY = {
-    WINDOW_SEC: 3.5,   // リングバッファに残しておく長さ
+    // リングバッファに残しておく長さ。線審のコールで決まったポイントは決着から
+    // LINE_CALL.REPLAY_DELAY 待ってから切り出すので、その分も含めて MAX_PLAY_SEC 遡れる長さにする。
+    WINDOW_SEC: 3.5 + LINE_CALL.REPLAY_DELAY,
     MAX_PLAY_SEC: 3.0, // 実際に再生する長さの上限（WINDOW_SECより短くてもよい）
     SPEED: 0.7,        // 再生速度（1未満＝スロー。等速にしたければ1）
     CAM_X: 10,          // コート脇（ダブルスサイドラインの外）の固定x
@@ -3467,7 +3534,7 @@
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, CHANGEOVER, PRACTICE, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT, GUIDE,
-    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, STAMINA, TOSS, OFFICIALS,
+    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, STAMINA, TOSS, OFFICIALS, LINE_CALL,
     STANDS, SPECTATORS, MOTION,
     SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET,
     SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, ATTR_SPREAD, ATTRS, NEUTRAL_ATTR,

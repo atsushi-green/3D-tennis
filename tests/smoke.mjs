@@ -9025,5 +9025,90 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   }
 }
 
+// --- 線審のコール：1バウンド目の判定で、割った線（アウト／フォールト）と、ライン際に
+//     入った球（セーフ）を lineCall に出す。声はアウト／フォールトだけ ---
+{
+  const { LINE_CALL, TIMING } = R.config;
+  const sounds = [];
+  const make = (doubles = false) => {
+    sounds.length = 0;
+    const g = new R.Game({ input: fakeInput, hooks: { ...noHooks, sound: (name, ...a) => sounds.push([name, ...a]) } });
+    g.start(doubles, 'you');
+    return g;
+  };
+  const rallyBounce = (g, x, z, last = 'cpu') => {
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.ball.live = true;
+    g.ball.last = last;
+    return bounceAt(g, x, z);
+  };
+  const voiced = () => sounds.filter(([n]) => n === 'lineCall').map(([, k]) => k);
+
+  // ラリー：ベースラインの外（自陣の深く）＝アウト。線から外へ（-z）を指す。決着のコール
+  {
+    const g = make();
+    rallyBounce(g, 1.0, -(HALF_L + 0.4));
+    const c = g.lineCall;
+    ok(c && c.kind === 'out' && c.line === 'base' && c.out.x === 0 && c.out.z === -1 && c.decisive,
+      `a long ball is called out on the baseline, got ${JSON.stringify(c)}`);
+    ok(voiced().join() === 'out', `and the judge shouts it, got ${JSON.stringify(sounds)}`);
+  }
+  // ラリー：サイドラインの外。より大きく割った方の線になる
+  {
+    const g = make();
+    rallyBounce(g, HALF_W + 0.5, -(HALF_L - 0.1));
+    ok(g.lineCall && g.lineCall.kind === 'out' && g.lineCall.line === 'side' && g.lineCall.out.x === 1,
+      `a wide ball is called on the sideline even near the corner, got ${JSON.stringify(g.lineCall)}`);
+  }
+  // ダブルスはダブルスのサイドラインで見る（シングルスの線の外でもインならセーフでもない）
+  {
+    const g = make(true);
+    rallyBounce(g, HALF_W + 0.5, -5);
+    ok(g.lineCall === null && g.phase === 'rally', `a doubles alley ball is in and not close, got ${JSON.stringify(g.lineCall)}`);
+  }
+  // ライン際のイン＝セーフ（無言）。余裕をもって入った球には何もしない
+  {
+    const g = make();
+    rallyBounce(g, 1.0, -(HALF_L - LINE_CALL.SAFE_MARGIN * 0.5));
+    ok(g.lineCall && g.lineCall.kind === 'safe' && g.lineCall.line === 'base' && !g.lineCall.decisive,
+      `a ball just inside the baseline gets the safe signal, got ${JSON.stringify(g.lineCall)}`);
+    ok(voiced().length === 0, 'the safe signal is silent');
+    const h = make();
+    rallyBounce(h, 1.0, -(HALF_L - LINE_CALL.SAFE_MARGIN - 0.3));
+    ok(h.lineCall === null, `a comfortably-in ball gets no call, got ${JSON.stringify(h.lineCall)}`);
+  }
+  // ネットを越えずに自陣に落ちた球は線の判定ではない
+  {
+    const g = make();
+    rallyBounce(g, 1.0, 3, 'cpu');
+    ok(g.lineCall === null, `a ball that never crossed the net gets no line call, got ${JSON.stringify(g.lineCall)}`);
+  }
+  // サーブ：サービスラインの外＝フォールト。1本目は決着ではなく、2本目（ダブルフォルト）は決着
+  {
+    const g = make();
+    g.serve('you');
+    bounceAt(g, 1.0, COURT.SERVICE + 0.5);
+    ok(g.lineCall && g.lineCall.kind === 'fault' && g.lineCall.line === 'service' && g.lineCall.out.z === 1
+      && !g.lineCall.decisive, `a long first serve is a fault on the service line, got ${JSON.stringify(g.lineCall)}`);
+    ok(voiced().join() === 'fault', `and the judge shouts fault, got ${JSON.stringify(voiced())}`);
+    g.tickTimers(TIMING.FAULT_CALL + 0.01);
+    g.serve('you');
+    bounceAt(g, -0.4, 3); // センターサービスラインの向こう（受ける側と反対の箱）
+    ok(g.lineCall && g.lineCall.kind === 'fault' && g.lineCall.line === 'center' && g.lineCall.out.x === -1
+      && g.lineCall.decisive, `a second serve over the center line is a deciding fault, got ${JSON.stringify(g.lineCall)}`);
+  }
+  // サーブ：ライン際に入ればセーフ。次のポイントでコールは消える
+  {
+    const g = make();
+    g.serve('you');
+    bounceAt(g, 1.0, COURT.SERVICE - 0.05);
+    ok(g.lineCall && g.lineCall.kind === 'safe' && g.lineCall.line === 'service',
+      `a serve just inside the service line gets the safe signal, got ${JSON.stringify(g.lineCall)}`);
+    g.newPoint();
+    ok(g.lineCall === null, 'the call is cleared at the next point');
+  }
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);

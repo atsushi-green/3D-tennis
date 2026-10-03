@@ -1,13 +1,17 @@
 /**
- * 審判台・主審・線審・ボールボーイ。すべて静止した装飾用メッシュで、ゲームロジックには
- * 一切関与しない（試合中に動かず、当たり判定も持たない）。world.js が起動時に1回だけ
- * createOfficials() をシーンへ追加する。
+ * 審判台・主審・線審・ボールボーイ。ゲームロジックには一切関与しない装飾用メッシュで、
+ * 当たり判定も持たない。world.js が起動時に1回だけ createOfficials() をシーンへ追加する。
+ * 動くのは線審の腕だけ（コールの合図。setLineJudgePose()）。
  */
 (function (RallyOne) {
   'use strict';
 
-  const { OFFICIALS, THEME } = RallyOne.config;
+  const { OFFICIALS, THEME, LINE_CALL } = RallyOne.config;
+  const { clamp, lerp } = RallyOne.math;
   const scene3d = RallyOne.scene = RallyOne.scene || {};
+
+  /** 腕を下ろしているときの、体から外へ開く角度(rad)。 */
+  const ARM_REST_Z = 0.12;
 
   const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
 
@@ -30,15 +34,23 @@
     head.position.y = torso.position.y + torsoH / 2 + 0.13 * scale;
     group.add(head);
 
-    [-1, 1].forEach((side) => {
+    // 腕は肩を支点に回せるよう、肩の位置に置いた空の Group の下に吊るす（線審の合図で回す）。
+    // 並びは [体の -x 側, +x 側]。
+    const armLen = 0.42 * scale;
+    const arms = [-1, 1].map((side) => {
+      const shoulder = new THREE.Group();
+      shoulder.position.set(side * 0.2 * scale, torso.position.y + 0.06 * scale + armLen / 2, 0);
+      shoulder.rotation.z = side * ARM_REST_Z;
       const arm = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.04 * scale, 0.035 * scale, 0.42 * scale, 8),
+        new THREE.CylinderGeometry(0.04 * scale, 0.035 * scale, armLen, 8),
         mat(uniform),
       );
-      arm.position.set(side * 0.2 * scale, torso.position.y + 0.06 * scale, 0);
-      arm.rotation.z = side * 0.12;
-      group.add(arm);
+      arm.position.y = -armLen / 2;
+      shoulder.add(arm);
+      group.add(shoulder);
+      return shoulder;
     });
+    group.userData.arms = arms;
 
     if (!seated) {
       [-1, 1].forEach((side) => {
@@ -106,16 +118,60 @@
     return group;
   }
 
+  /**
+   * 線審。userData.lineJudges に、合図を出させるための情報（担当の線・会場の座標・腕）を
+   * 並べておく（world.js の pickLineJudge() が担当を選び、setLineJudgePose() が腕を動かす）。
+   * BASE はそれぞれ自分の側のベースライン、SIDE は自分の側のサイドラインと、自分のいる半面の
+   * サービスライン・センターサービスラインを受け持つ。
+   */
   function createLineJudges() {
     const group = new THREE.Group();
-    [...OFFICIALS.LINE.BASE, ...OFFICIALS.LINE.SIDE].forEach(({ x, z }) => {
+    const judges = [];
+    const add = (role) => ({ x, z }) => {
       const judge = createFigure({ uniform: THEME.OFFICIAL_UNIFORM });
       judge.position.set(x, 0, z);
       judge.rotation.y = faceInward(x, z);
       group.add(judge);
-    });
+      judges.push({ role, x, z, facing: judge.rotation.y, arms: judge.userData.arms });
+    };
+    OFFICIALS.LINE.BASE.forEach(add('base'));
+    OFFICIALS.LINE.SIDE.forEach(add('side'));
+    group.userData.lineJudges = judges;
     return group;
   }
+
+  /**
+   * 線審の腕の構え。w＝合図の出し具合（0＝下ろしている〜1＝出しきった）。
+   * - 'out'/'fault'：会場の座標での向き dir（線から外へ）を指して、その側の腕を水平に伸ばす
+   * - 'safe'：両腕を体の前へ出し、手を寄せて下向きにそろえる
+   * 腕の Euler は既定の XYZ 順＝下げた腕をまず z で開き、y で水平に振り、x で前へ出す。
+   * @param {{facing:number, arms:THREE.Group[]}} judge
+   * @param {'out'|'fault'|'safe'|null} kind
+   * @param {{x:number, z:number}} [dir]
+   * @param {number} w
+   */
+  function setLineJudgePose(judge, kind, dir, w) {
+    const pose = [-1, 1].map((side) => ({ x: 0, y: 0, z: side * ARM_REST_Z }));
+    if (kind === 'safe') {
+      [-1, 1].forEach((side, i) => {
+        pose[i] = { x: LINE_CALL.SAFE_ARM_PITCH, y: 0, z: -side * LINE_CALL.SAFE_ARM_IN };
+      });
+    } else if (kind && dir) {
+      // 会場の向き → この線審の体の向き（+z が正面）へ回す
+      const c = Math.cos(judge.facing);
+      const s = Math.sin(judge.facing);
+      const lx = dir.x * c - dir.z * s;
+      const lz = dir.x * s + dir.z * c;
+      const side = lx >= 0 ? 1 : -1;
+      const yaw = clamp(Math.atan2(-side * lz, side * lx), -LINE_CALL.ARM_YAW_MAX, LINE_CALL.ARM_YAW_MAX);
+      pose[side > 0 ? 1 : 0] = { x: 0, y: yaw, z: side * Math.PI / 2 };
+    }
+    judge.arms.forEach((arm, i) => {
+      const rest = (i === 0 ? -1 : 1) * ARM_REST_Z;
+      arm.rotation.set(lerp(0, pose[i].x, w), lerp(0, pose[i].y, w), lerp(rest, pose[i].z, w));
+    });
+  }
+  scene3d.setLineJudgePose = setLineJudgePose;
 
   function createBallKids() {
     const { BALLKID } = OFFICIALS;
@@ -129,10 +185,15 @@
     return group;
   }
 
-  /** @returns {THREE.Group} 審判台＋主審＋線審＋ボールボーイ一式。world.js が1回だけシーンへ追加する。 */
+  /**
+   * @returns {THREE.Group} 審判台＋主審＋線審＋ボールボーイ一式。world.js が1回だけシーンへ追加する。
+   *   userData.lineJudges に線審の一覧（createLineJudges() 参照）。
+   */
   scene3d.createOfficials = function createOfficials() {
     const group = new THREE.Group();
-    group.add(createUmpireChair(), createLineJudges(), createBallKids());
+    const lineJudges = createLineJudges();
+    group.add(createUmpireChair(), lineJudges, createBallKids());
+    group.userData.lineJudges = lineJudges.userData.lineJudges;
     return group;
   };
 })(window.RallyOne = window.RallyOne || {});

@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    CAMERA, FX, PLAYER, SPECIAL, THEME, REPLAY, HALF_L,
+    CAMERA, FX, PLAYER, SPECIAL, THEME, REPLAY, HALF_L, LINE_CALL,
   } = RallyOne.config;
   const { lerp, clamp } = RallyOne.math;
   const scene3d = RallyOne.scene;
@@ -30,7 +30,8 @@
     // ままなので、チェンジエンズ（game.endsSwapped）はこちらを180°回して映す。コート面・
     // ライン・ネット・スタンドの壁は点対称なので回さなくても見え方は変わらない。
     const venue = new THREE.Group();
-    venue.add(scene3d.createOfficials(), scene3d.createCrowd(), stage.sun);
+    const officials = scene3d.createOfficials();
+    venue.add(officials, scene3d.createCrowd(), stage.sun);
     scene.add(court, scene3d.createNet(), venue);
 
     const you = scene3d.createPlayer(THEME.YOU, 'you');
@@ -175,6 +176,63 @@
       scene3d.placeBallShadow(shadows.ball, ball);
     }
 
+    // --- 線審のコール（game.lineCall が変わったら、担当の線審が合図を出す） ---
+    const lineJudges = officials.userData.lineJudges;
+    let lastLineCall = null; // 最後に見た game.lineCall（コールのたびに新しいオブジェクトになるので参照で比べる）
+    let judgeCall = null;    // { judge, kind, dir, recT }：合図を出している線審と、コールした録画時刻
+
+    /**
+     * そのコールを受け持つ線審と、会場の座標での「線から外へ」の向き。会場はチェンジエンズで
+     * 180°回っている（venue.rotation.y）ので、ゲームの座標を会場の座標へ戻してから選ぶ。
+     * ベースラインはその側の BASE、サイドラインはその側の SIDE、サービスライン・センター
+     * サービスラインは落ちた半面にいる SIDE（officials.js#createLineJudges 参照）。
+     */
+    function pickLineJudge(call, swapped) {
+      const k = swapped ? -1 : 1;
+      const x = call.x * k;
+      const z = call.z * k;
+      const same = (a, b) => Math.sign(a) === Math.sign(b);
+      const judge = lineJudges.find((j) => {
+        if (call.line === 'base') return j.role === 'base' && same(j.z, z);
+        if (call.line === 'side') return j.role === 'side' && same(j.x, x);
+        return j.role === 'side' && same(j.z, z); // 'service' / 'center'
+      });
+      return judge ? { judge, dir: { x: call.out.x * k, z: call.out.z * k } } : null;
+    }
+
+    /** 合図の出し具合（0〜1）。コールから DELAY 遅れて上げ、HOLD だけ保って下ろす。 */
+    function callWeight(age) {
+      const ease = (u) => u * u * (3 - 2 * u);
+      let t = age - LINE_CALL.DELAY;
+      if (t <= 0) return 0;
+      if (t < LINE_CALL.RAISE) return ease(t / LINE_CALL.RAISE);
+      t -= LINE_CALL.RAISE + LINE_CALL.HOLD;
+      if (t <= 0) return 1;
+      return t < LINE_CALL.LOWER ? 1 - ease(t / LINE_CALL.LOWER) : 0;
+    }
+
+    function watchLineCall(state) {
+      if (!state.lineCall || state.lineCall === lastLineCall) return;
+      lastLineCall = state.lineCall;
+      const picked = pickLineJudge(state.lineCall, state.endsSwapped);
+      judgeCall = picked && { ...picked, kind: state.lineCall.kind, recT: recClock };
+    }
+
+    /**
+     * 線審の腕を、録画の時計 clock の時点の合図にする。通常表示は今の録画時刻、リプレイは
+     * 再生中のコマの録画時刻を渡す＝リプレイでも、球が着いた瞬間に同じ線審がコールする。
+     */
+    function poseLineJudges(clock) {
+      const w = judgeCall ? callWeight(clock - judgeCall.recT) : 0;
+      lineJudges.forEach((judge) => {
+        if (judgeCall && judge === judgeCall.judge && w > 0) {
+          scene3d.setLineJudgePose(judge, judgeCall.kind, judgeCall.dir, w);
+        } else {
+          scene3d.setLineJudgePose(judge, null, null, 0);
+        }
+      });
+    }
+
     // --- ポイント終了後のリプレイ（表示側のみ。ゲームロジックには一切触れない） ---
     // 直近 REPLAY.WINDOW_SEC 秒ぶんのスナップショットをリングバッファに録り続け、
     // startReplay() が呼ばれた瞬間の中身をそのまま固定して再生する。
@@ -183,6 +241,9 @@
     let reel = [];
     let replaying = false;
     let replayClock = 0;
+    let replayHold = REPLAY.HOLD_SEC; // 最後のコマで静止する長さ（線審のコールで終わる再生だけ長い）
+    // startReplay(wait) で待っている間の予約（{ endT, wait }）。endT＝決着の瞬間の録画時刻
+    let pendingReplay = null;
 
     /** state.you/cpu/youMate/cpuMate のうち、見た目の再現に必要な分だけを浅くコピーする */
     function snapshotPlayer(p) {
@@ -258,35 +319,53 @@
      */
     const IN_POINT = new Set(['serve', 'rally']);
 
-    /** ポイントが決まった瞬間に main.js から呼ぶ。録れていなければ何もしない。 */
-    function startReplay() {
-      if (history.length < 2) return;
+    /**
+     * ポイントが決まった瞬間に main.js から呼ぶ。録れていなければ何もしない。
+     * @param {number} [wait] 再生を始めるまでの秒数（線審のコールで決まったポイントは、通常の
+     *   画面でコールを見せてから再生する。LINE_CALL.REPLAY_DELAY）。待っている間も録画は続くが、
+     *   再生するのは呼ばれた瞬間（＝決着の瞬間）までのコマ。
+     */
+    function startReplay(wait = 0) {
+      if (wait > 0) {
+        pendingReplay = { endT: recClock, wait };
+        return;
+      }
+      beginReplay(recClock);
+    }
+
+    /** endT（録画時刻）までのコマを切り出して再生を始める。 */
+    function beginReplay(endT) {
+      const recorded = history.filter((f) => f.t <= endT);
+      if (recorded.length < 2) return;
       // 再生してよいのは、決着したサーブの構えに入ってから後のコマだけ。
       // 以前は直近 MAX_PLAY_SEC ぶんをそのまま切り出していたため、サーブで決まる短い
       // ポイント（特にダブルフォルト：CPU は構えてから打つまで2秒足らず）では、頭に
       // 1本目のフォールトの後始末（ネットに掛かって止まったボールなど）や前のポイントの
       // 終わりが混ざり、そこから beginServe() が選手とボールをスタンスへ瞬間移動させる
       // コマまで映っていた＝「アウトなのにネットに掛かる」「立ち位置が一瞬おかしい」。
-      let from = history.length - 1; // 最後のコマ＝決着の瞬間（phase は 'over'）
-      while (from > 0 && IN_POINT.has(history[from - 1].phase)) from--;
-      const segment = history.slice(from);
+      let from = recorded.length - 1; // 最後のコマ＝決着の瞬間（phase は 'over'）
+      while (from > 0 && IN_POINT.has(recorded[from - 1].phase)) from--;
+      const segment = recorded.slice(from);
       // MAX_PLAY_SEC で長さを絞るのは前側（リード）だけ。末尾は必ず history の最後の
       // コマ＝ポイントが決まった瞬間（アウトならボールが実際にベースラインを越えた
       // 座標）まで含める。ここを history.slice() のまま先頭から MAX_PLAY_SEC ぶんだけ
       // 再生していたときは、肝心の決着の瞬間が再生範囲の外に切り落とされ、
       // リプレイがボールの決着より手前で止まって見えていた。
-      const endT = history[history.length - 1].t;
-      const startT = endT - REPLAY.MAX_PLAY_SEC;
+      const startT = recorded[recorded.length - 1].t - REPLAY.MAX_PLAY_SEC;
       reel = segment.filter((f) => f.t >= startT);
       if (reel.length < 2) reel = segment.slice(-2);
       if (reel.length < 2) return; // このサーブのコマが録れていない
       replayClock = 0;
       replaying = true;
+      // 決着の瞬間に線審がコールしていれば、静止している間にその合図を見せる
+      const called = judgeCall && judgeCall.recT >= reel[0].t && judgeCall.recT <= reel[reel.length - 1].t;
+      replayHold = called ? Math.max(REPLAY.HOLD_SEC, LINE_CALL.REPLAY_HOLD) : REPLAY.HOLD_SEC;
     }
 
-    /** リプレイ中にキー操作があったら main.js から呼ぶ。即座に通常表示へ戻す。 */
+    /** リプレイ中にキー操作があったら main.js から呼ぶ。即座に通常表示へ戻す（予約も取り消す）。 */
     function skipReplay() {
       replaying = false;
+      pendingReplay = null;
     }
 
     /**
@@ -307,6 +386,14 @@
       // ここで録り漏らすと再生の直後に次のポイントがすぐ終わったとき history が
       // 足りず（history.length<2）、そのポイントのリプレイだけ出せなくなってしまう。
       recordFrame(state, dt);
+      watchLineCall(state);
+      if (pendingReplay) {
+        pendingReplay.wait -= dt;
+        if (pendingReplay.wait <= 0) {
+          beginReplay(pendingReplay.endT);
+          pendingReplay = null;
+        }
+      }
 
       if (replaying) {
         replayClock += dt * REPLAY.SPEED;
@@ -317,9 +404,11 @@
         // これがないと、再生終了と同時に裏で進んでいた本編（次のポイントの支度）が
         // 通常カメラへ lerp で戻る途中に映り込み、「戻りながら次が始まって見える」
         // 落ち着かない切り替わりになってしまう。
-        if (replayClock <= playEnd + REPLAY.HOLD_SEC) {
+        if (replayClock <= playEnd + replayHold) {
           const frame = frameAt(Math.min(replayClock, playEnd));
           applyFrame(frame, dt, frame.stages);
+          // 静止している間（HOLD_SEC）も線審の時計だけは進める＝決着の瞬間のコールが見える
+          poseLineJudges(reel[0].t + replayClock);
           scene3d.updateTrail(trail, NO_TRAIL); // 再生そのものが「振り返り」なので軌跡は隠す
           scene3d.placeSmashHint(smashHint, null);
           scene3d.placeSwingGuide(swingGuide, null, state.you);
@@ -335,6 +424,7 @@
       }
 
       applyFrame(state, dt, serveStages(state));
+      poseLineJudges(recClock);
       // 軌跡はラリーの決着がついた後（ポイント間の 'serve' 待ち・'over'）だけ見せる。
       // ラリー中に出しっぱなしだと本来の目的（アウトの結果を振り返る）を超えて
       // 「次にどこへ来るか」の手がかりになってしまうため。

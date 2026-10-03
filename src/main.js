@@ -5,7 +5,7 @@
   const {
     PHYSICS, applyCpuLevel, applyCpuStyle, applySurface, TOSS,
     setRating, resetRatings, randomizeRatings,
-    SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE,
+    SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE, LINE_CALL,
   } = RallyOne.config;
   const { clamp } = RallyOne.math;
   const { sfx, unlock } = RallyOne.audio;
@@ -352,7 +352,11 @@
       // そのコマを録ってから切り出す。
       world.sync(game, dt);
       // 練習モードはリプレイを挟まない（1本ごとに止まると反復練習のテンポが崩れる）
-      if (pointJustEnded && !game.practice) world.startReplay();
+      // 線審のコール（アウト／ダブルフォルト）で決まったポイントは、通常の画面でコールを
+      // 見せてからリプレイへ移る（実際の中継と同じ順番。LINE_CALL.REPLAY_DELAY 参照）。
+      if (pointJustEnded && !game.practice) {
+        world.startReplay(game.lineCall && game.lineCall.decisive ? LINE_CALL.REPLAY_DELAY : 0);
+      }
       hud.setReplay(world.isReplaying());
       hud.setShade(game.changeoverShade());
       hud.setPractice(game.practice);

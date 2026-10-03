@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    ATTRS, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, FX, HALF_L, HALF_W, NET, PHYSICS,
+    ATTRS, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, FX, HALF_L, HALF_W, LINE_CALL, NET, PHYSICS,
     PLAYER, PRACTICE, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, TIMING,
     TIMING_AIM, TRAIL, VOLLEY, WIND, shotSkill,
   } = RallyOne.config;
@@ -38,6 +38,16 @@
     const dir = serverTeam === 'you' ? 1 : -1;
     const targetSign = serverTeam === 'you' ? -side : side;
     return { dir, targetSign };
+  }
+
+  /**
+   * 1バウンド目の判定に関わる線のうち、いちばん外寄り（内側への距離が最小）の線。
+   * アウトならそれが割った線、インならいちばん際どかった線になる（線審のコールに使う）。
+   * @param {{line:string, inside:number, out:{x:number, z:number}}[]} lines
+   *   inside＝球の中心から線までの内側への距離(m、負なら外)、out＝線から外へ向かう向き
+   */
+  function closestLine(lines) {
+    return lines.reduce((a, b) => (b.inside < a.inside ? b : a));
   }
 
   /**
@@ -897,6 +907,13 @@
        */
       this.wind = 0;
       this.windZ = 0;
+      /**
+       * 直近の線審のコール（callLine()）。コールのたびに新しいオブジェクトに替わり、表示側
+       * （scene/world.js）はそれを見て担当の線審に合図を出させ、main.js は decisive（この
+       * コールでポイントが決まった）を見てリプレイの前に一拍置く。ポイントごとに null へ戻す
+       * （newPoint()）。
+       */
+      this.lineCall = null;
       /**
        * この会場に吹いている卓越風（試合を通してほぼ一定の向きと強さ）。angle は +z（人間の
        * チームから相手側）を0とし、+x 側へ回る向き（rad）。ゲームの座標で持つので、チェンジ
@@ -1872,6 +1889,7 @@
       this.lastShotBy = { you: null, cpu: null };
       this.lastServeKmh = null;
       this.driftWind();
+      this.lineCall = null; // 前のポイントのコールを「このポイントを決めたコール」と取り違えない
       this.hooks.serveSpeed(null); // 前のポイントのサーブ速度表示を消す
       // スタミナはポイント間で少し回復するが、そのセットで消化したゲーム数が増えるほど
       // 回復量そのものが目減りする（staminaRecoverAmount()）＝長いセットの終盤ほど
@@ -4372,8 +4390,10 @@
           if (this.inServiceBox(ball)) {
             // 1本目がサービスボックスに入った＝1stサーブが入った本数（スタッツ用）。
             if (this.serveNumber === 1) this.stats[ball.last].firstServeIn++;
+            this.callLine('safe', this.serveLines());
             return false;
           }
+          this.callLine('fault', this.serveLines()); // serveFault() が serveNumber を進める前に
           this.serveFault('アウト');
           return true;
         }
@@ -4383,15 +4403,65 @@
         const inCourt = Math.abs(ball.x) <= rallyHalfWidth + COURT.LINE_SLACK
           && Math.abs(ball.z) <= HALF_L + COURT.LINE_SLACK;
         if (ownSide || !inCourt) {
+          // 自陣に落ちた球（ネットを越えなかった）は線の判定ではないので線審は動かない
+          if (!ownSide) this.callLine('out', this.rallyLines(rallyHalfWidth));
           this.endPoint(opponent(ball.last), ownSide ? '相手コートに届かず' : 'アウト');
           return true;
         }
+        this.callLine('safe', this.rallyLines(rallyHalfWidth));
         return false;
       }
 
       // 2バウンド＝返せなかった
       this.endPoint(ball.last, 'ツーバウンド');
       return true;
+    }
+
+    /** ラリーの1バウンド目に関わる線（ベースライン・サイドライン）。closestLine() 参照。 */
+    rallyLines(halfWidth) {
+      const { x, z } = this.ball;
+      return [
+        { line: 'base', inside: HALF_L - Math.abs(z), out: { x: 0, z: signOr(z, 1) } },
+        { line: 'side', inside: halfWidth - Math.abs(x), out: { x: signOr(x, 1), z: 0 } },
+      ];
+    }
+
+    /**
+     * サーブの1バウンド目に関わる線（サービスライン・シングルスのサイドライン・センター
+     * サービスライン）。inServiceBox() と同じ箱を、線ごとの距離に分けたもの。
+     */
+    serveLines() {
+      const { x, z } = this.ball;
+      const { dir, targetSign } = serveAim(this.server, this.match.serveSide);
+      return [
+        { line: 'service', inside: COURT.SERVICE - Math.abs(z), out: { x: 0, z: dir } },
+        { line: 'side', inside: HALF_W - targetSign * x, out: { x: targetSign, z: 0 } },
+        { line: 'center', inside: targetSign * x, out: { x: -targetSign, z: 0 } },
+      ];
+    }
+
+    /**
+     * 線審のコール。bounce() が1バウンド目を判定するたびに呼ぶ。アウト／フォールトは割った線、
+     * インはいちばん際どい線が LINE_CALL.SAFE_MARGIN 以内のときだけ「セーフ」の合図になる
+     * （余裕をもって入った球に線審は何もしない）。腕の合図は表示側が lineCall を読んで出し、
+     * 声（アウト／フォルト。セーフは無言）はここで鳴らす。
+     * @param {'out'|'fault'|'safe'} kind
+     * @param {{line:string, inside:number, out:{x:number, z:number}}[]} lines
+     */
+    callLine(kind, lines) {
+      const at = closestLine(lines);
+      if (kind === 'safe' && at.inside > LINE_CALL.SAFE_MARGIN) return;
+      this.lineCall = {
+        kind,
+        line: at.line,
+        out: at.out,
+        x: this.ball.x,
+        z: this.ball.z,
+        // このコールでポイントが決まったか（アウト、またはセカンドサーブのフォールト）。
+        // 練習はリプレイを流さないので立てない。
+        decisive: !this.practice && (kind === 'out' || (kind === 'fault' && this.serveNumber !== 1)),
+      };
+      if (kind !== 'safe') this.hooks.sound('lineCall', kind);
     }
 
     /**

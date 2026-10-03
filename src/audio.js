@@ -12,7 +12,7 @@
 (function (RallyOne) {
   'use strict';
 
-  const { AUDIO, SURFACE } = RallyOne.config;
+  const { AUDIO, SURFACE, LINE_CALL } = RallyOne.config;
   const { rand, clamp, lerp } = RallyOne.math;
 
   let ctx = null;
@@ -213,6 +213,69 @@
   }
 
   /**
+   * 線審の掛け声（AUDIO.LINE_CALL のコメント参照）。のこぎり波（声帯）を3本のフォルマント
+   * フィルタに並列に通し、フォルマントの周波数を VOWELS の折れ線どおりに動かして母音を作る。
+   * 語頭の f（WORDS.*.FRIC 秒）と語尾の t はハイパスのノイズで足す。着地から LINE_CALL.DELAY
+   * 遅れて（腕の合図と同時に）鳴る。
+   * @param {'out'|'fault'} word
+   */
+  function lineCallVoice(word) {
+    const ac = context();
+    if (!ac) return;
+    const V = AUDIO.LINE_CALL;
+    const spec = V.WORDS[word];
+    if (!spec) return;
+    try {
+      const fric = spec.FRIC || 0;
+      const vowelDur = spec.VOWELS[spec.VOWELS.length - 1][0];
+      const t0 = ac.currentTime + LINE_CALL.DELAY;
+      const tv = t0 + fric;              // 母音の始まり
+      const tEnd = tv + vowelDur;        // 母音を切って t の破裂へ
+      const vol = jVol(V.VOL);
+      const pitch = jHz(V.PITCH_HZ);
+
+      if (fric > 0) {
+        noiseVoice(ac, {
+          type: 'highpass', vol: V.FRIC_VOL, hz: V.FRIC_HZ, q: 0.7, dur: fric + 0.02, at: LINE_CALL.DELAY,
+        });
+      }
+
+      const src = ac.createOscillator();
+      src.type = 'sawtooth';
+      src.frequency.setValueAtTime(pitch, tv);
+      src.frequency.linearRampToValueAtTime(pitch * (V.PITCH_END_HZ / V.PITCH_HZ), tEnd);
+      const amp = ac.createGain();
+      amp.gain.setValueAtTime(SILENCE, tv);
+      amp.gain.linearRampToValueAtTime(vol, tv + V.ATTACK);
+      amp.gain.setValueAtTime(vol, tEnd - V.RELEASE);
+      amp.gain.linearRampToValueAtTime(SILENCE, tEnd);
+      amp.connect(ac.destination);
+      // フォルマント3本を並列に。周波数は VOWELS の折れ線、強さは FORMANT_GAIN
+      V.FORMANT_GAIN.forEach((g, i) => {
+        const bp = ac.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.Q.value = V.FORMANT_Q;
+        spec.VOWELS.forEach(([t, ...f], k) => {
+          if (k === 0) bp.frequency.setValueAtTime(f[i], tv + t);
+          else bp.frequency.linearRampToValueAtTime(f[i], tv + t);
+        });
+        const level = ac.createGain();
+        level.gain.value = g;
+        src.connect(bp).connect(level).connect(amp);
+      });
+      src.start(tv);
+      src.stop(tEnd + 0.01);
+
+      noiseVoice(ac, {
+        type: 'highpass', vol: V.BURST_VOL, hz: V.BURST_HZ, q: 0.7, dur: V.BURST_DUR,
+        at: tEnd - ac.currentTime,
+      });
+    } catch (e) {
+      /* 音が出ないだけなのでゲームは続行 */
+    }
+  }
+
+  /**
    * 打ち方とスピンから打撃音の配合（AUDIO.IMPACT.STROKE の1つ）を選ぶ。
    * スマッシュとボレーは打ち方そのものが音を決める（スピンは掛けない打ち方なので無視）。
    * グラウンドストロークだけスピンで分かれる。
@@ -293,6 +356,8 @@
         }
       }
     },
+    /** 線審の「アウト！」「フォルト！」（ライン際に入った球の「セーフ」は無言の合図だけ）。 */
+    lineCall: (kind) => lineCallVoice(kind),
     /** ネットコードに当たる鈍い音（低く長め＝テープ/ガットの damped な振動）。 */
     netIn: () => layered(AUDIO.NET_IN),
     /** 必殺技の発動。音程が上がっていくので、直後に鳴る打球音と混ざっても聞き分けられる。 */
