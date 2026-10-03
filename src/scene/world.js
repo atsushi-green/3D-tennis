@@ -33,7 +33,9 @@
     const officials = scene3d.createOfficials();
     // クレーのボールマークも会場の側に置く＝チェンジエンズで会場と一緒に回り、コートに付いたまま
     const ballMarks = scene3d.createBallMarks();
-    venue.add(officials, ballMarks.group, scene3d.createCrowd(), stage.sun);
+    // 風向きの旗も会場の側（風は会場に吹いているので、回った後も会場に対して同じ向きになびく）
+    const flags = scene3d.createFlags();
+    venue.add(officials, ballMarks.group, scene3d.createCrowd(), flags, stage.sun);
     scene.add(court, scene3d.createNet(), venue);
 
     const you = scene3d.createPlayer(THEME.YOU, 'you');
@@ -442,6 +444,11 @@
       // 入れ替わるのは game の時計で暗転しきった瞬間（game.changeoverShade() が1の間）だけ。
       // リプレイは update() を止めて再生するので、再生中に向きが変わることはない。
       venue.rotation.y = state.endsSwapped ? Math.PI : 0;
+      // 旗はリプレイ中も今の風でなびかせる（再生中は game.update() が止まっていて風も変わらない）。
+      // game.wind/windZ はゲームの座標（人間のチームから見た向き）なので、180°回っている会場の
+      // 座標へ戻して渡す＝チェンジエンズの瞬間に旗がくるりと向きを変えたりしない。
+      const venueSide = state.endsSwapped ? -1 : 1;
+      scene3d.updateFlags(flags, state.wind * venueSide, state.windZ * venueSide, dt);
       // 録画は再生中も止めない：裏では game.update() が実際の試合を進め続けているので、
       // ここで録り漏らすと再生の直後に次のポイントがすぐ終わったとき history が
       // 足りず（history.length<2）、そのポイントのリプレイだけ出せなくなってしまう。

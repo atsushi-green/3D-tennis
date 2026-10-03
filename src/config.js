@@ -2413,6 +2413,46 @@
   };
 
   /**
+   * 風向きを見せる旗（scene/flags.js）。実際の会場と同じく、両エンドのスタンドの最上段の
+   * 後ろにポールを立てて揚げる。会場の一部なのでチェンジエンズで会場と一緒に回り、
+   * 旗の向きは会場に対して一定のまま＝選手から見た風向きだけが逆になる（WIND 参照）。
+   * 手前のエンドの旗はカメラの後ろに隠れるので、見えるのは常に奥のエンドの2本。
+   * 両エンドに点対称に立てるので、会場が180°回っても見え方は変わらない。
+   * 吹き流れる向きは風（game.wind/windZ）そのもの、強さは垂れ具合とはためき方に出す。
+   */
+  const FLAG = {
+    // ポールの足元。z は奥のスタンド（STANDS.WALLS の z=±20）の最後列（SPECTATORS.ROWS段目）の後ろ。
+    // x はスコアボード（左上）・コール（中央）と画面上で重ならない幅。各点を原点対称にもう1本立てる。
+    POLES: [
+      { x: -14, z: 23.5 },
+      { x: 14, z: 23.5 },
+    ],
+    POLE_HEIGHT: 9,
+    POLE_RADIUS: 0.07,
+    POLE_COLOR: 0xb8c2cc,
+    LENGTH: 2.8,   // 旗の長さ（ポールから先端まで, m）
+    HEIGHT: 1.8,   // 旗の縦幅(m)
+    SEG_X: 14,     // はためかせるための分割数（長さ方向）
+    SEG_Y: 6,
+    // 風の強さ（m/s²）を 0〜1 に直す分母。WIND.BASE_MAX より少し上で「ほぼ真横に張る」。
+    FULL_ACCEL: 0.5,
+    // 垂れる角度（rad。0＝真横に張る）。無風で DROOP_CALM、強風で DROOP_STRONG。
+    DROOP_CALM: 1.2,
+    DROOP_STRONG: 0.12,
+    // はためき（先端ほど大きく揺れる進行波）。振幅(m)・速さ(rad/s)とも弱風→強風で補間する。
+    WAVE_AMP: [0.1, 0.24],
+    WAVE_SPEED: [2.2, 9],
+    WAVE_K: 2.6,       // 長さ方向の波数(rad/m)
+    // 旗の向き・強さが新しい風へ追いつく速さ(1/s)。ポイントごとの揺らぎがふわっと移る程度。
+    RESPONSE: 1.6,
+    // 架空の大会旗（実在の国旗に似ないよう、地の色＋ボールの紋章＋ポール側の帯）。
+    DESIGNS: [
+      { field: '#1f4f8f', band: '#eef3f8', emblem: '#d8f24a' },
+      { field: '#eef3f8', band: '#1f4f8f', emblem: '#2b6cb0' },
+    ],
+  };
+
+  /**
    * 歩行/走行のプロシージャルアニメーション。
    * 真のIKではなく、股関節・膝の角度を速度に応じて数式で生成する簡易版。
    * 角度の符号（股関節・膝とも rotation.x）：股関節は正＝太ももを後ろへ、負＝前へ。
@@ -3736,7 +3776,7 @@
     BOUNDS, CPU, DOUBLES, RULES, TIMING, CHANGEOVER, PRACTICE, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT, GUIDE,
     SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, STAMINA, TOSS, OFFICIALS, LINE_CALL, BALL_MARK,
-    STANDS, SPECTATORS, MOTION,
+    STANDS, SPECTATORS, FLAG, MOTION,
     SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET,
     SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, ATTR_SPREAD, ATTRS, NEUTRAL_ATTR,
     setRating, getRating, resetRatings, randomizeRatings, shotSkill,
