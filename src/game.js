@@ -742,6 +742,8 @@
         chargeFrac: 0, swingCharge: 0,
         // 目標地点に着いて待っているか（moveTowards。着いた後は目標の小さな揺れを追わない）
         parked: false,
+        // この球を追い始めた位置（resetChase が入れる）
+        chaseFromX: x, chaseFromZ: z,
         attr: ATTRS[who], netDir: NET_DIR[who],
       });
       this.cpu = aiActor(0, CPU.HOME_Z, 'cpu');
@@ -2511,6 +2513,7 @@
       const ball = this.ball;
       const player = this.actor(who);
       const from = { x: ball.x, y: Math.max(ball.y, SHOT.SOLVE_MIN_Y), z: ball.z };
+      const returningServe = this.serveInFlight; // この1打はサーブのレシーブか
       this.serveInFlight = false; // 一度でも打ち返されたら「ノーバウンド禁止」の制約は解除
       this.rallyShots++; // 観客の歓声・実況の盛り上がりに使う（ラリーが長いほど盛り上がる）
 
@@ -2598,9 +2601,21 @@
       // 浅いゆるい球は前へ走って拾うぶん走行距離が伸びるので、打ち消さないと
       // 「ゆるい球ほど弱気な返球になる」逆転が起きていた。
       const attack = who === 'you' ? 0 : this.chanceAttack(player);
+      // サーブのレシーブは、走った距離ではなく「構えていた位置から、打った地点の球まで、
+      // 手の届く範囲を超えてどれだけ離れていたか」で苦しさを測る（ボディなら0）。
+      // 遅いサーブは高く弾んで深くまで伸びるので、レシーバーは弾んだ後の頂点を目指して
+      // 横や後ろへ3〜4m 走り、その途中で手の届いたところを走りながら打っていた。元の
+      // 位置のままでも届いた球なのに、その走った距離で「走らされた」扱いになり、
+      // 「サーブが遅いほどレシーブが弱い」逆転が起きていた（ユーザー報告「ボディに
+      // サーブを打つと、強い CPU でもレシーブが弱すぎる」。実測 Extreme：107km/h の
+      // サーブにレシーブ 75km/h・ロブ21%、204km/h のサーブには 103km/h・ロブ9%）。
+      const chased = who !== 'you' && returningServe
+        ? Math.max(0, Math.hypot(ball.x - player.chaseFromX, ball.z - player.chaseFromZ)
+          - PLAYER.CPU_REACH * player.attr.reach)
+        : player.chaseDist;
       const stretch = who === 'you'
         ? 0
-        : clamp((player.chaseDist - CPU.STRETCH_DIST_MIN)
+        : clamp((chased - CPU.STRETCH_DIST_MIN)
           / (CPU.STRETCH_DIST_MAX - CPU.STRETCH_DIST_MIN), 0, 1) * (1 - attack);
       // スマッシュだけは走行距離では「苦しさ」を測れない。ai.smashApproach() は高く
       // 上がった球に対して落下点へ先回りし、そこで待ってから叩く動きをするので、
@@ -2620,7 +2635,8 @@
       // ダブルスはラリーが長引きやすく、同じロブ選択率・同じ山なり化の度合いでも
       // 1ポイント中の絶対数が増えて目立つため、DOUBLES.LOB_SCALE / ARC_SCALE で
       // 抑える（config.js のコメント参照）。
-      const lobScale = this.doubles ? DOUBLES.LOB_SCALE : 1;
+      // サーブのレシーブはロブに逃げることが少ない（CPU.RETURN_LOB_SCALE）。
+      const lobScale = (this.doubles ? DOUBLES.LOB_SCALE : 1) * (returningServe ? CPU.RETURN_LOB_SCALE : 1);
       const arcScale = this.doubles ? DOUBLES.ARC_SCALE : 1;
       // CPU/AI は打ち方（スマッシュ／ボレー／グラウンドストローク）ごとに狙いを変える。
       // 以前はどの打ち方でも一律 cpuShot()（中速のグラウンドストローク）だったため、
@@ -4339,6 +4355,9 @@
         if (who !== 'you') {
           actor.chaseDist = 0;
           actor.runFwd = 0;
+          // この球を追い始めた位置（サーブのレシーブの苦しさを測るのに使う。hit() の chased）
+          actor.chaseFromX = actor.x;
+          actor.chaseFromZ = actor.z;
         }
       });
     }

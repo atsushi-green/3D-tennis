@@ -5443,6 +5443,66 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   ok(g.cpu.x > 0.01 && !g.cpu.parked, `but a real change of target still gets chased, got x=${g.cpu.x}`);
 }
 
+// --- サーブのレシーブ：構えた位置のまま届く球（ボディ）は、余計に走っても弱くならない ---
+// ユーザー報告「ボディにサーブを打つと、強い CPU でもレシーブが弱すぎる」。遅いサーブは
+// 高く弾んで深く伸びるので、レシーバーは弾んだ後の頂点を目指して3〜4m 走り、その走った
+// 距離で「走らされた」扱いになっていた（107km/h のサーブにレシーブ 74km/h・ロブ24%）。
+{
+  const { CPU, applyCpuLevel } = R.config;
+  applyCpuLevel('extreme');
+  const returnFlight = (serve, chaseDist) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.serveInFlight = serve;
+    g.cpu.x = 0; g.cpu.z = HALF_L - 1;
+    Object.assign(g.cpu, { chaseDist, chaseFromX: 0.3, chaseFromZ: HALF_L, settleT: 0, runFwd: 0 });
+    Object.assign(g.ball, {
+      x: 0.6, y: 1.0, z: HALF_L - 1.6, vx: 0, vy: -0.5, vz: 8, bounces: 1, live: true, last: 'you',
+      spin: 'flat', wind: 0, windZ: 0, curve: 0, shotSpeed: 50,
+    });
+    const saved = { ...CPU };
+    Object.assign(CPU, { LOB_BASE: 0, LOB_VS_STRETCH: 0, OUT_LONG: 0, OUT_WIDE: 0, STRETCH_OUT_LONG: 0, STRETCH_OUT_WIDE: 0 });
+    g.hit('cpu');
+    Object.assign(CPU, saved);
+    return R.physics.predictLanding(g.ball).t;
+  };
+  const calm = returnFlight(true, 0);
+  const ranAround = returnFlight(true, CPU.STRETCH_DIST_MAX);
+  ok(Math.abs(ranAround - calm) < 0.05,
+    `a return of a serve that came to the receiver is not weakened by extra running: ${ranAround.toFixed(2)}s vs ${calm.toFixed(2)}s`);
+  ok(returnFlight(false, CPU.STRETCH_DIST_MAX) > calm + 0.2,
+    'while in a rally the same run still counts as being stretched');
+
+  // 実際のサーブ：溜めずに打った遅いボディサーブにも、しっかり返す（ロブに逃げない）
+  const bodyReturn = () => {
+    const input = { moveX: 0, moveZ: 0, lob: false };
+    const g = new R.Game({ input, hooks: noHooks });
+    g.start(false, 'you');
+    g.wind = 0; g.windZ = 0;
+    let rec = null;
+    const hitAs = g.hit.bind(g);
+    g.hit = (who) => {
+      const r = hitAs(who);
+      if (who === 'cpu' && !rec) rec = { kmh: R.math.mpsToKmh(Math.hypot(g.ball.vx, g.ball.vz)), lob: /ロブ/.test(g.lastShotBy.cpu) };
+      return r;
+    };
+    let served = false;
+    for (let i = 0; i < 60 * 6 && !rec && g.phase !== 'fault' && g.phase !== 'over'; i++) {
+      if (!served && g.phase === 'serve' && !g.tossActive && !g.serveSwing) g.chargeStart('flat');
+      if (!served && g.tossActive && g.you.charging && g.you.chargeTime >= 0.15) { g.chargeRelease(); served = true; }
+      g.update(1 / 60);
+    }
+    return rec;
+  };
+  const rs = Array.from({ length: 40 }, bodyReturn).filter(Boolean);
+  const drives = rs.filter((r) => !r.lob);
+  const kmh = drives.reduce((a, r) => a + r.kmh, 0) / drives.length;
+  ok(rs.length >= 30 && kmh > 90 && drives.length >= rs.length * 0.85,
+    `a slow body serve is returned firmly: ${kmh.toFixed(0)} km/h, ${rs.length - drives.length}/${rs.length} lobs`);
+  applyCpuLevel('normal');
+}
+
 // --- CPU の返球はフレームレートで変わらない（60fps 以外の画面で弱くなっていた） ---
 // 実測（修正前、Extreme・溜めずに打った球）：60fps では待てた時間 1.2秒・返球 152km/h、
 // 144fps では 0.00秒・36km/h でロブ47%（ユーザー報告「ゆるいフラットショットとロブが
