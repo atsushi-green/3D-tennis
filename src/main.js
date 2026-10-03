@@ -357,7 +357,7 @@
       if (pointJustEnded && !game.practice) {
         world.startReplay(game.lineCall && game.lineCall.decisive ? LINE_CALL.REPLAY_DELAY : 0);
       }
-      hud.setReplay(world.isReplaying());
+      hud.setReplay(world.isReplaying(), world.isCheckingMark());
       hud.setShade(game.changeoverShade());
       hud.setPractice(game.practice);
       // いま Space を押していて技が出る状態なら、溜めバーも金色にする（＝離した瞬間に

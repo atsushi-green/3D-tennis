@@ -835,8 +835,13 @@
      * 再生そのものは表示側（scene/world.js）が持っていて、ここはその状態を出すだけ。
      * @param {boolean} on world.isReplaying()
      */
-    setReplay(on) {
+    /**
+     * @param {boolean} on リプレイ中か
+     * @param {boolean} [mark] その最後で、クレーのボールマークを映しているか
+     */
+    setReplay(on, mark = false) {
       this.el.replayTag.classList.toggle('on', on);
+      this.el.replayTag.classList.toggle('mark', on && mark);
     }
 
     /**

@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    CAMERA, FX, PLAYER, SPECIAL, THEME, REPLAY, HALF_L, LINE_CALL,
+    CAMERA, FX, PLAYER, SPECIAL, THEME, REPLAY, HALF_L, LINE_CALL, BALL_MARK, SURFACE,
   } = RallyOne.config;
   const { lerp, clamp } = RallyOne.math;
   const scene3d = RallyOne.scene;
@@ -31,7 +31,9 @@
     // ライン・ネット・スタンドの壁は点対称なので回さなくても見え方は変わらない。
     const venue = new THREE.Group();
     const officials = scene3d.createOfficials();
-    venue.add(officials, scene3d.createCrowd(), stage.sun);
+    // クレーのボールマークも会場の側に置く＝チェンジエンズで会場と一緒に回り、コートに付いたまま
+    const ballMarks = scene3d.createBallMarks();
+    venue.add(officials, ballMarks.group, scene3d.createCrowd(), stage.sun);
     scene.add(court, scene3d.createNet(), venue);
 
     const you = scene3d.createPlayer(THEME.YOU, 'you');
@@ -215,7 +217,46 @@
       if (!state.lineCall || state.lineCall === lastLineCall) return;
       lastLineCall = state.lineCall;
       const picked = pickLineJudge(state.lineCall, state.endsSwapped);
-      judgeCall = picked && { ...picked, kind: state.lineCall.kind, recT: recClock };
+      judgeCall = picked && {
+        ...picked, kind: state.lineCall.kind, call: state.lineCall, recT: recClock,
+      };
+    }
+
+    // --- クレーのボールマーク（game.lastBounce が変わったら跡を1つ足す） ---
+    let lastBounceSeen = null;
+    let lastMark = null;     // 最後に残した跡 { bounce, shape }（リプレイの最後で映すかの判定に使う）
+    let marksGame = null;    // 跡を残している試合（Game を作り直したら消す）
+    let marksGames = 0;      // そのときのゲーム数の合計（減った＝セットが終わってブラシがかかった）
+
+    function watchBallMarks(state) {
+      const games = state.match.games.you + state.match.games.cpu;
+      if (state !== marksGame || games < marksGames) {
+        ballMarks.clear();
+        lastMark = null;
+        marksGame = state;
+      }
+      marksGames = games;
+      const bounce = state.lastBounce;
+      if (!bounce || bounce === lastBounceSeen) return;
+      lastBounceSeen = bounce;
+      if (BALL_MARK.SURFACES.indexOf(SURFACE.NAME) === -1) return;
+      lastMark = { bounce, shape: ballMarks.add(bounce, state.endsSwapped) };
+    }
+
+    /**
+     * 跡を真上近くから映すカメラ（クレーで際どいコールだったときの、主審の確認の代わり）。
+     * 跡からコートの内側へ引いて、線をまたいで跡を見下ろす。
+     * @param {{shape:{x:number, z:number}, n:{x:number, z:number}}} check
+     */
+    function placeMarkCamera(check) {
+      const { shape, n } = check;
+      const side = { x: -n.z, z: n.x }; // 線と平行な向き
+      camera.position.set(
+        shape.x - n.x * BALL_MARK.CHECK_CAM_BACK + side.x * BALL_MARK.CHECK_CAM_SIDE,
+        BALL_MARK.CHECK_CAM_HEIGHT,
+        shape.z - n.z * BALL_MARK.CHECK_CAM_BACK + side.z * BALL_MARK.CHECK_CAM_SIDE,
+      );
+      camera.lookAt(shape.x, 0, shape.z);
     }
 
     /**
@@ -242,6 +283,7 @@
     let replaying = false;
     let replayClock = 0;
     let replayHold = REPLAY.HOLD_SEC; // 最後のコマで静止する長さ（線審のコールで終わる再生だけ長い）
+    let markCheck = null; // リプレイの最後で映すボールマーク（{ shape, n }。映さないなら null）
     // startReplay(wait) で待っている間の予約（{ endT, wait }）。endT＝決着の瞬間の録画時刻
     let pendingReplay = null;
 
@@ -360,12 +402,28 @@
       // 決着の瞬間に線審がコールしていれば、静止している間にその合図を見せる
       const called = judgeCall && judgeCall.recT >= reel[0].t && judgeCall.recT <= reel[reel.length - 1].t;
       replayHold = called ? Math.max(REPLAY.HOLD_SEC, LINE_CALL.REPLAY_HOLD) : REPLAY.HOLD_SEC;
+      // さらにクレーで際どいコールだったなら、合図の後で跡を映す（そのバウンドに跡が残っているときだけ）
+      const call = called && judgeCall.call;
+      markCheck = call && call.decisive && Math.abs(call.inside) <= BALL_MARK.CHECK_MARGIN
+        && lastMark && lastMark.bounce.call === call
+        ? { shape: lastMark.shape, n: call.out } : null;
+      if (markCheck) replayHold = Math.max(replayHold, BALL_MARK.CHECK_AFTER + BALL_MARK.CHECK_HOLD);
     }
 
     /** リプレイ中にキー操作があったら main.js から呼ぶ。即座に通常表示へ戻す（予約も取り消す）。 */
     function skipReplay() {
       replaying = false;
       pendingReplay = null;
+    }
+
+    /** 再生の最後で、ボールマークを映している最中か（HUD の表示に使う）。 */
+    function isCheckingMark() {
+      return replaying && !!markCheck && replayClock > replayEnd() + BALL_MARK.CHECK_AFTER;
+    }
+
+    /** 再生する長さ（録画の秒。最後のコマで静止する時間は含まない）。 */
+    function replayEnd() {
+      return reel[reel.length - 1].t - reel[0].t;
     }
 
     /**
@@ -387,6 +445,7 @@
       // 足りず（history.length<2）、そのポイントのリプレイだけ出せなくなってしまう。
       recordFrame(state, dt);
       watchLineCall(state);
+      watchBallMarks(state);
       if (pendingReplay) {
         pendingReplay.wait -= dt;
         if (pendingReplay.wait <= 0) {
@@ -399,7 +458,7 @@
         replayClock += dt * REPLAY.SPEED;
         // reel は startReplay() の時点で末尾（決着の瞬間）を必ず含む形に切り出し済みなので、
         // ここでは単純にその全長を再生し切ればよい。
-        const playEnd = reel[reel.length - 1].t - reel[0].t;
+        const playEnd = replayEnd();
         // playEnd を過ぎても HOLD_SEC の間は最後のコマを横視点のまま静止させる。
         // これがないと、再生終了と同時に裏で進んでいた本編（次のポイントの支度）が
         // 通常カメラへ lerp で戻る途中に映り込み、「戻りながら次が始まって見える」
@@ -412,7 +471,12 @@
           scene3d.updateTrail(trail, NO_TRAIL); // 再生そのものが「振り返り」なので軌跡は隠す
           scene3d.placeSmashHint(smashHint, null);
           scene3d.placeSwingGuide(swingGuide, null, state.you);
-          placeReplayCamera(frame, dt, state.endsSwapped ? -1 : 1);
+          // 跡を映している間は球と影を消す（最後のコマの球がちょうど跡の上に乗っていて隠すため。
+          // 実際の中継でも、跡のアップは球が去った後の地面を映す）
+          const checking = isCheckingMark();
+          ballMesh.visible = shadows.ball.visible = !checking;
+          if (checking) placeMarkCamera(markCheck);
+          else placeReplayCamera(frame, dt, state.endsSwapped ? -1 : 1);
           return;
         }
         replaying = false; // 再生し終わったら通常表示へ戻る
@@ -424,6 +488,7 @@
       }
 
       applyFrame(state, dt, serveStages(state));
+      ballMesh.visible = shadows.ball.visible = true;
       poseLineJudges(recClock);
       // 軌跡はラリーの決着がついた後（ポイント間の 'serve' 待ち・'over'）だけ見せる。
       // ラリー中に出しっぱなしだと本来の目的（アウトの結果を振り返る）を超えて
@@ -446,6 +511,7 @@
 
     return {
       sync, render: stage.render, scene, camera, setSurface, startReplay, skipReplay, isReplaying,
+      isCheckingMark,
     };
   };
 })(window.RallyOne = window.RallyOne || {});

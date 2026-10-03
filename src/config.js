@@ -2202,6 +2202,35 @@
   };
 
   /**
+   * クレーのボールマーク（scene/marks.js）。クレーでは球が弾んだ跡がコートに残る（ハード・芝は
+   * 残らない）。跡は打球の進む向きに伸びた楕円で、速く入った球ほど長く滑る。セットが終わると
+   * コートにブラシがかかって全部消える。
+   * クレーの試合にはホークアイが無く、際どい判定は主審が跡を見て確かめる。それに当たるものとして、
+   * 線から CHECK_MARGIN 以内のコールで決まったポイントは、リプレイの最後で跡を真上から映す。
+   */
+  const BALL_MARK = {
+    SURFACES: ['clay'],  // 跡が残るサーフェス
+    MAX: 80,             // 残しておく本数（古いものから消す）
+    HALF_WIDTH: 0.06,    // 楕円の半幅(m)。球の見た目の大きさ（PHYSICS.BALL_R）に釣り合う幅
+    SKID_PER_MPS: 0.008, // 着地の瞬間の水平の速さ 1m/s あたり、進む向きへ伸びる長さ(m)
+    SKID_MAX: 0.16,
+    OPACITY: 0.8,
+    // 跡の色（中心→縁）。クレー（SURFACE_COLORS.clay）より暗い押し固められた土の色に、
+    // 縁だけ掻き出された明るい土の色を薄く乗せる。
+    COLOR_CORE: 'rgba(92, 34, 12, 0.85)',
+    COLOR_EDGE: 'rgba(120, 46, 16, 0.65)',
+    COLOR_RIM: 'rgba(214, 128, 78, 0.55)',
+    // 跡を映す（主審の確認の代わり）。秒はすべて録画の秒（実際の長さは REPLAY.SPEED で割った分）
+    CHECK_MARGIN: 0.1,   // 決着のコールの線からの距離(m)がこれ以内なら跡を映す
+    CHECK_AFTER: 0.45,   // リプレイの最後のコマで静止してから跡へ切り替えるまで（線審の合図を先に見せる）
+    CHECK_HOLD: 1.6,     // 跡を映しておく長さ
+    // ほぼ真上から見下ろす（低いと近くに立つ選手の脚が画面に入る）
+    CHECK_CAM_HEIGHT: 1.5,
+    CHECK_CAM_BACK: 0.45, // 跡からコートの内側へ引く距離(m)
+    CHECK_CAM_SIDE: 0.2,  // 線と平行に少しずらす距離(m)（線と跡の重なりを斜めから見せる）
+  };
+
+  /**
    * スタンド代わりの低い壁（court.js#createStands）の形状。壁自体（court.js）と
    * 観客の並び（scene/crowd.js）の両方がここを参照する＝マジックナンバーの二重管理を避ける。
    * axis:'x' は壁がx方向に伸びる（z=fixedに立つ）、'z' はその逆（x=fixedに立つ）。
@@ -3309,7 +3338,9 @@
   /** court.js がテクスチャを焼くときの配色（見た目だけ。物理は上の SURFACE_PRESETS）。 */
   const SURFACE_COLORS = {
     hard: { surface: '#2b6cb0', apron: '#1d7a5f' }, // 現状のTHEME.COURT_SURFACE/COURT_APRONと同じ
-    clay: { surface: '#b5541f', apron: '#1d5f3f' },
+    // クレーは線の外（選手が走る外周）も同じ土なので、外周も少し暗いだけのクレー色にする
+    // （緑だと、線の外に落ちた球のボールマークが芝の上に土の跡として浮いて見える）
+    clay: { surface: '#b5541f', apron: '#a34a1b' },
     grass: { surface: '#3f8f4a', apron: '#1d5f3f' },
   };
 
@@ -3534,7 +3565,7 @@
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, CHANGEOVER, PRACTICE, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT, GUIDE,
-    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, STAMINA, TOSS, OFFICIALS, LINE_CALL,
+    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, STAMINA, TOSS, OFFICIALS, LINE_CALL, BALL_MARK,
     STANDS, SPECTATORS, MOTION,
     SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET,
     SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, ATTR_SPREAD, ATTRS, NEUTRAL_ATTR,

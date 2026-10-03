@@ -208,6 +208,9 @@ canvas{display:block}
 #replayTag .skip{
   font-size:10px;letter-spacing:.1em;text-transform:none;color:var(--dim)
 }
+/* クレーで際どかった跡を映している間だけ出す（world.isCheckingMark()） */
+#replayTag .markTag{display:none;letter-spacing:.1em;color:var(--ball)}
+#replayTag.mark .markTag{display:inline}
 @keyframes replayBlink{50%{opacity:.15}}
 
 #smashTip{

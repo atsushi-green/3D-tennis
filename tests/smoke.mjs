@@ -9110,5 +9110,57 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   }
 }
 
+// --- ボールマーク：バウンドごとに接地点と弾む直前の速度が lastBounce に出て、コールが
+//     あればそれが付く。跡は「線に掛かる ⇔ イン」になるよう置かれる（scene/marks.js） ---
+{
+  vm.runInContext(fs.readFileSync(path.join(SRC, 'scene', 'marks.js'), 'utf8'), sandbox, { filename: 'marks.js' });
+  const markShape = R.scene.ballMarkShape;
+  const { BALL_MARK, PHYSICS: P } = R.config;
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(false, 'you');
+  g.phase = 'rally';
+  g.serveInFlight = false;
+  g.ball.live = true;
+  g.ball.last = 'you';
+  Object.assign(g.ball, { vx: 1.5, vz: 18 });
+  bounceAt(g, 1.0, 5);
+  const b = g.lastBounce;
+  ok(b && b.x === g.ball.x && b.z === g.ball.z && b.vx === 1.5 && b.vz === 18 && b.call === null,
+    `a mid-court bounce records where and how fast it landed, with no call, got ${JSON.stringify(b)}`);
+
+  // 線の際をランダムに：コールの内外と、跡のコート側の端（線の法線方向）を見比べる
+  let checked = 0;
+  for (let i = 0; i < 400; i++) {
+    const h = new R.Game({ input: fakeInput, hooks: noHooks });
+    h.start(false, 'you');
+    h.phase = 'rally';
+    h.serveInFlight = false;
+    h.ball.live = true;
+    h.ball.last = 'you';
+    const nearBase = i % 2 === 0;
+    const x = nearBase ? (Math.random() - 0.5) * 6 : (HALF_W + (Math.random() - 0.5) * 0.4) * (Math.random() < 0.5 ? -1 : 1);
+    const z = nearBase ? HALF_L + (Math.random() - 0.5) * 0.4 : 2 + Math.random() * 8;
+    Object.assign(h.ball, { vx: (Math.random() - 0.5) * 10, vz: 5 + Math.random() * 25 });
+    bounceAt(h, x, z);
+    const call = h.lineCall;
+    const bounce = h.lastBounce;
+    if (!call || call.kind === 'safe' && call.inside > BALL_MARK.HALF_WIDTH * 3) continue;
+    ok(bounce.call === call, 'the call is attached to the bounce it judged');
+    const shape = markShape(bounce);
+    const n = call.out;
+    // 跡（楕円）が法線 n の向きでいちばんコート側に来る点
+    const along = shape.u.x * n.x + shape.u.z * n.z;
+    const across = -shape.u.z * n.x + shape.u.x * n.z;
+    const inner = shape.x * n.x + shape.z * n.z - Math.hypot(shape.a * along, shape.b * across);
+    const contact = bounce.x * n.x + bounce.z * n.z;
+    ok(Math.abs(inner - contact) < 1e-9, `the mark starts exactly at the contact point, got ${inner} vs ${contact}`);
+    const edge = (call.line === 'base' ? HALF_L : HALF_W) + COURT.LINE_SLACK; // 線の外縁（判定の境目）
+    if (call.kind === 'out') ok(inner > edge, `an out mark stays clear of the line, inner=${inner.toFixed(3)} edge=${edge}`);
+    else ok(inner <= edge, `an in mark reaches the line, inner=${inner.toFixed(3)} edge=${edge}`);
+    checked++;
+  }
+  ok(checked > 100, `enough line-side bounces were checked, got ${checked}`);
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);

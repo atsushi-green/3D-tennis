@@ -915,6 +915,12 @@
        */
       this.lineCall = null;
       /**
+       * 直近のバウンド（bounce()）。接地点と、弾む直前の速度。コールが出たバウンドなら call に
+       * その lineCall が入る。バウンドのたびに新しいオブジェクトに替わり、表示側はそれを見て
+       * クレーのボールマークを残す（scene/marks.js）。
+       */
+      this.lastBounce = null;
+      /**
        * この会場に吹いている卓越風（試合を通してほぼ一定の向きと強さ）。angle は +z（人間の
        * チームから相手側）を0とし、+x 側へ回る向き（rad）。ゲームの座標で持つので、チェンジ
        * エンズで選手が入れ替わるたびに π 回す（swapEnds()）。ポイントごとの風は、ここから
@@ -4359,11 +4365,13 @@
       const ball = this.ball;
       // 着地の音量に使う「地面へ突っ込んだ速さ」。reflectBounce() が速度を書き換える前に取る。
       const impactSpeed = Math.hypot(ball.vx, ball.vy, ball.vz);
+      const impactV = { vx: ball.vx, vz: ball.vz };
       // トップスピンは高く弾み、スライスは低く滑る（フラットは倍率1＝従来通り）。反発係数・
       // 摩擦の実装は physics.js の reflectBounce() に一本化してあり（predictBounceApex() も
       // 同じ実装を使う）、ここではその結果の座標を読むだけ。
       reflectBounce(ball);
       ball.sinceBounce = 0;
+      this.lastBounce = { x: ball.x, z: ball.z, ...impactV, call: null };
       // 軌跡は通常 update() が1フレームに1点ずつ記録するだけなので、速い球ほど着地の瞬間を
       // 挟む2点の間隔が開き、IN/OUT判定に実際に使うこの着地座標（x,z）と、直線で結んだ軌跡が
       // 見せる「着地したように見える位置」がずれることがあった（＝軌跡ではINに見えるのに
@@ -4455,12 +4463,15 @@
         kind,
         line: at.line,
         out: at.out,
+        inside: at.inside, // 線までの内側への距離(m、負なら外)。際どさ（ボールマークを映すか）に使う
         x: this.ball.x,
         z: this.ball.z,
         // このコールでポイントが決まったか（アウト、またはセカンドサーブのフォールト）。
         // 練習はリプレイを流さないので立てない。
         decisive: !this.practice && (kind === 'out' || (kind === 'fault' && this.serveNumber !== 1)),
       };
+      // このバウンドの跡（ボールマーク）を、判定どおりに線へ掛かる／掛からない位置に置くのに使う
+      if (this.lastBounce) this.lastBounce.call = this.lineCall;
       if (kind !== 'safe') this.hooks.sound('lineCall', kind);
     }
 
