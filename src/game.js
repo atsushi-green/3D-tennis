@@ -660,6 +660,9 @@
         // 最後にバウンドしてからの経過時間(秒)。bounces>0 のときだけ意味を持つ。必殺技ライジング
         // の「弾んだ直後の上がりばなか」の判定に使う（physics.predictWindow も同じ数え方をする）。
         sinceBounce: 0,
+        // 打たれた瞬間の水平の速さ(m/s)。CPU/AI が「ゆるい球が来た」と見て叩きにいくのに使う
+        // （chanceAttack）。まだ誰も打っていなければ「速い」扱い（叩きにいかない）。
+        shotSpeed: Infinity,
         wind: 0,        // 横風（m/s²、vxに継続的に加算）。サーブの飛翔中は常に0、返球後だけ this.wind になる
         windZ: 0,       // 前後の風（m/s²、vzに継続的に加算）。wind と同じく返球後だけ this.windZ になる
       };
@@ -2398,6 +2401,7 @@
       ball.curve = 0;   // サーブは曲がらない（バギーホイップ専用の効果）
       ball.reactBonus = 0; // 前のツイーナーの「読みにくさ」も持ち越さない
       ball.kick = kick; // 1バウンド目だけ大きく跳ね上げる目印（bounce() が読んで消す）
+      ball.shotSpeed = Math.hypot(ball.vx, ball.vz); // ゆるいセカンドサーブも叩きにいける
       if (kick) this.spendSpecial('kickServe', undefined, who); // サーブは必ず「起きる」ので打った時点で消費
       // 打った瞬間の初速をそのままスコアボード脇に出す（次のポイントが始まるまで残す）
       const serveKmh = mpsToKmh(Math.hypot(ball.vx, ball.vy, ball.vz));
@@ -2580,10 +2584,15 @@
       // 1歩詰めただけの球まで最弱の返球になっていた（実測：サーブリターンの stretch は
       // ほぼ全て 1.00＝ユーザー報告「返球が全体的に弱い」の主因）。走った距離なら
       // 「どれだけ苦しかったか」が連続量として出る。
+      // チャンスボール（相手の球がゆるく、自分は打点で待てていた）なら、その度合いだけ
+      // 走った距離の苦しさを打ち消し、強打する（chanceAttack()。CPU.CHANCE_* 参照）。
+      // 浅いゆるい球は前へ走って拾うぶん走行距離が伸びるので、打ち消さないと
+      // 「ゆるい球ほど弱気な返球になる」逆転が起きていた。
+      const attack = who === 'you' ? 0 : this.chanceAttack(player);
       const stretch = who === 'you'
         ? 0
         : clamp((player.chaseDist - CPU.STRETCH_DIST_MIN)
-          / (CPU.STRETCH_DIST_MAX - CPU.STRETCH_DIST_MIN), 0, 1);
+          / (CPU.STRETCH_DIST_MAX - CPU.STRETCH_DIST_MIN), 0, 1) * (1 - attack);
       // スマッシュだけは走行距離では「苦しさ」を測れない。ai.smashApproach() は高く
       // 上がった球に対して落下点へ先回りし、そこで待ってから叩く動きをするので、
       // 走った距離は長い（＝stretch は最大）のに打つ瞬間は棒立ちで余裕たっぷり、という
@@ -2639,8 +2648,8 @@
               // 「前衛を避けてクロス、隙があればストレートをパッシング」に切り替える。
               : foes && foes.front
                 ? doublesRallyShot(foes.front, foes.back, aimDir, stretch, lobScale, arcScale,
-                  shotSkill(player.attr, baseStroke))
-                : cpuShot(aimAt, aimDir, stretch, lobScale, arcScale, shotSkill(player.attr, baseStroke));
+                  shotSkill(player.attr, baseStroke), attack)
+                : cpuShot(aimAt, aimDir, stretch, lobScale, arcScale, shotSkill(player.attr, baseStroke), attack);
 
       // 必殺技はここで初めて回数を使う（空振りしただけでは減らない）。縮地はこの1打では
       // なく「跳んだ瞬間」に済ませてあるので、ここでは数えない。呼び名は技が決めた
@@ -2684,6 +2693,7 @@
       Object.assign(ball, solveShot(from, shot.target, shot.flight, shot.clearance, spin, curve));
       ball.spin = spin;
       ball.curve = curve;
+      ball.shotSpeed = Math.hypot(ball.vx, ball.vz); // 相手が「ゆるい球か」を見るのに使う
       // 背を向けたまま打つツイーナー、空中で曲がるバギーホイップ、相手が読み負けたドロップ
       // だけ、相手の反応がこの秒数ぶん余計に遅れる（updateReactTimers）。他の1打では 0 に
       // 戻す＝前の1打を持ち越さない。
@@ -4299,6 +4309,23 @@
         actor.runX = 0;
         if (who !== 'you') actor.chaseDist = 0;
       });
+    }
+
+    /**
+     * CPU/AI がいま打つ球を「チャンスボール」として叩きにいく度合い(0〜1)。
+     * 相手の球がゆるい（打たれた瞬間の水平の速さ ball.shotSpeed が CPU.CHANCE_SPEED_SLOW
+     * 以下で最大、CHANCE_SPEED_FAST 以上で0）ほど、そして自分が打点で待てていた
+     * （settleT が CHANCE_SETTLE_T 以上で最大）ほど大きく、上限は難易度ごとの
+     * CPU.CHANCE_ATTACK（easy は0＝叩きにこない）。
+     * 走った距離（chaseDist）だけでは「浅いゆるい球へ前に走った」のも「走らされた」と
+     * 数えてしまうので、待てていた時間で余裕を測る。
+     * @param {object} player 打つ AI（cpu/cpuMate/youMate）
+     */
+    chanceAttack(player) {
+      const slow = clamp((CPU.CHANCE_SPEED_FAST - this.ball.shotSpeed)
+        / (CPU.CHANCE_SPEED_FAST - CPU.CHANCE_SPEED_SLOW), 0, 1);
+      const ready = clamp(player.settleT / CPU.CHANCE_SETTLE_T, 0, 1);
+      return slow * ready * CPU.CHANCE_ATTACK;
     }
 
     /**

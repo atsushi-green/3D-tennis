@@ -1231,6 +1231,23 @@
     STRETCH_AIM_Z_MAX: 5.6,
     STRETCH_OUT_LONG: 0.135,  // ぎりぎりの返球はミスもしやすい
     STRETCH_OUT_WIDE: 0.098,
+    // 「チャンスボール」を叩く（game.js#chanceAttack）。相手の球がゆるく、自分は打点で
+    // 待てていたほど、その1本を強打する。ユーザー報告「こちらがあまり溜めていない
+    // ゆるい球を打っているのに、相手もゆるい球を返す（特に難易度が高いとき）」への対応。
+    // 実測（Hard、相手の溜め量ごとに300本）：溜めなし（約45km/h）の球には、1秒近く
+    // 待ててから打っているのに返球 64km/h・ロブ 23% と、フル溜め（118km/h）への返球
+    // 88km/h・ロブ 18% より弱かった。浅い球へ前に走った距離を「走らされた苦しさ」
+    // （stretch）として数え、山なりで浅い弱気な返球になっていたため。
+    // 度合い＝(球のゆるさ)×(待てた時間)×CHANCE_ATTACK で、その分だけ：
+    //  - 走った距離による苦しさを打ち消す（stretch に (1−度合い) を掛ける）
+    //  - 飛翔時間を CHANCE_T へ寄せる＝速い球にする
+    //  - ロブに逃げない（ロブを選ぶ確率に (1−度合い) を掛ける）
+    // 球のゆるさは「相手が打った瞬間の水平の速さ」で測る（ball.shotSpeed）。
+    CHANCE_SPEED_SLOW: 14,  // m/s（≒50km/h）以下で「ゆるい」が最大。溜めなしの球は約45km/h
+    CHANCE_SPEED_FAST: 22,  // m/s（≒80km/h）以上は叩きにいかない。半分溜めた球が約84km/h
+    CHANCE_SETTLE_T: 0.4,   // 打点でこの秒数以上待てていれば「余裕がある」が最大
+    CHANCE_T: 0.5,          // 叩きにいくときの飛翔時間（SHOT_T より短い＝速い）
+    CHANCE_ATTACK: 0.6,     // 叩きにいく度合いの上限（難易度ごとに上書き。easy は 0）
     // ロブ（山なりの返球）。人間が Shift で打つロブ（SHOT.LOB_*）の CPU/AI 版。
     // これが無いと PLAYER.SMASH_MIN_Y(1.8m) を満たす高い球が実戦でほぼ来ず、
     // スマッシュの条件（高さ＋溜め量）を満たす機会がシングルスでほとんど発生しなかった。
@@ -3238,6 +3255,7 @@
         // 決め球（ボレー・スマッシュ）も弱い：角度が甘く、速度も出ない
         VOLLEY_ANGLE_T: 0.46, VOLLEY_ANGLE_X: 2.6, SMASH_T: 0.46,
         APPROACH_CHANCE: 0.15, // ネットへもあまり出てこない
+        CHANCE_ATTACK: 0,      // ゆるい球が来ても叩きにこない（つなぐだけ）
       },
       player: {
         CPU_CHASE: 4.8, CPU_RECOVER: 2.3, CPU_REACT: 0.38, CPU_RECOVER_DELAY: 0.70,
@@ -3255,6 +3273,7 @@
         // 決め球（ボレー・スマッシュ）は容赦がない：深く鋭く、速い
         VOLLEY_ANGLE_T: 0.30, VOLLEY_ANGLE_X: 3.7, SMASH_T: 0.29,
         APPROACH_CHANCE: 0.50, // 隙あらばネットへ詰めてくる
+        CHANCE_ATTACK: 0.9,    // ゆるい球はほぼ確実に叩いてくる
         SPECIALS: true,        // Hard だけ必殺技も使ってくる（SPECIAL.AI 参照）
       },
       player: {
@@ -3304,6 +3323,7 @@
         // 決め球はさらに鋭く・速く（hard は 0.30 / 3.7 / 0.29）
         VOLLEY_ANGLE_T: 0.27, VOLLEY_ANGLE_X: 3.85, SMASH_T: 0.26,
         APPROACH_CHANCE: 0.62, // hard(0.50)より積極的にネットへ出てくる
+        CHANCE_ATTACK: 1,      // ゆるい球は見逃さず叩く
         SPECIALS: true,
         SPECIAL_ALL_MOVES: true, // 飛びつきボレー・縮地も含む全10種
         SPECIAL_USES: 3,         // **技ごとに**1ゲーム3回（hard は1回）

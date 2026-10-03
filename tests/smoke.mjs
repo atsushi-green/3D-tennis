@@ -5470,6 +5470,95 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   ok(g.cpu.chaseDist === 0, 'resetChase() clears the accumulated chase distance');
 }
 
+// --- チャンスボール：ゆるい球が来て、打点で待てていたら強打する（難易度が高いほど） ---
+// ユーザー報告「こちらがあまり溜めていないゆるい球を打っているのに、相手もゆるい球を
+// 返す（特に難易度が高いとき）」。浅いゆるい球へ前に走った距離を「走らされた苦しさ」と
+// 数えて、山なりの弱い返球・ロブになっていた。
+{
+  const { CPU, applyCpuLevel } = R.config;
+  applyCpuLevel('hard');
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    ok(g.ball.shotSpeed === Infinity && g.chanceAttack(g.cpu) === 0,
+      'before anyone has hit, nothing counts as a slow ball');
+    g.cpu.settleT = CPU.CHANCE_SETTLE_T;
+    g.ball.shotSpeed = CPU.CHANCE_SPEED_SLOW;
+    ok(g.chanceAttack(g.cpu) === CPU.CHANCE_ATTACK, `a slow ball the CPU waited for is a full chance, got ${g.chanceAttack(g.cpu)}`);
+    g.ball.shotSpeed = CPU.CHANCE_SPEED_FAST;
+    ok(g.chanceAttack(g.cpu) === 0, 'a fast ball is not a chance');
+    g.ball.shotSpeed = CPU.CHANCE_SPEED_SLOW;
+    g.cpu.settleT = 0;
+    ok(g.chanceAttack(g.cpu) === 0, 'nor is a slow ball the CPU only just reached');
+    applyCpuLevel('easy');
+    g.cpu.settleT = CPU.CHANCE_SETTLE_T;
+    ok(g.chanceAttack(g.cpu) === 0, 'easy never goes for it');
+    applyCpuLevel('extreme');
+    const extreme = CPU.CHANCE_ATTACK;
+    applyCpuLevel('hard');
+    const hard = CPU.CHANCE_ATTACK;
+    applyCpuLevel('normal');
+    ok(extreme >= hard && hard > CPU.CHANCE_ATTACK && CPU.CHANCE_ATTACK > 0,
+      `the higher the level, the harder it punishes: normal ${CPU.CHANCE_ATTACK} / hard ${hard} / extreme ${extreme}`);
+  }
+
+  // 叩きにいく1本はロブに逃げず、走らされていても速い球になる
+  {
+    applyCpuLevel('hard');
+    let lobs = 0;
+    let slowest = 0;
+    for (let i = 0; i < 300; i++) {
+      const s = R.ai.cpuShot({ x: 0, z: -HALF_L }, -1, 1, 1, 1, undefined, 1);
+      if (s.lob) lobs++;
+      else slowest = Math.max(slowest, s.flight);
+    }
+    ok(lobs === 0, `a full chance never lobs, got ${lobs}/300`);
+    ok(Math.abs(slowest - CPU.CHANCE_T) < 1e-9 && CPU.CHANCE_T < CPU.SHOT_T,
+      `and flies in CHANCE_T (faster than a normal rally ball), got ${slowest}`);
+  }
+
+  // 実際のラリー：人間が溜めずに打ったゆるい球への返球は、フル溜めへの返球より速い
+  {
+    applyCpuLevel('hard');
+    const returnTo = (charge) => {
+      const input = { moveX: Math.random() * 2 - 1, moveZ: 0, lob: false };
+      const g = new R.Game({ input, hooks: noHooks });
+      g.start();
+      g.phase = 'rally';
+      g.serveInFlight = false;
+      g.wind = 0; g.windZ = 0;
+      g.you.x = (Math.random() * 2 - 1) * 2; g.you.z = -HALF_L + 0.5;
+      g.cpu.x = (Math.random() * 2 - 1) * 1.5; g.cpu.z = HALF_L + 0.5;
+      Object.assign(g.ball, {
+        x: g.you.x + 0.6, y: 0.9, z: g.you.z + 0.3, vx: 0, vy: 1, vz: -5,
+        bounces: 1, live: true, last: 'cpu', spin: 'flat', wind: 0, windZ: 0, curve: 0,
+      });
+      g.you.swingCharge = charge; g.you.chargeSpin = 'flat'; g.you.chargeStroke = null;
+      g.hit('you');
+      for (let i = 0; i < 60 * 5 && g.ball.last === 'you' && g.phase === 'rally'; i++) g.update(1 / 60);
+      if (g.ball.last !== 'cpu') return null;
+      return { kmh: R.math.mpsToKmh(Math.hypot(g.ball.vx, g.ball.vz)), lob: /ロブ/.test(g.lastShotBy.cpu) };
+    };
+    const sample = (charge) => {
+      const rs = [];
+      for (let i = 0; i < 80; i++) { const r = returnTo(charge); if (r) rs.push(r); }
+      const drives = rs.filter((r) => !r.lob);
+      return {
+        kmh: drives.reduce((s, r) => s + r.kmh, 0) / drives.length,
+        lobRate: (rs.length - drives.length) / rs.length,
+        n: rs.length,
+      };
+    };
+    const soft = sample(0);
+    const hardHit = sample(1);
+    ok(soft.n > 60 && hardHit.n > 60, `precondition: the CPU returns most balls, got ${soft.n}/${hardHit.n}`);
+    ok(soft.kmh > hardHit.kmh + 5,
+      `a soft ball gets hit harder than a full-power one: ${soft.kmh.toFixed(0)} vs ${hardHit.kmh.toFixed(0)} km/h`);
+    ok(soft.lobRate < 0.1, `and the CPU does not lob it back, got ${(soft.lobRate * 100).toFixed(0)}%`);
+  }
+  applyCpuLevel('normal');
+}
+
 // --- CPU/AI の追跡目標は必ずボールの弾道の上に乗る（深さを手前に寄せたら横位置も取り直す） ---
 {
   const CPU = R.config.CPU;

@@ -442,21 +442,32 @@
    *   掛ける倍率。既定1。lob=false でも stretch が高いと弾道自体は山なりに近づく
    *   （「ロブではないのに山なりで打ち損なって見える」の原因）ので、lobScale とは別に
    *   game.js が DOUBLES.ARC_SCALE を渡して抑える。
+   * @param {number} [attack] チャンスボールを叩きにいく度合い(0〜1。game.js#chanceAttack)。
+   *   その分だけ飛翔時間を CPU.CHANCE_T（速い球）へ寄せ、ロブに逃げなくなる。既定0。
    * @returns {{target:{x:number,y:number,z:number}, flight:number, lob:boolean}}
    */
-  function cpuShot(opponent, dir, stretch, lobScale = 1, arcScale = 1, skill = NEUTRAL_SKILL) {
+  function cpuShot(opponent, dir, stretch, lobScale = 1, arcScale = 1, skill = NEUTRAL_SKILL, attack = 0) {
     // 相手が自陣のどのあたりにいるかはネットからの距離で見る（dir の符号に依存させない）
     if (Math.abs(opponent.z) <= CPU.NET_Z) return netPlayShot(opponent, dir, lobScale, skill);
     // ロブは威力ではなくタッチの球なので、能力値による速さの倍率は掛けない（掛けると
     // 「上手い人のロブほど山なりでなくなる」というおかしな効き方になる）。
-    if (Math.random() < (CPU.LOB_BASE + CPU.LOB_VS_STRETCH * stretch) * lobScale) {
+    if (Math.random() < (CPU.LOB_BASE + CPU.LOB_VS_STRETCH * stretch) * lobScale * (1 - attack)) {
       return lobShot(opponent, dir);
     }
     return {
       target: shotTarget(opponent.x, dir, stretch, skill.out),
-      flight: lerp(CPU.SHOT_T, CPU.STRETCH_T, stretch * arcScale) * skill.power,
+      flight: rallyFlight(stretch * arcScale, attack) * skill.power,
       lob: false,
     };
+  }
+
+  /**
+   * つなぎのグラウンドストロークの飛翔時間（能力の倍率を掛ける前）。走らされた度合い
+   * （tight）で山なり（STRETCH_T）へ、チャンスボールを叩く度合い（attack）で速い球
+   * （CHANCE_T）へ寄せる。
+   */
+  function rallyFlight(tight, attack) {
+    return lerp(lerp(CPU.SHOT_T, CPU.STRETCH_T, tight), CPU.CHANCE_T, attack);
   }
 
   /* ---------------------------------------------- ダブルス（雁行陣） */
@@ -703,8 +714,9 @@
    * @param {{x:number, z:number}} back 相手の後衛
    * @param {1|-1} dir 打ち込む方向
    * @param {number} stretch 0〜1。ぎりぎり追いついて打った度合い
+   * @param {number} [attack] チャンスボールを叩きにいく度合い(0〜1)。cpuShot() と同じ
    */
-  function doublesRallyShot(front, back, dir, stretch, lobScale = 1, arcScale = 1, skill = NEUTRAL_SKILL) {
+  function doublesRallyShot(front, back, dir, stretch, lobScale = 1, arcScale = 1, skill = NEUTRAL_SKILL, attack = 0) {
     const tight = clamp(stretch, 0, 1);
     // 前衛がストレートの線からどれだけ離れたか（0＝サイドを締めている／1＝中央まで寄った）。
     const gap = clamp(1 - Math.abs(front.x) / DOUBLES.PASS_GAP_X, 0, 1);
@@ -727,13 +739,14 @@
     }
     // 前衛の頭を越すロブ／苦しいときの逃げのロブ。シングルスと同じ枠のまま
     // （ダブルスで多すぎないよう game.js が lobScale を渡して抑える）。
-    if (Math.random() < (CPU.LOB_BASE + CPU.LOB_VS_STRETCH * tight) * lobScale) {
+    // チャンスボール（attack）はロブに逃げずに叩く（cpuShot() と同じ）。
+    if (Math.random() < (CPU.LOB_BASE + CPU.LOB_VS_STRETCH * tight) * lobScale * (1 - attack)) {
       return lobShot(back, dir);
     }
     // 基本形：前衛を避けてクロスへ深く。
     return {
       target: shotTarget(front.x, dir, tight, skill.out),
-      flight: lerp(CPU.SHOT_T, CPU.STRETCH_T, tight * arcScale) * skill.power,
+      flight: rallyFlight(tight * arcScale, attack) * skill.power,
       lob: false,
     };
   }
