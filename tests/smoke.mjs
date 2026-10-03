@@ -5764,6 +5764,32 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   applyCpuLevel('normal');
 }
 
+// --- 強打のコース：相手のいる位置から離れたところへ（真ん中に戻った相手の正面に来ない） ---
+// ユーザー報告「強打してくるが、ほとんどプレイヤー正面の真ん中に打ってくるので返すのに
+// 苦労しない」。狙いを真ん中寄りの決まった位置にしていたため、打った後に真ん中へ戻る
+// 相手には、ほぼ正面（平均 1.3m）に来ていた。
+{
+  const { CPU, applyCpuLevel } = R.config;
+  applyCpuLevel('extreme');
+  // 狙いそのものを見たいので、わざと外す1本（scatterOut）は止める
+  Object.assign(CPU, { OUT_LONG: 0, OUT_WIDE: 0, STRETCH_OUT_LONG: 0, STRETCH_OUT_WIDE: 0 });
+  const xs = (opponent, n = 300) => Array.from({ length: n },
+    () => R.ai.cpuShot(opponent, -1, 0, 0, 1, undefined, 1).target.x);
+  const centre = xs({ x: 0, z: -HALF_L, runX: 0 });
+  ok(centre.every((x) => Math.abs(x) >= CPU.CHANCE_MOVE_MIN - 1e-9 && Math.abs(x) <= CPU.CHANCE_AIM_X_LIMIT + 1e-9),
+    `a centred opponent never gets the attack at their body: |x| ${Math.min(...centre.map(Math.abs)).toFixed(2)}〜${Math.max(...centre.map(Math.abs)).toFixed(2)}`);
+  ok(centre.some((x) => x > 0) && centre.some((x) => x < 0), 'and it goes to either side');
+  const wide = xs({ x: 2.5, z: -HALF_L, runX: 0 });
+  ok(wide.every((x) => x <= 2.5 - CPU.CHANCE_MOVE_MIN + 1e-9),
+    `an opponent pulled wide gets it into the open court, max x=${Math.max(...wide).toFixed(2)}`);
+  // 打った後に真ん中へ戻っている相手には、ときどき背中側（戻ってきた側）へ打つ
+  const recovering = xs({ x: -0.6, z: -HALF_L, runX: 2 }, 600);
+  const behind = recovering.filter((x) => x < -0.6).length / recovering.length;
+  ok(behind > CPU.CHANCE_WRONG_FOOT * 0.6 && behind < CPU.CHANCE_WRONG_FOOT * 1.4,
+    `a recovering opponent is sometimes wrong-footed: ${(behind * 100).toFixed(0)}% behind them`);
+  applyCpuLevel('normal');
+}
+
 // --- 強打の演出：AI がチャンスボールを叩いた1本は、人間のフル溜めと同じく閃光・打球音・
 // 振り抜きが大きい（AI には溜めが無く、以前は常に0＝速くなっても見た目も音もつなぎの球だった） ---
 {

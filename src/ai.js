@@ -276,20 +276,49 @@
    * @param {number} [outMult] 能力値「安定感」によるミス率の倍率（既定1＝中立）。
    * @returns {{x:number, y:number, z:number}} ワールド座標の目標地点
    */
-  function shotTarget(opponentX, dir = -1, stretch = 0, outMult = 1, attack = 0) {
-    // チャンスボールを叩く1本（attack）は、ベースライン際・サイド寄りの深いコースへ
-    // （CPU.CHANCE_AIM_*）。深く狙うほどネットの近くを低く通せる＝速い球にできる。
-    const aimXMin = lerp(lerp(CPU.AIM_X_MIN, CPU.STRETCH_AIM_X_MIN, stretch), CPU.CHANCE_AIM_X_MIN, attack);
-    const aimXMax = lerp(lerp(CPU.AIM_X_MAX, CPU.STRETCH_AIM_X_MAX, stretch), CPU.CHANCE_AIM_X_MAX, attack);
+  function shotTarget(opponentX, dir = -1, stretch = 0, outMult = 1, attack = 0, opponentRunX = 0) {
+    const aimXMin = lerp(CPU.AIM_X_MIN, CPU.STRETCH_AIM_X_MIN, stretch);
+    const aimXMax = lerp(CPU.AIM_X_MAX, CPU.STRETCH_AIM_X_MAX, stretch);
+    // チャンスボールを叩く1本（attack）は、ベースライン寄りの深いコースへ（CPU.CHANCE_AIM_Z_*）。
+    // 深く狙うほどネットの近くを低く通せる＝速い球にできる。
     const aimZMin = lerp(lerp(CPU.AIM_Z_MIN, CPU.STRETCH_AIM_Z_MIN, stretch), CPU.CHANCE_AIM_Z_MIN, attack);
     const aimZMax = lerp(lerp(CPU.AIM_Z_MAX, CPU.STRETCH_AIM_Z_MAX, stretch), CPU.CHANCE_AIM_Z_MAX, attack);
     const outLong = lerp(CPU.OUT_LONG, CPU.STRETCH_OUT_LONG, stretch) * outMult;
     const outWide = lerp(CPU.OUT_WIDE, CPU.STRETCH_OUT_WIDE, stretch) * outMult;
 
-    const x = -signOr(opponentX, Math.random() - 0.5) * rand(aimXMin, aimXMax);
+    // 叩きにいく度合い（attack）は「強打のコースを選ぶ確率」として使う。2つのコースの
+    // 位置を混ぜると、反対側どうしなら真ん中＝相手の正面に寄ってしまうため。
+    const x = Math.random() < attack
+      ? chanceAimX(opponentX, opponentRunX)
+      : -signOr(opponentX, Math.random() - 0.5) * rand(aimXMin, aimXMax);
     const z = dir * rand(aimZMin, aimZMax);
 
     return scatterOut({ x, y: PHYSICS.BALL_R, z }, dir, outLong, outWide);
+  }
+
+  /**
+   * チャンスボールを叩く1本の横の狙い：**相手のいる位置から** CPU.CHANCE_MOVE_MIN〜MAX
+   * 離れた、空いている側（相手が片側に寄っていれば反対側、ほぼ真ん中なら左右どちらか）。
+   * コートの中の決まった位置ではなく相手の位置から測るので、どこに立っていても
+   * 「その距離を走らされる」強打になる。以前は真ん中寄り（中央から 0.3〜1.8m）に
+   * 固定していたため、相手が真ん中にいるとほぼ正面に来て、強打でも返しやすかった
+   * （ユーザー報告「ほとんどプレイヤー正面の真ん中に打ってくるので返すのに苦労しない」）。
+   * 相手が打った後に横へ戻っている最中なら、ときどき（CPU.CHANCE_WRONG_FOOT）戻ってきた
+   * 側＝背中へ打って逆をつく。サイドラインの内側に収めたせいで離れ方が CHANCE_MOVE_MIN に
+   * 届かないときは、反対側へ打つ。
+   * @param {number} opponentX 相手（逆をつく選手）の x
+   * @param {number} [opponentRunX] 相手が自分の1打を打ってから横に動いた量（runX）
+   */
+  function chanceAimX(opponentX, opponentRunX = 0) {
+    const wrongFoot = Math.abs(opponentRunX) >= CPU.CHANCE_WRONG_FOOT_RUN
+      && Math.random() < CPU.CHANCE_WRONG_FOOT;
+    let side = wrongFoot ? -Math.sign(opponentRunX)
+      : Math.abs(opponentX) < CPU.CHANCE_CENTER_X ? (Math.random() < 0.5 ? 1 : -1)
+        : -Math.sign(opponentX);
+    const away = rand(CPU.CHANCE_MOVE_MIN, CPU.CHANCE_MOVE_MAX);
+    const limit = CPU.CHANCE_AIM_X_LIMIT;
+    if (Math.abs(clamp(opponentX + side * away, -limit, limit) - opponentX) < CPU.CHANCE_MOVE_MIN) side = -side;
+    return clamp(opponentX + side * away, -limit, limit);
   }
 
   /**
@@ -480,7 +509,7 @@
       return lobShot(opponent, dir);
     }
     return {
-      target: shotTarget(opponent.x, dir, stretch, skill.out, attack),
+      target: shotTarget(opponent.x, dir, stretch, skill.out, attack, opponent.runX),
       flight: rallyFlight(stretch * arcScale, attack) * skill.power,
       clearance: rallyClearance(attack),
       lob: false,
@@ -780,7 +809,7 @@
     }
     // 基本形：前衛を避けてクロスへ深く。
     return {
-      target: shotTarget(front.x, dir, tight, skill.out, attack),
+      target: shotTarget(front.x, dir, tight, skill.out, attack, front.runX),
       flight: rallyFlight(tight * arcScale, attack) * skill.power,
       clearance: rallyClearance(attack),
       lob: false,
