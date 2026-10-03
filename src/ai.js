@@ -276,11 +276,13 @@
    * @param {number} [outMult] 能力値「安定感」によるミス率の倍率（既定1＝中立）。
    * @returns {{x:number, y:number, z:number}} ワールド座標の目標地点
    */
-  function shotTarget(opponentX, dir = -1, stretch = 0, outMult = 1) {
-    const aimXMin = lerp(CPU.AIM_X_MIN, CPU.STRETCH_AIM_X_MIN, stretch);
-    const aimXMax = lerp(CPU.AIM_X_MAX, CPU.STRETCH_AIM_X_MAX, stretch);
-    const aimZMin = lerp(CPU.AIM_Z_MIN, CPU.STRETCH_AIM_Z_MIN, stretch);
-    const aimZMax = lerp(CPU.AIM_Z_MAX, CPU.STRETCH_AIM_Z_MAX, stretch);
+  function shotTarget(opponentX, dir = -1, stretch = 0, outMult = 1, attack = 0) {
+    // チャンスボールを叩く1本（attack）は、ベースライン際・サイド寄りの深いコースへ
+    // （CPU.CHANCE_AIM_*）。深く狙うほどネットの近くを低く通せる＝速い球にできる。
+    const aimXMin = lerp(lerp(CPU.AIM_X_MIN, CPU.STRETCH_AIM_X_MIN, stretch), CPU.CHANCE_AIM_X_MIN, attack);
+    const aimXMax = lerp(lerp(CPU.AIM_X_MAX, CPU.STRETCH_AIM_X_MAX, stretch), CPU.CHANCE_AIM_X_MAX, attack);
+    const aimZMin = lerp(lerp(CPU.AIM_Z_MIN, CPU.STRETCH_AIM_Z_MIN, stretch), CPU.CHANCE_AIM_Z_MIN, attack);
+    const aimZMax = lerp(lerp(CPU.AIM_Z_MAX, CPU.STRETCH_AIM_Z_MAX, stretch), CPU.CHANCE_AIM_Z_MAX, attack);
     const outLong = lerp(CPU.OUT_LONG, CPU.STRETCH_OUT_LONG, stretch) * outMult;
     const outWide = lerp(CPU.OUT_WIDE, CPU.STRETCH_OUT_WIDE, stretch) * outMult;
 
@@ -478,7 +480,7 @@
       return lobShot(opponent, dir);
     }
     return {
-      target: shotTarget(opponent.x, dir, stretch, skill.out),
+      target: shotTarget(opponent.x, dir, stretch, skill.out, attack),
       flight: rallyFlight(stretch * arcScale, attack) * skill.power,
       clearance: rallyClearance(attack),
       lob: false,
@@ -778,7 +780,7 @@
     }
     // 基本形：前衛を避けてクロスへ深く。
     return {
-      target: shotTarget(front.x, dir, tight, skill.out),
+      target: shotTarget(front.x, dir, tight, skill.out, attack),
       flight: rallyFlight(tight * arcScale, attack) * skill.power,
       clearance: rallyClearance(attack),
       lob: false,

@@ -728,6 +728,9 @@
       const aiActor = (x, z, who) => ({
         x, z, anim: 0, speed: 0, chaseDist: 0, settleT: 0, stroke: 'forehand', prep: null, spin: 'flat', stamina: 1,
         runX: 0, fwd: 0, special: null, specialLabel: null, specialUses: {}, leap: null,
+        // runFwd＝相手が打ってからネット方向へ進んだ量(m。下がったら負)。前へ走り込んで
+        // 叩くスマッシュを「追い込まれた」と数えないのに使う（hit() の smashStretch）。
+        runFwd: 0,
         // dash＝縮地で跳ぶ前の位置（表示専用の残像。人間の you.dash と同じもの）、
         // diveVolley＝この1打は飛びつきボレーだ、という旗（swingAiAt が立て hit が下ろす）、
         // dive＝その打つ前の飛び込み（人間の you.dive と同じもの）。
@@ -2603,7 +2606,13 @@
       // 組み合わせが普通に起きる。これが「ダブルスの味方が、十分間に合っているのに
       // 弱いスマッシュしか打てない」の正体だったので、落下点で待てていた時間
       // （settleT）のぶんだけ苦しさを打ち消す（SMASH_SETTLE_T 秒待てていれば余裕＝0）。
-      const smashStretch = stretch
+      // さらに、**前へ走り込んで**叩くスマッシュも追い込まれていない。苦しいのは頭上を
+      // 越されて下がりながら打つときだけで、落ちてくる球へ前に出て叩くのは決めどころ。
+      // 以前は山なりのゆるい球へ7m近く前に走り込み、着いたその場で叩く（待つ間が無い）
+      // スマッシュが「走らされた」扱いになり、決め球のはずが 55〜65km/h の当てるだけの
+      // 球になっていた（ユーザー報告「溜めずに打つ山なりの球を強打してこない」。実測：
+      // Extreme で山なりの球への返球の3割がスマッシュで、その平均が 92km/h）。
+      const smashStretch = player.runFwd > 0 ? 0 : stretch
         * (1 - clamp(player.settleT / CPU.SMASH_SETTLE_T, 0, 1));
       // ダブルスはラリーが長引きやすく、同じロブ選択率・同じ山なり化の度合いでも
       // 1ポイント中の絶対数が増えて目立つため、DOUBLES.LOB_SCALE / ARC_SCALE で
@@ -2713,7 +2722,8 @@
       // 打った強さの演出（閃光・ボールの膨らみ・打球音・振り抜きの大きさ）。人間は溜め量、
       // AI はチャンスボールを叩いた度合い（AI には溜めが無く、以前は常に0＝強打しても
       // 見た目も音もつなぎの球のままで、速くなったことが伝わらなかった）。
-      const power = who === 'you' ? charge : attack;
+      // スマッシュは叩けた度合い（追い込まれていないほど強い）をそのまま強さにする。
+      const power = who === 'you' ? charge : (isSmash ? 1 - smashStretch : attack);
       if (who !== 'you') player.swingCharge = power;
       const fxPower = special ? SPECIAL.IMPACT_POWER : power;
       ball.impact = FX.IMPACT_DURATION * lerp(1, FX.CHARGE_TIME_BOOST, fxPower);
@@ -4323,7 +4333,10 @@
       ACTORS.forEach((who) => {
         const actor = this.actor(who);
         actor.runX = 0;
-        if (who !== 'you') actor.chaseDist = 0;
+        if (who !== 'you') {
+          actor.chaseDist = 0;
+          actor.runFwd = 0;
+        }
       });
     }
 
@@ -4395,6 +4408,7 @@
       // （fwd＝ネット方向へ前進している速さ、runX＝相手が打ってから左右へ動いた量）。
       actor.fwd = actor.netDir * (actor.z - before.z) / dt;
       actor.runX += actor.x - before.x;
+      actor.runFwd += actor.netDir * (actor.z - before.z);
       // 目標地点に着いて動かずにいる間だけ積む「待てている時間」。走り出したら0に戻る。
       // 走行距離(chaseDist)だけでは「遠くまで走ったが、先回りして落下点で待っていた」
       // 状況が「苦しい」と誤判定されるので、その打ち消しに使う（hit() のスマッシュ）。

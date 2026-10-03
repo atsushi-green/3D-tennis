@@ -5598,16 +5598,18 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     const g = new R.Game({ input, hooks: noHooks });
     g.start();
     const attacks = [];
+    const smashes = [];
     const hitAs = g.hit.bind(g);
     g.hit = (who) => {
       const attack = who === 'cpu' ? g.chanceAttack(g.cpu) : 0;
       const y = g.ball.y;
       const dx = Math.abs(g.ball.x - g.cpu.x);
+      const slowBall = g.ball.shotSpeed <= CPU.CHANCE_SPEED_SLOW;
       const r = hitAs(who);
       const plain = g.cpu.stroke === 'forehand' || g.cpu.stroke === 'backhand';
-      if (who === 'cpu' && plain && !g.cpu.special && attack > 0.75) {
-        attacks.push({ y, dx, kmh: R.math.mpsToKmh(Math.hypot(g.ball.vx, g.ball.vz)) });
-      }
+      const kmh = R.math.mpsToKmh(Math.hypot(g.ball.vx, g.ball.vz));
+      if (who === 'cpu' && plain && !g.cpu.special && attack > 0.75) attacks.push({ y, dx, kmh });
+      if (who === 'cpu' && g.cpu.stroke === 'smash' && !g.cpu.special && slowBall) smashes.push(kmh);
       return r;
     };
     for (let i = 0; i < 60 * 300; i++) {
@@ -5633,6 +5635,11 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     // 球は体の真正面ではなく横を通る（ユーザー報告「CPU はボールが自分の身体の真正面に
     // くるように移動して打っている」。以前の平均は 0.08m）
     ok(avg((a) => a.dx) > 0.5, `and meets them beside the body, not in front of it: |dx| ${avg((a) => a.dx).toFixed(2)}m`);
+    // 山なりの球は、バウンド前にスマッシュで叩かれることも多い。前へ走り込んで叩く
+    // スマッシュが「走らされた」扱いで当てるだけ（55〜65km/h）になっていた（平均 92km/h）
+    const smashKmh = smashes.reduce((a, b) => a + b, 0) / smashes.length;
+    ok(smashes.length >= 5 && smashKmh > 120,
+      `the CPU's smashes on loopy balls are hard too: ${smashKmh.toFixed(0)} km/h over ${smashes.length}`);
   }
   applyCpuLevel('normal');
 }
@@ -5669,6 +5676,33 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   const rally = hitWith(CPU.CHANCE_SPEED_FAST);
   ok(rally.takeback === 0 && rally.g.ball.impactPower === 0 && rally.g.cpu.swingCharge === 0
     && rally.hitSound[3] === 0, 'a normal rally ball stays a normal-looking shot');
+  applyCpuLevel('normal');
+}
+
+// --- スマッシュ：前へ走り込んで叩く1本は追い込まれていない（全力で叩く）。下がりながらは弱まる ---
+{
+  const { CPU, applyCpuLevel } = R.config;
+  applyCpuLevel('extreme');
+  const smashAfter = (runFwd) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.cpu.x = 0; g.cpu.z = 3;
+    Object.assign(g.cpu, { chaseDist: CPU.STRETCH_DIST_MAX, settleT: 0, runFwd });
+    Object.assign(g.ball, {
+      x: 0.3, y: CPU.SMASH_MIN_Y + 0.2, z: 3, vx: 0, vy: CPU.SMASH_FALLING_VY - 1, vz: -1,
+      bounces: 0, live: true, last: 'you', spin: 'flat', wind: 0, windZ: 0, curve: 0, shotSpeed: 15,
+    });
+    g.hit('cpu');
+    return { g, landing: R.physics.predictLanding(g.ball) };
+  };
+  const forward = smashAfter(5);
+  ok(forward.g.cpu.stroke === 'smash', `precondition: a smash, got ${forward.g.cpu.stroke}`);
+  const back = smashAfter(-5);
+  ok(forward.landing.t < back.landing.t - 0.2,
+    `a smash after running forward flies much faster than one after backpedalling: ${forward.landing.t.toFixed(2)}s vs ${back.landing.t.toFixed(2)}s`);
+  ok(forward.g.ball.impactPower === 1, `and comes with the full-power flash, got ${forward.g.ball.impactPower}`);
   applyCpuLevel('normal');
 }
 
