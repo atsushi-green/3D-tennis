@@ -5147,6 +5147,75 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     // ポイントをまたいで持ち越さない
     g.newPoint();
     ok(!g.you.leap, `a new point clears the leap, got ${JSON.stringify(g.you.leap)}`);
+
+    // --- 跳ぶ高さは打点で決まる：立ったままラケットが届く高さなら跳ばない ---
+    // 以前は打点に関わらず毎回 SWING.SMASH_JUMP_H 跳び、低い打点ではラケットが球の上を
+    // 素通りして見えた（ユーザー報告「ジャンプしない方が自然な高さでも跳ぶ」）。
+    const { SWING } = R.config;
+    const at = (y) => {
+      const h = mk();
+      h.ball.y = y;
+      h.specialArmed = h.specialAim();
+      return h;
+    };
+    const stand = at(SWING.SMASH_STAND_Y - 0.25);
+    stand.tickLeap();
+    ok(stand.you.leap && stand.you.leap.kind === 'smash',
+      `a smash at standing height still runs the leap clock (it drives the swing), got ${JSON.stringify(stand.you.leap)}`);
+    ok(stand.you.leap.lift === 0, `but does not leave the ground, got lift=${stand.you.leap.lift}`);
+
+    const high = at(SWING.SMASH_STAND_Y + 0.18);
+    high.tickLeap();
+    ok(high.you.leap && Math.abs(high.you.leap.lift - 0.18) < 1e-9,
+      `a smash above the standing reach jumps just high enough to meet it, got lift=${high.you.leap && high.you.leap.lift}`);
+    ok(PLAYER.REACH_Y - SWING.SMASH_STAND_Y <= SWING.SMASH_JUMP_H,
+      'even the highest reachable smash needs no more than the jump cap');
+
+    // ダンクスマッシュは技の見せ場なので、打点に関わらず高く跳ぶ
+    const dunk = at(SWING.SMASH_STAND_Y - 0.05);
+    dunk.specialArmed = { move: 'dunkSmash' };
+    dunk.tickLeap();
+    ok(dunk.you.leap && dunk.you.leap.lift === SWING.SMASH_JUMP_H * R.config.SPECIAL.DUNK.JUMP_MULT,
+      `the dunk smash always leaps high, got lift=${dunk.you.leap && dunk.you.leap.lift}`);
+
+    // 跳んだ後も当たるまでは打点の見込みへ寄せ直す：離すのが遅れて球が落ちてくれば低くなる
+    const late = at(SWING.SMASH_STAND_Y + 0.2);
+    late.tickLeap();
+    const lift0 = late.you.leap.lift;
+    for (let i = 0; i < 15; i++) late.update(1 / 60); // 溜めたまま 0.25 秒待つ＝球は 2.0m 付近まで落ちる
+    ok(late.you.charging && late.ball.y < SWING.SMASH_STAND_Y,
+      `precondition: still holding while the ball drops below the standing reach, y=${late.ball.y.toFixed(2)}`);
+    ok(late.you.leap.lift < lift0 * 0.3,
+      `holding on lowers the jump towards the later contact, got ${late.you.leap.lift.toFixed(3)} (from ${lift0.toFixed(3)})`);
+    // 当たった後は寄せない（打った高さのまま着地する）
+    late.chargeRelease();
+    late.update(1 / 60);
+    ok(late.you.anim > 0, 'precondition: the late release connects');
+    const liftAtHit = late.you.leap.lift;
+    late.update(1 / 60);
+    ok(late.you.leap.lift === liftAtHit, `the jump height is fixed once the ball is hit, got ${late.you.leap.lift} vs ${liftAtHit}`);
+  }
+
+  // CPU/AI のスマッシュも、跳ぶ高さは打点で決まる
+  {
+    const { CPU, SWING } = R.config;
+    const cpuSmash = (y) => {
+      const g = new R.Game({ input: fakeInput, hooks: noHooks });
+      g.start();
+      g.phase = 'rally';
+      g.serveInFlight = false;
+      g.cpu.x = 0; g.cpu.z = 3;
+      Object.assign(g.ball, { x: 0.3, y, z: 3, bounces: 0, vy: CPU.SMASH_FALLING_VY - 1, vx: 0, vz: -1 });
+      g.hit('cpu');
+      return g;
+    };
+    const low = cpuSmash(Math.max(CPU.SMASH_MIN_Y, SWING.SMASH_STAND_Y - 0.1));
+    ok(low.cpu.stroke === 'smash' && !low.cpu.special, `precondition: a plain CPU smash, got ${low.cpu.stroke}/${low.cpu.special}`);
+    ok(low.cpu.leap && low.cpu.leap.kind === 'smash' && low.cpu.leap.lift === 0,
+      `a CPU smash at standing height does not jump, got ${JSON.stringify(low.cpu.leap)}`);
+    const top = cpuSmash(PLAYER.CPU_REACH_Y - 0.01);
+    ok(top.cpu.leap && Math.abs(top.cpu.leap.lift - (PLAYER.CPU_REACH_Y - 0.01 - SWING.SMASH_STAND_Y)) < 1e-9,
+      `a CPU smash above the standing reach jumps just enough, got ${JSON.stringify(top.cpu.leap)}`);
   }
 
   // スマッシュで打てる位置に立って溜めている間は、構えが 'smash'（頭の後ろへ担ぐ振りかぶり）になる

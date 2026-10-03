@@ -296,9 +296,11 @@
         charging: p.charging, swing: p.swing, chargeStroke: p.chargeStroke, chargeSpin: p.chargeSpin,
         // 必殺技（フォーム・ジャンプの高さ・倒れ込みに効く）と、縮地の残像。
         special: p.special || null,
-        // 跳躍（打球のモーションとは別の時計。スマッシュ／ジャックナイフ／サーブ）
+        // 跳躍（打球のモーションとは別の時計。スマッシュ／ジャックナイフ／サーブ）。
+        // lift（スマッシュで跳ぶ高さ）は当たるまで毎フレーム変わりうるので、コマごとに録る
         leap: p.leap ? {
           t: p.leap.t, kind: p.leap.kind, span: p.leap.span, rise: p.leap.rise, reach: p.leap.reach,
+          lift: p.leap.lift,
         } : null,
         dash: p.dash ? { x: p.dash.x, z: p.dash.z, t: p.dash.t } : null,
         // 飛びつきボレーの、打つ前の飛び込み（飛ぶ先の足元・打点・向き）

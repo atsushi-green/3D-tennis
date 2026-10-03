@@ -1295,14 +1295,13 @@
 
   /**
    * スマッシュのジャンプの高さ(m)。見た目だけの値で、当たり判定（PLAYER.REACH_Y）には
-   * 一切影響しない。ダンクスマッシュ（必殺技）だけは同じ振り付けのままもっと高く跳ぶ。
+   * 一切影響しない。頂点の高さ（state.leap.lift）は game.js#smashLift が打点から決める：
+   * 立ったままラケットが届く打点なら 0（跳ばずに打つ）、ダンクスマッシュは高く跳ぶ。
    */
   function smashLift(state) {
     const u = leapProgress(state, 'smash');
     if (u === null) return 0;
-    const height = SWING.SMASH_JUMP_H
-      * (state.special === 'dunkSmash' ? SPECIAL.DUNK.JUMP_MULT : 1);
-    return height * leapArc(u, PLAYER.SMASH_LEAP_RISE);
+    return (state.leap.lift || 0) * leapArc(u, PLAYER.SMASH_LEAP_RISE);
   }
 
   /**
@@ -1320,9 +1319,10 @@
     if (lift <= 0) return 0;
 
     const gait = player.userData.gait;
-    // 浮いているほど強くポーズを効かせる（ダンクで高さが伸びても効き方は同じになるよう、
-    // 分母にもジャンプの倍率を掛けて正規化する）。
-    const peak = SWING.SMASH_JUMP_H * (state.special === 'dunkSmash' ? SPECIAL.DUNK.JUMP_MULT : 1);
+    // 浮いているほど強くポーズを効かせる。分母は普通のスマッシュの上限の高さ：打点に
+    // 合わせた小さな跳躍では脚もそのぶん小さく開く。それより高く跳ぶダンクスマッシュは
+    // 頂点で開ききるよう、その跳躍の頂点で割る。
+    const peak = Math.max(state.leap.lift, SWING.SMASH_JUMP_H);
     const air = clamp(lift / peak, 0, 1);
     // はさみ跳びは「ラケット側の脚を後ろへ蹴り上げる」。legs[0] がローカル -x 側、
     // legs[1] が +x 側なので、利き手（HAND）でどちらがラケット側かを選ぶ。

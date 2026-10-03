@@ -7,7 +7,7 @@
 
   const {
     ATTRS, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, FX, HALF_L, HALF_W, LINE_CALL, NET, PHYSICS,
-    PLAYER, PRACTICE, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, TIMING,
+    PLAYER, PRACTICE, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, SWING, TIMING,
     TIMING_AIM, TRAIL, VOLLEY, WIND, shotSkill,
   } = RallyOne.config;
   const {
@@ -206,6 +206,19 @@
       ready: Math.hypot(you.x - mid.x, you.z - mid.z) <= SMASH_HINT.READY_DIST,
       inTime: needT <= exit.t,
     };
+  }
+
+  /**
+   * スマッシュで跳ぶ高さ(m。表示専用で、当たり判定には効かない)。打点の高さで決める：
+   * 立ったまま腕を伸ばしてラケットが届く高さ（SWING.SMASH_STAND_Y）までは**跳ばずに**
+   * 打ち、それより高い球だけ届くぶん跳ぶ（上限 SWING.SMASH_JUMP_H）。
+   * ダンクスマッシュは跳び上がって叩き込むのが技の見せ場なので、打点に関わらず高く跳ぶ。
+   * @param {number} contactY 打点の高さ(m)
+   * @param {boolean} dunk ダンクスマッシュか
+   */
+  function smashLift(contactY, dunk) {
+    if (dunk) return SWING.SMASH_JUMP_H * SPECIAL.DUNK.JUMP_MULT;
+    return clamp(contactY - SWING.SMASH_STAND_Y, 0, SWING.SMASH_JUMP_H);
   }
 
   /**
@@ -1235,7 +1248,8 @@
         // 跳んで打つ1打なら、まだ跳んでいなければここで跳ぶ。ふつうは tickLeap() が
         // 溜めている間に（球が届く少し前に）跳ばせているので、ここに来るのは
         // 「球がまだ遠いのに離した」ような場合だけの保険。
-        this.startLeap(this.leapKind(move, this.you.swingCharge));
+        const leap = this.leapKind(move, this.you.swingCharge);
+        this.startLeap(leap, 'you', leap && this.leapTiming(leap, this.youSmashLift(move) || 0));
       }
     }
 
@@ -2698,7 +2712,11 @@
       player.stroke = stroke;
       // AI には「溜めを離す瞬間」も先読みも無いので、跳躍はここ（当たった瞬間）から。
       // 人間は tickLeap()／chargeRelease() で既に跳んでいるので、その続きをそのまま使う。
-      if (who !== 'you') this.startLeap(stroke === 'smash' || stroke === 'jackknife' ? stroke : null, who);
+      // スマッシュの跳ぶ高さはこの打点の高さで決まる（立って届く高さなら跳ばない）。
+      if (who !== 'you') {
+        const leap = stroke === 'smash' || stroke === 'jackknife' ? stroke : null;
+        this.startLeap(leap, who, leap && this.leapTiming(leap, smashLift(ball.y, special === 'dunkSmash')));
+      }
       player.spin = spin; // 振っている間のフォーム（scene/player.js）に使う
       // 必殺技で決めたときは球種名ではなく技名を出す（「何で取ったか」がそのまま伝わる）。
       // 技名は打った本人（who）の specialLabel を見る。以前はここで常に this.you を見て
@@ -3633,7 +3651,7 @@
       this.specialArmed = this.specialAim();
       this.swingGuide = this.swingGuidePreview();
       this.updatePrep();
-      this.tickLeap(); // 跳んで打つ1打は、離す前（球が届く少し前）から跳び始める
+      this.tickLeap(dt); // 跳んで打つ1打は、離す前（球が届く少し前）から跳び始める
       this.tickSpecial(dt);
       // 振り出したサーブは、トスが打点に届く少し前から跳び始める。跳躍の時計を進める
       // tickSpecial() の後に置く：前に置くと、踏み切ったフレームにもう1フレームぶん
@@ -3647,12 +3665,26 @@
 
     /**
      * 跳躍の長さ(秒)と、そのうち踏み切りに使う割合。打ち方ごとの定数を1か所に引き当てる。
+     * スマッシュは跳ぶ高さ(lift)も持たせる：打点で毎回変わる（smashLift()）ので定数で
+     * 引き当てられない。0 なら跳ばない＝体は浮かず、この時計で振り出しだけが進む。
      * @param {'smash'|'jackknife'} kind
+     * @param {number} [lift] スマッシュで跳ぶ高さ(m)
      */
-    leapTiming(kind) {
+    leapTiming(kind, lift = 0) {
       return kind === 'jackknife'
         ? { span: SPECIAL.JACK.LEAP_T, rise: SPECIAL.JACK.LEAP_RISE }
-        : { span: PLAYER.SMASH_LEAP_T, rise: PLAYER.SMASH_LEAP_RISE };
+        : { span: PLAYER.SMASH_LEAP_T, rise: PLAYER.SMASH_LEAP_RISE, lift };
+    }
+
+    /**
+     * 人間がいま振ったら、スマッシュで何m跳ぶか。打点の見込み（predictContact()。ガイドと
+     * 同じもの）を smashLift() に通す。届く見込みが無ければ null（打点が分からない）。
+     * @param {string|null} move この1振りに乗る必殺技
+     */
+    youSmashLift(move) {
+      const extra = specialReach(move);
+      const contact = this.predictContact(extra.mult, extra.y);
+      return contact && smashLift(contact.y, move === 'dunkSmash');
     }
 
     /**
@@ -3672,8 +3704,9 @@
      * 跳躍の長さ(span)と踏み切りの割合(rise)は leap に持たせる：サーブの跳躍は、球が打点に
      * 届くまでの残り時間から毎回決まる（tickServeSwing()）ので定数で引き当てられない。
      * @param {'smash'|'jackknife'|'serve'|null} kind
-     * @param {{span:number, rise:number, reach?:number}} [timing] 省略時は leapTiming(kind)。
-     *   サーブだけ reach（打点の高さ）も持たせる
+     * @param {{span:number, rise:number, reach?:number, lift?:number}} [timing] 省略時は
+     *   leapTiming(kind)（スマッシュなら跳ばない）。サーブは reach（打点の高さ）、
+     *   スマッシュは lift（跳ぶ高さ）も持たせる
      */
     startLeap(kind, who = 'you', timing = kind && this.leapTiming(kind)) {
       if (!kind) return;
@@ -3695,10 +3728,19 @@
      * なる。予測（predictContact）はガイドが使っているのと同じものなので、画面に出ている
      * 予告と跳ぶタイミングがずれない。
      * 跳んだあと振らなかった（空振りした／離さなかった）ときは、そのまま着地するだけ。
+     *
+     * スマッシュは跳ぶ高さも打点の見込みで決める（smashLift()）：立ったままラケットが
+     * 届く高さなら跳ばずに（高さ0の跳躍で振り出しだけ進めて）打つ。跳んだ後は当たるまで
+     * followSmashLift() が高さを見込みへ寄せ直す。
+     * @param {number} dt
      */
-    tickLeap() {
+    tickLeap(dt = 0) {
       const you = this.you;
-      if (you.leap || !you.charging || this.phase !== 'rally') return;
+      if (you.leap) {
+        this.followSmashLift(dt);
+        return;
+      }
+      if (!you.charging || this.phase !== 'rally') return;
       const move = (this.specialArmed && this.specialArmed.move) || null;
       const charge = clamp(this.you.chargeTime / CHARGE.MAX_TIME, 0, 1);
       const kind = this.leapKind(move, charge);
@@ -3717,7 +3759,29 @@
         : contact.t;
       if (until === null) return;
       const { span, rise } = this.leapTiming(kind);
-      if (until <= span * rise) this.startLeap(kind);
+      if (until > span * rise) return;
+      this.startLeap(kind, 'you', this.leapTiming(kind, smashLift(contact.y, move === 'dunkSmash')));
+    }
+
+    /**
+     * 跳んでから当たるまでの間、スマッシュで跳ぶ高さ（leap.lift）を打点の見込みへ寄せ直す。
+     * 踏み切った時点の見込みは「球が届き始める点」だが、離すのが遅れると球はそこから
+     * さらに落ちて低いところで当たる。踏み切ったときの高さのまま跳ぶと、低い打点でも
+     * 跳び上がってラケットが球の上を素通りして見える。ダンクスマッシュになるかどうか
+     * （前へ踏み込む速さが要る）も離すまでに変わりうるので、同じく追い直す。
+     * 当たった後（anim>0）はもう寄せない＝打ったときの高さのまま着地する。
+     * 一気に寄せると空中で体がカクッと動くので、SWING.SMASH_LIFT_FOLLOW_T で滑らかに追う。
+     * @param {number} dt
+     */
+    followSmashLift(dt) {
+      const you = this.you;
+      const leap = you.leap;
+      if (leap.kind !== 'smash' || you.anim > 0) return;
+      // 離す前は溜めている間の技の候補、離した後は離した瞬間に確定した技（armSpecial()）
+      const move = you.charging ? (this.specialArmed && this.specialArmed.move) || null : you.special;
+      const target = this.youSmashLift(move);
+      if (target === null) return; // 打点が分からなくなった（届かない所へ動いた）ら今の高さのまま
+      leap.lift += (target - leap.lift) * (1 - Math.exp(-dt / SWING.SMASH_LIFT_FOLLOW_T));
     }
 
     /**
