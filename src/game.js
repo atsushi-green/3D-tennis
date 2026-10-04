@@ -613,6 +613,9 @@
       && c.player.settleT >= SPECIAL.AI.SETTLE_T,
   };
 
+  /** AI が跳ぶと決めたとき（Game#tickAiLeaps()）に出すかが決まる技。当たる瞬間には選ばない。 */
+  const LEAP_MOVES = new Set(['jackknife', 'dunkSmash']);
+
   /**
    * スタッツの入れ物（1チームぶん×2）。数え方はすべて「打った側／取った側」の視点で、
    * 表示（hud.js）はここの数字を並べるだけにする。
@@ -916,12 +919,20 @@
       /**
        * AI の「救済技」（縮地・飛びつきボレー。Extreme のみ）を、いま飛んできている1球に
        * 対して出す気でいるか。ポーチ（poachCommit）と同じく相手が打った瞬間に球ごと1回だけ
-       * 抽選する（updateReactTimers → rollAiRescue）。**毎フレーム引いてはいけない**：
+       * 抽選する（updateReactTimers → rollAiCommits）。**毎フレーム引いてはいけない**：
        * どちらも「条件を満たしたフレームで出す」判定なので、フレームごとに CHANCE を
        * 引くと条件を満たした最初の数フレームでほぼ必ず当たり＝確率の意味がなくなる。
        */
       this.dashCommit = { cpu: false, cpuMate: false, youMate: false };
       this.diveCommit = { cpu: false, cpuMate: false, youMate: false };
+      /**
+       * AI がいま飛んできている1球を、ジャックナイフ／ダンクスマッシュで叩く気でいるか
+       * （Hard 以上）。どちらも跳んで打つ技で、跳ぶのは当たる少し前（tickAiLeaps()）なので、
+       * 当たる瞬間に引く pickAiSpecial() の抽選とは別に、救済技と同じく相手が打った瞬間に
+       * 球ごと1回だけ抽選しておき、跳び始めたところで使い切る。
+       */
+      this.jackCommit = { cpu: false, cpuMate: false, youMate: false };
+      this.dunkCommit = { cpu: false, cpuMate: false, youMate: false };
       /** 今のポイントのサーブが1本目(1)か、1本目がフォールトした後のセカンドサーブ(2)か。 */
       this.serveNumber = 1;
       /**
@@ -1423,9 +1434,18 @@
      */
     pickAiSpecial(who, ctx) {
       if (!this.aiSpecialsOn()) return null;
+      // 跳んで打つ技（ジャックナイフ・ダンクスマッシュ）は、跳ぶと決めたとき（tickAiLeaps()）に
+      // 抽選まで済ませてある。跳んでいる AI は、当たる瞬間も条件を満たしていればそれで打ち、
+      // 跳んでいない AI は出さない（当たってから跳び始めると、跳ぶのと打つのが同時に見えるため）。
+      // スマッシュで跳んでいる最中は、ダンクと決めていなければ技は乗せない（ふつうのスマッシュ）。
+      const leap = ctx.player.leap;
+      if (leap) {
+        const move = leap.kind === 'jackknife' ? 'jackknife' : (leap.dunk ? 'dunkSmash' : null);
+        return move && this.usesLeft(move, who) > 0 && AI_SPECIAL_MATCH[move](this, ctx) ? move : null;
+      }
       // 飛びつきボレー・縮地（Extreme のみ）は AI_SPECIAL_MATCH を持たない＝ここでは拾われない。
       // どちらも「当たる瞬間」より前に決まる技なので、それぞれ swingAiAt() / tryAiDash() が持つ。
-      const found = this.aiMoves().find((move) => AI_SPECIAL_MATCH[move]
+      const found = this.aiMoves().find((move) => !LEAP_MOVES.has(move) && AI_SPECIAL_MATCH[move]
         && this.usesLeft(move, who) > 0
         && AI_SPECIAL_MATCH[move](this, ctx));
       if (!found) return null;
@@ -1625,6 +1645,9 @@
       if (TEAM_OF[who] === this.ball.last) return;   // 自陣へ向かってくる球だけ
       if (this.recoverTimers[who] > 0) return;       // 打った直後は動けない（硬直中）
       if (this.actor(who).dive) return;              // 飛びつきボレーで飛び込んでいる最中
+      // 届く見込みでスマッシュ／ジャックナイフに跳んでいる最中（tickAiLeaps()）。その球は
+      // 叩ける＝瞬間移動で逃げる理由がないし、空中から別の場所へ消えて現れることにもなる
+      if (this.actor(who).leap) return;
       if (this.reactTimers[who] > 0) return;         // まだ反応できていない
       const actor = this.actor(who);
       // ボールが自陣に入るまで待つ（ネットの向こうにある間は判断しない）。相手が打った
@@ -2189,6 +2212,8 @@
         this.poachCommit[w] = false;
         this.dashCommit[w] = false;
         this.diveCommit[w] = false;
+        this.jackCommit[w] = false;
+        this.dunkCommit[w] = false;
       });
     }
 
@@ -2828,8 +2853,9 @@
             : special === 'divingVolley' ? SPECIAL.DIVE.RECOVER
               : PLAYER.SWING_ANIM;
       player.stroke = stroke;
-      // AI には「溜めを離す瞬間」も先読みも無いので、跳躍はここ（当たった瞬間）から。
-      // 人間は tickLeap()／chargeRelease() で既に跳んでいるので、その続きをそのまま使う。
+      // 人間は tickLeap()／chargeRelease()、AI は tickAiLeaps() で当たる前から既に跳んで
+      // いるので、その続きをそのまま使う（startLeap() は跳んでいる最中なら何もしない）。
+      // ここで跳び始めるのは、AI の打点の先読みが外れた（当たるまで跳ぶ番が来なかった）ときだけ。
       // スマッシュの跳ぶ高さはこの打点の高さで決まる（立って届く高さなら跳ばない）。
       if (who !== 'you') {
         const leap = stroke === 'smash' || stroke === 'jackknife' ? stroke : null;
@@ -3779,6 +3805,7 @@
       this.swingGuide = this.swingGuidePreview();
       this.updatePrep();
       this.tickLeap(dt); // 跳んで打つ1打は、離す前（球が届く少し前）から跳び始める
+      this.tickAiLeaps(dt); // AI のスマッシュ・ジャックナイフも同じく、当たる少し前から跳ぶ
       this.tickSpecial(dt);
       // 振り出したサーブは、トスが打点に届く少し前から跳び始める。跳躍の時計を進める
       // tickSpecial() の後に置く：前に置くと、踏み切ったフレームにもう1フレームぶん
@@ -3888,6 +3915,132 @@
       const { span, rise } = this.leapTiming(kind);
       if (until > span * rise) return;
       this.startLeap(kind, 'you', this.leapTiming(kind, smashLift(contact.y, move === 'dunkSmash')));
+    }
+
+    /**
+     * **AI のスマッシュ・ジャックナイフも、人間（tickLeap()）と同じく球が届く少し前から
+     * 跳び始める。** 以前は AI だけ当たった瞬間（hit()）から跳んでいたので、跳ぶのと振るのが
+     * 同時に見えた（ユーザー報告）。AI には「溜めを離す」瞬間が無いので、いつ・どの高さで
+     * 振るか（swingAiAt() の当たり判定）を aiContact() で先読みし、そこで跳んで打つ1打に
+     * なるなら（aiLeapPlan()）、残りが踏み切りぶん（LEAP_T×LEAP_RISE）を切ったところで跳ぶ。
+     * 当たるころには頂点にいて、空中で振り始める。
+     * 技（ジャックナイフ・ダンクスマッシュ）にするかは跳ぶときに決まり、跳んだ AI だけが当たる
+     * 瞬間にその技で打つ（pickAiSpecial()）＝跳ばずに技が出ることはない。見込みどおりに
+     * 当たらなかった（届かなかった・打点が変わった）ときは、普通に打って着地する。
+     * スマッシュは跳んでから当たるまで、跳ぶ高さとダンクにするかを見込みへ寄せ直す
+     * （followAiSmashLift()。人間の followSmashLift() と同じ考え方）。
+     * @param {number} dt
+     */
+    tickAiLeaps(dt) {
+      const ball = this.ball;
+      if (this.phase !== 'rally' || !ball.live) return;
+      // 打つのは球が向かっていく側の担当1人（swingAiAt() と同じ選び方）
+      let who;
+      if (ball.last === 'cpu') {
+        who = this.doubles && this.doublesResponder('you') === 'youMate' ? 'youMate' : null;
+      } else {
+        who = this.doubles ? this.doublesResponder('cpu') : 'cpu';
+      }
+      if (!who || this.actor(who).dive) return; // 飛びつきボレーで飛び込んでいる
+      if (this.actor(who).leap) {
+        this.followAiSmashLift(who, dt);
+        return;
+      }
+      const contact = this.aiContact(who);
+      const plan = contact && this.aiLeapPlan(who, contact);
+      if (!plan || contact.t > plan.timing.span * plan.timing.rise) return;
+      if (plan.kind === 'jackknife') this.jackCommit[who] = false;
+      if (plan.timing.dunk) this.dunkCommit[who] = false;
+      this.startLeap(plan.kind, who, plan.timing);
+    }
+
+    /**
+     * 先読みした打点（aiContact()）で、その AI が跳んで打つなら何で打つか。跳ばないなら null。
+     * 見方は当たる瞬間の判定（naturalStroke()・AI_SPECIAL_MATCH）と同じで、優先順も同じ
+     * （ダンクスマッシュ → スマッシュ → ジャックナイフ）。技は球ごとの抽選（dunkCommit・
+     * jackCommit）が当たっていて、回数が残っているときだけ。
+     * @param {'cpu'|'cpuMate'|'youMate'} who
+     * @param {{y:number, vy:number, bounces:number}} contact
+     * @returns {{kind:'smash'|'jackknife', timing:object}|null} timing は startLeap() に渡す
+     */
+    aiLeapPlan(who, contact) {
+      const actor = this.actor(who);
+      const { JACK } = SPECIAL;
+      const dunk = this.aiDunkAt(who, contact);
+      const smash = contact.y >= CPU.SMASH_MIN_Y && contact.vy <= CPU.SMASH_FALLING_VY
+        && Math.abs(actor.z) <= CPU.SMASH_Z_MAX;
+      if (dunk || smash) {
+        return { kind: 'smash', timing: { ...this.leapTiming('smash', smashLift(contact.y, dunk)), dunk } };
+      }
+      const jack = this.jackCommit[who] && this.usesLeft('jackknife', who) > 0
+        && actor.speed <= JACK.MAX_SPEED && contact.bounces >= 1 && contact.y >= JACK.MIN_Y
+        && classifyStroke(who, this.ball, actor) === 'backhand';
+      return jack ? { kind: 'jackknife', timing: this.leapTiming('jackknife') } : null;
+    }
+
+    /**
+     * 先読みした打点で、ダンクスマッシュにするか（AI_SPECIAL_MATCH.dunkSmash と同じ見方に、
+     * 球ごとの抽選 dunkCommit と残り回数を足したもの）。
+     */
+    aiDunkAt(who, contact) {
+      const { DUNK, AI } = SPECIAL;
+      return this.dunkCommit[who] && this.usesLeft('dunkSmash', who) > 0
+        && contact.bounces === 0 && contact.y >= DUNK.MIN_Y && Math.abs(this.actor(who).z) <= AI.DUNK_MAX_Z;
+    }
+
+    /**
+     * AI のスマッシュで跳んでから当たるまでの間、跳ぶ高さ（leap.lift）とダンクにするか
+     * （leap.dunk）を打点の見込みへ寄せ直す。跳ぶと決めたときにまだ走っていると、見込みの
+     * 打点は実際より低く・遅く出る（いまの位置のままで先読みするため）。決めたときのまま
+     * だと、実際には高く叩けてダンクになったはずの球まで普通のスマッシュになり、ダンクが
+     * 減っていた（実測：Hard でスマッシュ系のうちダンク 67.3%→65.8%）。一度ダンクと
+     * 決めたら下ろさない。高さは一気に寄せると空中で体がカクッと動くので、人間と同じく
+     * SWING.SMASH_LIFT_FOLLOW_T で滑らかに追う。当たった後（anim>0）はもう寄せない。
+     * @param {'cpu'|'cpuMate'|'youMate'} who
+     * @param {number} dt
+     */
+    followAiSmashLift(who, dt) {
+      const actor = this.actor(who);
+      const leap = actor.leap;
+      if (leap.kind !== 'smash' || actor.anim > 0) return;
+      const contact = this.aiContact(who);
+      if (!contact) return; // 打点が分からなくなった（届かない所へ動いた）ら今の高さのまま
+      if (!leap.dunk && this.aiDunkAt(who, contact)) {
+        leap.dunk = true;
+        this.dunkCommit[who] = false;
+      }
+      const target = smashLift(contact.y, leap.dunk);
+      leap.lift += (target - leap.lift) * (1 - Math.exp(-dt / SWING.SMASH_LIFT_FOLLOW_T));
+    }
+
+    /**
+     * その AI がいまの位置のまま待っていたら、いつ・どこで球を打つか（swingAiAt() の
+     * 当たり判定の先読み）。ふつうは球が届く範囲に入った最初の瞬間。チャンスボールを
+     * 引きつけて待つ場面（holdForChance()）なら、それと同じく「届くうちでいちばん高い点まで
+     * あと CPU.CHANCE_HOLD_RISE を切った」瞬間——頂点そのものではない。上がりきる直前の球は
+     * ゆっくりなので、その数cmに0.1秒近くかかる（頂点で打つと見込むと、跳ぶのが遅れる）。
+     * 届かないなら null。
+     * @param {'cpu'|'cpuMate'|'youMate'} who
+     * @returns {{x:number, y:number, z:number, t:number, bounces:number}|null}
+     *   predictWindow() のサンプル（t は今からの秒数）
+     */
+    aiContact(who) {
+      const actor = this.actor(who);
+      const ball = this.ball;
+      const volleyZ = aiVolleyZ(this, who);
+      const reachable = []; // 届く範囲に入っている間のサンプル（ひとつながり）
+      const window = predictWindow(ball, (at) => {
+        const ok = aiCanReturnNow(actor, at, volleyZ)
+          && at.y < PLAYER.CPU_REACH_Y && at.y > PLAYER.CPU_REACH_Y_MIN
+          && reaches(at, actor, reactReach(ball.age + at.t, actor.attr.reach));
+        if (ok) reachable.push(at);
+        return ok;
+      }, 1, 1);
+      if (!window) return null;
+      const { enter } = window;
+      if (enter.bounces < 1 || enter.vy <= 0 || this.chanceAttack(actor) <= 0) return enter;
+      const top = Math.max(...reachable.map((at) => at.y));
+      return reachable.find((at) => top - at.y < CPU.CHANCE_HOLD_RISE);
     }
 
     /**
@@ -4226,12 +4379,12 @@
           this.reactTimers.cpu = react * this.cpu.attr.react + bonus;
           this.reactTimers.cpuMate = react * this.cpuMate.attr.react + bonus;
           this.rollPoach(this.frontOf.cpu, 'cpu');
-          this.rollAiRescue('cpu');
-          this.rollAiRescue('cpuMate');
+          this.rollAiCommits('cpu');
+          this.rollAiCommits('cpuMate');
         } else if (owner === 'cpu') {
           this.reactTimers.youMate = PLAYER.CPU_REACT * this.youMate.attr.react + bonus;
           this.rollPoach('youMate', 'you');
-          this.rollAiRescue('youMate');
+          this.rollAiCommits('youMate');
         }
       }
       this.lastBallOwnerSeen = owner;
@@ -4253,18 +4406,22 @@
     }
 
     /**
-     * 飛んできた1球に対して、その AI が「救済技（縮地・飛びつきボレー）を出す気でいるか」を
-     * 1回だけ決める。どちらも条件を満たしたフレームで出る技なので、毎フレーム
-     * CPU.SPECIAL_CHANCE を引くと事実上必ず出てしまう＝確率の意味がなくなる
+     * 飛んできた1球に対して、その AI が「救済技（縮地・飛びつきボレー）と跳んで打つ技
+     * （ジャックナイフ・ダンクスマッシュ）を出す気でいるか」を1回だけ決める。どれも条件を満たしたフレームで出す（跳ぶ）技なので、
+     * 毎フレーム CPU.SPECIAL_CHANCE を引くと事実上必ず出てしまう＝確率の意味がなくなる
      * （他の技は「当たる瞬間」という1回きりの機会なので pickAiSpecial の中で引いている）。
      * @param {'cpu'|'cpuMate'|'youMate'} who
      */
-    rollAiRescue(who) {
+    rollAiCommits(who) {
       const on = this.aiSpecialsOn();
       const moves = this.aiMoves();
       this.dashCommit[who] = on && moves.indexOf('shukuchi') !== -1
         && Math.random() < CPU.SPECIAL_CHANCE;
       this.diveCommit[who] = on && moves.indexOf('divingVolley') !== -1
+        && Math.random() < CPU.SPECIAL_CHANCE;
+      this.jackCommit[who] = on && moves.indexOf('jackknife') !== -1
+        && Math.random() < CPU.SPECIAL_CHANCE;
+      this.dunkCommit[who] = on && moves.indexOf('dunkSmash') !== -1
         && Math.random() < CPU.SPECIAL_CHANCE;
     }
 
@@ -4905,6 +5062,9 @@
       if (this.usesLeft('divingVolley', who) <= 0) return null;
       if (ball.bounces !== 0) return null; // ボレーの場面だけ（バウンド後の球は対象外）
       const actor = this.actor(who);
+      // 普通のリーチで届く見込みでスマッシュに跳んでいる（tickAiLeaps()）なら、そのまま叩く。
+      // 届く球へ飛び込むことはないし、跳んだ後に飛び込むと、跳躍と飛び込みが重なって見える
+      if (actor.leap) return null;
       if (Math.abs(actor.z) > PLAYER.VOLLEY_Z) return null; // ネット際にいるときだけ
       const { REACH_MULT } = SPECIAL.DIVE;
       if (!reaches(ball, actor, reach * REACH_MULT)) return null;

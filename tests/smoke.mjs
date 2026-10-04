@@ -8669,6 +8669,12 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
         build(g);
         const seen = [];
         for (let i = 0; i < 300; i++) {
+          // 跳んで打つ技（ダンクスマッシュ・ジャックナイフ）は、当たる少し前に跳ぶときに
+          // 決まる（tickAiLeaps()）。いまの球がそのまま打点になる、として毎回その判断から通す
+          g.cpu.leap = null;
+          g.rollAiCommits('cpu');
+          const plan = g.aiLeapPlan('cpu', { y: g.ball.y, vy: g.ball.vy, bounces: g.ball.bounces });
+          if (plan) g.startLeap(plan.kind, 'cpu', plan.timing);
           const move = g.pickAiSpecial('cpu', g.aiSpecialContext('cpu'));
           if (move && seen.indexOf(move) === -1) seen.push(move);
         }
@@ -9826,6 +9832,111 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     ok(extreme.depth > 8, `and still keeps it deep, got ${extreme.depth.toFixed(2)}m from the net`);
     ok(extreme.flight < hard.flight - 0.2,
       `and flatter than Hard, got ${extreme.flight.toFixed(2)}s vs ${hard.flight.toFixed(2)}s`);
+  } finally {
+    applyCpuLevel('normal');
+  }
+}
+
+// --- AI のジャックナイフは、跳んでから打つ（跳ぶのと打つのが同時に見えない） ---
+// ユーザー報告「CPU がジャックナイフするとき、ジャンプと打つのが同時に見える」。以前は AI だけ
+// 当たった瞬間（hit()）から跳んでいた。人間（tickLeap()）と同じく、当たる踏み切りぶん前から跳ぶ。
+{
+  const { applyCpuLevel, SPECIAL: SP } = R.config;
+  const RISE = SP.JACK.LEAP_T * SP.JACK.LEAP_RISE; // 踏み切りから頂点まで
+  /** CPU のバックハンド側（world -x）へ、ゆるく高く弾む球を1本送って、打つまで進める */
+  const highToBackhand = (commit) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.setSpecials(R.config.SPECIAL_MOVES.map((m) => m.key));
+    g.start(false, 'you');
+    Object.assign(g, { phase: 'rally', serveInFlight: false, wind: 0, windZ: 0 });
+    g.cpu.x = 0;
+    g.cpu.z = HALF_L - 0.3;
+    const from = { x: 0, y: 1.0, z: -HALF_L + 0.5 };
+    Object.assign(g.ball,
+      R.physics.solveShot(from, { x: -1.5, y: R.config.PHYSICS.BALL_R, z: HALF_L - 4.5 }, 1.3, undefined, 'top', 0),
+      from, { live: true, last: 'you', bounces: 0, age: 0, spin: 'top', wind: 0, windZ: 0, curve: 0 });
+    g.ball.shotSpeed = Math.hypot(g.ball.vx, g.ball.vz);
+    g.lastBallOwnerSeen = 'you'; // 「相手が打った」の抽選はもう済んだことにして、結果だけ決める
+    g.jackCommit.cpu = commit;
+    let leaptBeforeHit = false;
+    let airborneAtHit = null; // 当たったフレームの終わりで、跳び始めてから何秒たっていたか
+    for (let f = 0; f < 240 && g.ball.last === 'you'; f++) {
+      g.update(1 / 60);
+      if (g.ball.last === 'cpu') airborneAtHit = g.cpu.leap ? g.cpu.leap.span - g.cpu.leap.t : null;
+      else if (g.cpu.leap) leaptBeforeHit = true;
+    }
+    return { g, leaptBeforeHit, airborneAtHit };
+  };
+  applyCpuLevel('extreme');
+  try {
+    const jack = highToBackhand(true);
+    ok(jack.g.cpu.stroke === 'jackknife', `precondition: the AI jackknifes this ball, got ${jack.g.cpu.stroke}`);
+    ok(jack.leaptBeforeHit, 'the AI is already in the air before it swings');
+    // 当たったフレームの中で跳躍の時計がもう1フレームぶん進むので、その幅を見込む
+    ok(jack.airborneAtHit !== null && jack.airborneAtHit >= RISE - 1 / 60 && jack.airborneAtHit <= RISE + 2 / 60,
+      `and meets the ball at the top of the jump (${RISE.toFixed(3)}s after take-off), got ${jack.airborneAtHit}`);
+    // 跳ぶ抽選に外れた球では跳ばない＝跳ばずにジャックナイフが出ることもない
+    const plain = highToBackhand(false);
+    ok(!plain.leaptBeforeHit && plain.g.cpu.stroke !== 'jackknife' && !plain.g.cpu.leap,
+      `without the roll the AI neither jumps nor jackknifes, got ${plain.g.cpu.stroke}`);
+  } finally {
+    applyCpuLevel('normal');
+  }
+}
+
+// --- AI のスマッシュ（ダンクスマッシュ含む）も、跳んでから打つ ---
+// ユーザー要望「CPU スマッシュも（ジャックナイフと）同様に直して」。跳ぶ高さは打点で決まり
+// （立って届く高さなら跳ばない）、ダンクにするかも跳ぶときに決まる。
+{
+  const { applyCpuLevel, SPECIAL: SP, SWING: SW } = R.config;
+  const RISE = R.config.PLAYER.SMASH_LEAP_T * R.config.PLAYER.SMASH_LEAP_RISE;
+  const DUNK_LIFT = SW.SMASH_JUMP_H * SP.DUNK.JUMP_MULT;
+  /** ネットへ詰めている CPU へ、頭上を越えそうな山なりの球を1本送って、打つまで進める */
+  const lobAtNet = (dunk) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.setSpecials(R.config.SPECIAL_MOVES.map((m) => m.key));
+    g.start(false, 'you');
+    Object.assign(g, { phase: 'rally', serveInFlight: false, wind: 0, windZ: 0, cpuNetRush: true });
+    g.cpu.x = 0;
+    g.cpu.z = 4;
+    const from = { x: 0, y: 1.0, z: -HALF_L + 0.5 };
+    Object.assign(g.ball,
+      R.physics.solveShot(from, { x: 0.3, y: R.config.PHYSICS.BALL_R, z: 7 }, 1.3, undefined, 'flat', 0),
+      from, { live: true, last: 'you', bounces: 0, age: 0, spin: 'flat', wind: 0, windZ: 0, curve: 0 });
+    g.ball.shotSpeed = Math.hypot(g.ball.vx, g.ball.vz);
+    g.lastBallOwnerSeen = 'you';
+    g.dunkCommit.cpu = dunk;
+    g.jackCommit.cpu = false;
+    let leaptBeforeHit = false;
+    let airborneAtHit = null;
+    let lift = null;
+    for (let f = 0; f < 240 && g.ball.last === 'you'; f++) {
+      g.update(1 / 60);
+      if (g.ball.last === 'cpu') {
+        airborneAtHit = g.cpu.leap ? g.cpu.leap.span - g.cpu.leap.t : null;
+        lift = g.cpu.leap ? g.cpu.leap.lift : null;
+      } else if (g.cpu.leap) {
+        leaptBeforeHit = true;
+      }
+    }
+    return { g, leaptBeforeHit, airborneAtHit, lift };
+  };
+  const atTop = (t) => t !== null && t >= RISE - 1 / 60 && t <= RISE + 2 / 60;
+  applyCpuLevel('hard');
+  try {
+    const smash = lobAtNet(false);
+    ok(smash.g.cpu.stroke === 'smash' && smash.g.cpu.special === null,
+      `precondition: the AI smashes this lob, got ${smash.g.cpu.stroke}/${smash.g.cpu.special}`);
+    ok(smash.leaptBeforeHit, 'the AI is already in the air before it smashes');
+    ok(atTop(smash.airborneAtHit),
+      `and meets the ball at the top of the jump (${RISE.toFixed(3)}s after take-off), got ${smash.airborneAtHit}`);
+    ok(smash.lift > 0 && smash.lift < DUNK_LIFT * 0.5,
+      `a plain smash jumps only as high as the contact needs, got ${smash.lift}`);
+    const dunk = lobAtNet(true);
+    ok(dunk.g.cpu.special === 'dunkSmash', `with the roll it is a dunk, got ${dunk.g.cpu.special}`);
+    ok(dunk.leaptBeforeHit && atTop(dunk.airborneAtHit),
+      `the dunk is also jumped before it is hit, got ${dunk.airborneAtHit}`);
+    ok(Math.abs(dunk.lift - DUNK_LIFT) < 0.02, `and at the dunk height, got ${dunk.lift} vs ${DUNK_LIFT}`);
   } finally {
     applyCpuLevel('normal');
   }
