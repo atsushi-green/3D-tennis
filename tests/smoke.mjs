@@ -9789,5 +9789,47 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   ok(checked > 100, `enough line-side bounces were checked, got ${checked}`);
 }
 
+// --- Extreme：角へ振られても、ロブに逃げず深い球で守る ---
+// ユーザー報告「ベースラインの打ち合いで CPU がロブを上げてくるので、それを強打すると CPU が
+// 弱い球しか返せなくなり、左右に振って勝ててしまう」。強い球で角へ振られると CPU は 4〜5m
+// 走る。Hard まではそれで追い込まれた扱い（山なりで浅い球・ロブ）になるが、Extreme は崩れない。
+{
+  const { CPU, applyCpuLevel } = R.config;
+  const { clamp } = R.math;
+  const RUN = 4.5; // 角へ振られた1本で走る距離(m)
+  const sample = (level) => {
+    applyCpuLevel(level);
+    const stretch = clamp((RUN - CPU.STRETCH_DIST_MIN) / (CPU.STRETCH_DIST_MAX - CPU.STRETCH_DIST_MIN), 0, 1);
+    let lobs = 0;
+    let rally = 0;
+    let depth = 0;
+    let flight = 0;
+    const n = 600;
+    for (let i = 0; i < n; i++) {
+      const shot = R.ai.cpuShot({ x: 0.5, z: -HALF_L - 0.5 }, -1, stretch);
+      if (shot.lob) {
+        lobs++;
+        continue;
+      }
+      rally++;
+      depth += Math.abs(shot.target.z);
+      flight += shot.flight;
+    }
+    return { lob: lobs / n, depth: depth / rally, flight: flight / rally };
+  };
+  try {
+    const hard = sample('hard');
+    const extreme = sample('extreme');
+    ok(hard.lob > 0.2 && hard.depth < 7.5,
+      `precondition: a 4.5m run still rattles Hard (lob ${hard.lob.toFixed(2)}, depth ${hard.depth.toFixed(2)}m)`);
+    ok(extreme.lob < 0.12, `Extreme rarely lobs after being pulled wide, got ${extreme.lob.toFixed(2)}`);
+    ok(extreme.depth > 8, `and still keeps it deep, got ${extreme.depth.toFixed(2)}m from the net`);
+    ok(extreme.flight < hard.flight - 0.2,
+      `and flatter than Hard, got ${extreme.flight.toFixed(2)}s vs ${hard.flight.toFixed(2)}s`);
+  } finally {
+    applyCpuLevel('normal');
+  }
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);
