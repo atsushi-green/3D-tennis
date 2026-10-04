@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    CAMERA, FX, PLAYER, SPECIAL, THEME, REPLAY, HALF_L, LINE_CALL, BALL_MARK, SURFACE,
+    CAMERA, FX, PLAYER, SPECIAL, THEME, REPLAY, HALF_L, LINE_CALL, BALL_MARK, SURFACE, MATCH_POINT,
   } = RallyOne.config;
   const { lerp, clamp } = RallyOne.math;
   const scene3d = RallyOne.scene;
@@ -35,7 +35,9 @@
     const ballMarks = scene3d.createBallMarks();
     // 風向きの旗も会場の側（風は会場に吹いているので、回った後も会場に対して同じ向きになびく）
     const flags = scene3d.createFlags();
-    venue.add(officials, ballMarks.group, scene3d.createCrowd(), flags, stage.sun);
+    // 観客（マッチポイントの演出で沸く。updateCrowd() に盛り上がりの度合いを渡す）
+    const crowd = scene3d.createCrowd();
+    venue.add(officials, ballMarks.group, crowd, flags, stage.sun);
     scene.add(court, scene3d.createNet(), venue);
 
     const you = scene3d.createPlayer(THEME.YOU, 'you');
@@ -102,6 +104,44 @@
       camera.position.y = lerp(camera.position.y, CAMERA.HEIGHT, t);
       camera.position.z = lerp(camera.position.z, -CAMERA.BACK, t);
       camera.lookAt(follow.look, CAMERA.LOOK_AT.y, CAMERA.LOOK_AT.z);
+    }
+
+    /**
+     * 別のカット（リプレイ・マッチポイントの演出）から、いつもの画面へ瞬時に切り戻す
+     * （lerp だと数フレームかけて振れながら戻り、その途中が見えてしまうため）。
+     */
+    function snapCamera(player) {
+      setFov(CAMERA.FOV);
+      const follow = cameraFollowX(player.x);
+      camera.position.set(follow.pos, CAMERA.HEIGHT, -CAMERA.BACK);
+      camera.lookAt(follow.look, CAMERA.LOOK_AT.y, CAMERA.LOOK_AT.z);
+    }
+
+    function setFov(fov) {
+      if (camera.fov === fov) return;
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
+    }
+
+    // --- マッチポイントの演出（game.matchPointCut。カメラを観客席へ切り替えて回す） ---
+    let cutShown = false; // 前のフレームで演出のカメラを映していたか（終わった瞬間に切り戻す）
+    let crowdHype = 0;    // 観客の盛り上がり（0〜1。演出の間に上がり、終わると収まる）
+
+    /**
+     * コートの外周の楕円を回りながら、外側＝観客席を映すカメラ（MATCH_POINT.CAMERA）。
+     * 位置は演出の経過時間（ゲームの時計）だけで決まる＝毎回同じ画になり、切り替わった
+     * 最初のコマから lerp なしでその位置にいる（＝カットが切り替わって見える）。
+     * スタンドは点対称なので、チェンジエンズで会場が回っていても同じ道筋でよい。
+     * @param {{t:number}} cut game.matchPointCut
+     */
+    function placeMatchPointCamera(cut) {
+      const C = MATCH_POINT.CAMERA;
+      const u = clamp(cut.t / MATCH_POINT.DURATION, 0, 1);
+      const angle = lerp(C.FROM, C.TO, lerp(u, u * u * (3 - 2 * u), C.EASE));
+      const ahead = angle + C.LEAD;
+      setFov(C.FOV);
+      camera.position.set(C.RADIUS_X * Math.sin(angle), C.HEIGHT, C.RADIUS_Z * Math.cos(angle));
+      camera.lookAt(C.LOOK_RADIUS_X * Math.sin(ahead), C.LOOK_Y, C.LOOK_RADIUS_Z * Math.cos(ahead));
     }
 
     /**
@@ -449,6 +489,10 @@
       // 座標へ戻して渡す＝チェンジエンズの瞬間に旗がくるりと向きを変えたりしない。
       const venueSide = state.endsSwapped ? -1 : 1;
       scene3d.updateFlags(flags, state.wind * venueSide, state.windZ * venueSide, dt);
+      const cut = state.matchPointCut;
+      const H = MATCH_POINT.CROWD;
+      crowdHype = cut ? Math.min(1, crowdHype + dt * H.RISE) : Math.max(0, crowdHype - dt * H.FALL);
+      scene3d.updateCrowd(crowd, crowdHype, dt);
       // 録画は再生中も止めない：裏では game.update() が実際の試合を進め続けているので、
       // ここで録り漏らすと再生の直後に次のポイントがすぐ終わったとき history が
       // 足りず（history.length<2）、そのポイントのリプレイだけ出せなくなってしまう。
@@ -490,10 +534,7 @@
         }
         replaying = false; // 再生し終わったら通常表示へ戻る
         // 横視点で静止していた状態から通常カメラへは lerp させず瞬時に切り替える
-        // （lerp だと数フレームかけて振れながら戻り、本編がその途中で見えてしまうため）
-        const follow = cameraFollowX(state.you.x);
-        camera.position.set(follow.pos, CAMERA.HEIGHT, -CAMERA.BACK);
-        camera.lookAt(follow.look, CAMERA.LOOK_AT.y, CAMERA.LOOK_AT.z);
+        snapCamera(state.you);
       }
 
       applyFrame(state, dt, serveStages(state));
@@ -510,7 +551,15 @@
       // 練習モードの移動のレッスンの目印（それ以外は出さない）
       scene3d.placePracticeTarget(practiceTarget, state.practice && state.practice.target);
 
-      syncCamera(state.you, dt);
+      if (cut) {
+        placeMatchPointCamera(cut);
+        cutShown = true;
+      } else if (cutShown) {
+        cutShown = false;
+        snapCamera(state.you);
+      } else {
+        syncCamera(state.you, dt);
+      }
     }
 
     /** スタート画面でのサーフェス選択を、コートの見た目（テクスチャ色）へ反映する。 */

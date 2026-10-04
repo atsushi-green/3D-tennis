@@ -69,8 +69,10 @@
 
   /**
    * フィルタを通したノイズを1発鳴らす（ノイズ層／ブラシ層／擦過音／拍手の1粒）。
-   * @param {{vol:number, hz:number, dur:number, q?:number, type?:string, at?:number}} o
+   * @param {{vol:number, hz:number, dur:number, q?:number, type?:string, at?:number,
+   *   dest?:AudioNode}} o
    *   at ＝ 今から何秒後に鳴らすか（拍手を時間差でばらまくのに使う。既定は即時）
+   *   dest ＝ つなぐ先（既定はスピーカー。まとめて音量を絞りたい音はつまみを渡す）
    */
   function noiseVoice(ac, o) {
     const vol = jVol(o.vol);
@@ -85,7 +87,7 @@
     filter.frequency.value = jHz(o.hz);
     filter.Q.value = o.q === undefined ? 1 : o.q;
     const t0 = ac.currentTime + at;
-    src.connect(filter).connect(envelope(ac, vol, dur, undefined, at)).connect(ac.destination);
+    src.connect(filter).connect(envelope(ac, vol, dur, undefined, at)).connect(o.dest || ac.destination);
     src.start(t0, Math.random() * Math.max(0, buffer.duration - dur));
     src.stop(t0 + dur);
   }
@@ -159,7 +161,7 @@
    * @param {number} rallyShots このポイントで何本打たれたか（サーブも1本）
    * @param {'ace'|'winner'|'error'|'doubleFault'} outcome 決まり方
    * @param {'you'|'cpu'} winner 取った側
-   * @param {'set'|'break'|'game'|'saved'|null} [stake] その1点に何がかかっていたか
+   * @param {'match'|'break'|'game'|'saved'|null} [stake] その1点に何がかかっていたか
    *   （scoring.pointStakes()）。決めた側から見た意味で、'saved' は「かけられていた側が
    *   凌いだ」。null（ふつうの1点）なら倍率1＝従来とまったく同じ音になる。
    */
@@ -279,10 +281,12 @@
   }
 
   /**
-   * 観客の声（「おぉ…」・ため息）。AUDIO.CROWD.OOH / SIGH のコメント参照。
-   * @param {object} V AUDIO.CROWD.OOH か SIGH
+   * 観客の声（「おぉ…」・ため息・マッチポイントの「ワー」）。AUDIO.CROWD.OOH / SIGH /
+   * MATCH_POINT.CHEER のコメント参照。
+   * @param {object} V AUDIO.CROWD.OOH か SIGH か MATCH_POINT.CHEER
+   * @param {AudioNode} [dest] つなぐ先（既定はスピーカー）
    */
-  function crowdVoices(V) {
+  function crowdVoices(V, dest) {
     const ac = context();
     if (!ac) return;
     try {
@@ -295,7 +299,7 @@
       out.gain.linearRampToValueAtTime(vol, t0 + V.ATTACK);
       out.gain.setValueAtTime(vol, t0 + dur * V.HOLD);
       out.gain.linearRampToValueAtTime(SILENCE, t0 + dur);
-      out.connect(ac.destination);
+      out.connect(dest || ac.destination);
       // 声の束 → フォルマント3本（並列）→ エンベロープ。人数で割って束の音量を揃える
       const bus = ac.createGain();
       bus.gain.value = 1 / Math.sqrt(V.VOICES);
@@ -330,6 +334,77 @@
         breath.start(t0, Math.random() * Math.max(0, buffer.duration - dur));
         breath.stop(t0 + dur);
       }
+    } catch (e) {
+      /* 音が出ないだけなのでゲームは続行 */
+    }
+  }
+
+  /**
+   * 試合で初めてのマッチポイントの演出の間、スタンドが沸き続ける音（AUDIO.CROWD.MATCH_POINT）。
+   * 長く伸ばした歓声（ループさせたノイズの山）・鳴りやまない拍手・「ワー」という声の波を、
+   * 1本のつまみ（master）にまとめて鳴らす。演出が終わったら（Space で切り上げても）
+   * settleRoar() がそのつまみを絞り、サーブの構えに合わせて静まらせる。
+   */
+  let roar = null;
+
+  /** @param {'you'|'cpu'} team あと1点で勝つ側 */
+  function matchPointRoar(team) {
+    const ac = context();
+    if (!ac) return;
+    settleRoar();
+    try {
+      const M = AUDIO.CROWD.MATCH_POINT;
+      const master = ac.createGain();
+      master.gain.value = M.TEAM_VOL[team] === undefined ? 1 : M.TEAM_VOL[team];
+      master.connect(ac.destination);
+      const t0 = ac.currentTime;
+      const dur = jDur(M.DUR);
+      const vol = jVol(M.VOL);
+
+      const src = ac.createBufferSource();
+      src.buffer = noiseBuffer(ac);
+      // 材料（AUDIO.NOISE_BUFFER_SEC）より長く鳴らすので繰り返す（ノイズなので継ぎ目は聞こえない）
+      src.loop = true;
+      const filter = ac.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.value = jHz(M.HZ);
+      filter.Q.value = M.Q;
+      // 指数で落とす envelope() だと出た直後から萎んで聞こえるので、立ち上がって保ってから消す
+      const env = ac.createGain();
+      env.gain.setValueAtTime(SILENCE, t0);
+      env.gain.linearRampToValueAtTime(vol, t0 + M.ATTACK);
+      env.gain.setValueAtTime(vol, t0 + dur * M.HOLD);
+      env.gain.linearRampToValueAtTime(SILENCE, t0 + dur);
+      src.connect(filter).connect(env).connect(master);
+      src.start(t0, Math.random() * src.buffer.duration);
+      src.stop(t0 + dur);
+
+      const P = M.CLAP;
+      for (let i = 0; i < P.COUNT; i++) {
+        noiseVoice(ac, {
+          type: 'highpass', vol: P.VOL, hz: P.HZ, q: 0.7, dur: P.DUR,
+          at: P.DELAY + Math.random() * P.WINDOW, dest: master,
+        });
+      }
+      M.CHEER_AT.forEach((at) => crowdVoices({ ...M.CHEER, DELAY: at }, master));
+      roar = { master, end: t0 + dur };
+    } catch (e) {
+      /* 音が出ないだけなのでゲームは続行 */
+    }
+  }
+
+  /** 演出が終わった（切り上げた）ら、鳴っている分を AUDIO.CROWD.MATCH_POINT.SETTLE 秒で静める。 */
+  function settleRoar() {
+    const r = roar;
+    roar = null;
+    const ac = r && context();
+    if (!ac || ac.currentTime >= r.end) return;
+    try {
+      const now = ac.currentTime;
+      const gain = r.master.gain;
+      gain.cancelScheduledValues(now);
+      gain.setValueAtTime(gain.value, now);
+      gain.linearRampToValueAtTime(0, now + AUDIO.CROWD.MATCH_POINT.SETTLE);
     } catch (e) {
       /* 音が出ないだけなのでゲームは続行 */
     }
@@ -552,6 +627,9 @@
      * のコメント参照）。今は歓声と拍手の大きさ・明るさだけで勝敗が分かる。
      */
     point: (winner, outcome, rallyShots, stake) => crowd(rallyShots, outcome, winner, stake),
+    /** 試合で初めてのマッチポイントの演出が始まった（スタンドが沸き続ける）／終わった（静まる）。 */
+    matchPoint: (team) => matchPointRoar(team),
+    matchPointEnd: () => settleRoar(),
   };
 
   RallyOne.audio = { unlock, sfx };

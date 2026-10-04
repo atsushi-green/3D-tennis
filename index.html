@@ -33,6 +33,9 @@
   <!-- チェンジエンズの暗転幕。#hud の先頭に置く＝スコアボードやコールはこの上に重なって
        見えたまま（中継で休憩中もスコアが出ているのと同じ）。濃さは hud.setShade() が入れる。 -->
   <div id="shade"></div>
+  <!-- マッチポイントの演出（観客席を映すカット）の間だけ、上下から出る黒い帯（映画の画面比）。
+       #hud.cinema が付くと伸びてくる（hud.setCinema()）。 -->
+  <div id="letterbox"><div class="bar top"></div><div class="bar bottom"></div></div>
   <!-- 練習モードのレッスン（題・やること・成功した本数）。練習中だけ #hud.practice が付いて、
        スコアボードの代わりに左上へ出る。中身は hud.setPractice() が game.practice から入れる。 -->
   <div id="lesson">
@@ -49,7 +52,7 @@
         <div class="nm" id="n2">CPU</div><div class="gm" id="g2">0</div><div class="pt" id="p2">0</div>
       </div>
     </div>
-    <!-- 次の1点に何がかかっているか（ブレーク／ゲーム／セットポイント）。かかっていない
+    <!-- 次の1点に何がかかっているか（ブレーク／ゲーム／マッチポイント）。かかっていない
          ポイントでは hud が中身を空にするので :empty で行ごと消える（風・サーブ速度と同じ作り）。 -->
     <div id="stakes"></div>
     <div id="stats">A <span id="ace1">0</span>–<span id="ace2">0</span> · DF <span id="df1">0</span>–<span id="df2">0</span></div>
@@ -99,7 +102,7 @@
       <span><b>K</b> キックサーブ（必殺技。B/V/C の代わりに押してトス）</span>
       <span><b>Q/E</b> パートナーに前へ／下がれ（ダブルス）</span>
       <span><b>R/F</b> サーブ前に自分が前／後ろに立つ（ダブルス）</span>
-      <span><b>Space</b> リプレイ／休憩をスキップ</span>
+      <span><b>Space</b> リプレイ／休憩／演出をスキップ</span>
     </div>
   </div>
 </div>

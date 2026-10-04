@@ -6,9 +6,9 @@
   'use strict';
 
   const {
-    ATTRS, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, FX, HALF_L, HALF_W, LINE_CALL, NET, PHYSICS,
-    PLAYER, PRACTICE, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, SWING, TIMING,
-    TIMING_AIM, TRAIL, VOLLEY, WIND, shotSkill,
+    ATTRS, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, FX, HALF_L, HALF_W, LINE_CALL, MATCH_POINT,
+    NET, PHYSICS, PLAYER, PRACTICE, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, SWING,
+    TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND, shotSkill,
   } = RallyOne.config;
   const {
     approach2D, clamp, lerp, mpsToKmh, rand, signOr,
@@ -985,6 +985,14 @@
        */
       this.changeover = null;
       /**
+       * 試合で初めてのマッチポイントの演出の最中だけ { t, team } が入る（それ以外は null）。
+       * t＝始まってからの秒数、team＝あと1点で勝つ側。演出の間は update() が試合を止め、
+       * 表示側（scene/world.js）がカメラを観客席へ回す。matchPointCutDone は、この試合で
+       * もう演出を出したか（2回目以降のマッチポイントでは出さない）。
+       */
+      this.matchPointCut = null;
+      this.matchPointCutDone = false;
+      /**
        * 練習モード（startPractice()）の進み具合。試合中は null。
        * { lesson, done, tries, rep, cleared, shot, fired, target }：lesson＝config.PRACTICE の
        * レッスン、done／tries＝成功した本数／打った本数、rep＝何本目か（立ち位置・出す球を
@@ -1178,6 +1186,9 @@
      *   input.js はそのときキーを「溜めているキー」として握らない（B/V/C を塞がない）。
      */
     chargeStart(spin = 'flat', kick = false) {
+      // マッチポイントの演出中は、いつもの画面に戻るまでトスを上げさせない（相手のサーブを
+      // 待つ側の構えは、ポイント間の 'over' と同じく下で受け付ける）
+      if (this.matchPointCut && this.servingPlayer() === 'you') return false;
       // 自分がサーブする番（＝ダブルスで味方が回ってきているときは対象外）のときだけ反応する
       const myServe = this.phase === 'serve' && this.servingPlayer() === 'you';
       // もう振り出していて、トスが落ちてくるのを待っているだけ（swingServe()）。押し直しても
@@ -2009,6 +2020,38 @@
       return clamp(1 - (co.t - CHANGEOVER.FADE_T - co.hold) / CHANGEOVER.FADE_T, 0, 1);
     }
 
+    /**
+     * 試合で初めてのマッチポイントの演出を始める（beginServe() が構えを作った直後）。
+     * 選手はもう構えに立っていて、CPU/AI のサーブも予約済みだが、演出の間は update() が
+     * 試合の時計ごと止めるので、サーブは演出が終わってからいつもの一拍をおいて来る。
+     * @param {'you'|'cpu'} team あと1点で勝つ側
+     */
+    beginMatchPointCut(team) {
+      this.matchPointCutDone = true;
+      this.matchPointCut = { t: 0, team };
+      this.hooks.call('マッチポイント', `${team === 'you' ? 'YOU' : 'CPU'} があと1ポイントで勝利 ／ SPACE でスキップ`);
+      this.hooks.sound('matchPoint', team);
+    }
+
+    tickMatchPointCut(dt) {
+      const cut = this.matchPointCut;
+      if (!cut) return;
+      cut.t += dt;
+      if (cut.t >= MATCH_POINT.DURATION) this.endMatchPointCut();
+    }
+
+    /** 演出を切り上げる（Space）。 */
+    skipMatchPointCut() {
+      if (this.matchPointCut) this.endMatchPointCut();
+    }
+
+    /** 演出を終えて、いつもの画面のサーブ待ちへ戻る（演出のコールを構えの案内に差し替える）。 */
+    endMatchPointCut() {
+      this.matchPointCut = null;
+      this.hooks.sound('matchPointEnd');
+      this.announceServe();
+    }
+
     /** コートを入れ替わる。会場の向きは表示側が endsSwapped を見て回す。 */
     swapEnds() {
       this.endsSwapped = !this.endsSwapped;
@@ -2067,11 +2110,17 @@
     beginServe(faultReason) {
       this.resetPointState();
       this.phase = 'serve';
-      // この1点に何がかかっているか（ブレークポイント／セットポイント）。スコアと
+      // この1点に何がかかっているか（ブレークポイント／マッチポイント）。スコアと
       // サーバーだけで決まる＝ポイント中は変わらないので、ここで一度だけ求める
       // （セカンドサーブでもう一度通っても同じ結果になる）。
       this.stakes = pointStakes(this.match, this.server);
       this.placeForServe(faultReason);
+      // 試合で初めてのマッチポイントは、構えに入ったところで演出を挟む。セカンドサーブで
+      // 構え直すのは同じ1点なので出さない（練習モードは得点をつけないので、そもそも立たない）。
+      const stakes = this.stakes;
+      if (stakes && stakes.kind === 'match' && !faultReason && !this.practice && !this.matchPointCutDone) {
+        this.beginMatchPointCut(stakes.team);
+      }
     }
 
     /**
@@ -2176,6 +2225,18 @@
         // cpu チームの前衛は、いまネット際に置いた方（サーバー／レシーバーの相方）。
         this.frontOf.cpu = MATE_OF[serverTeam === 'cpu' ? server : receiver];
       }
+      this.announceServe(faultReason);
+      if (server !== 'you') this.scheduleAiServe(server);
+      this.placeServeBall();
+    }
+
+    /**
+     * サーブ待ちの案内（中央のコール）を出す。placeForServe() と、マッチポイントの演出を
+     * 終えたとき（演出のコールを差し替える）の両方から呼ぶ。
+     * @param {string} [faultReason] セカンドサーブのときだけ渡す（'ネット'|'アウト'）
+     */
+    announceServe(faultReason) {
+      const server = this.servingPlayer();
       // 自分がサーバーでもレシーバーでもない番（ダブルス）は、サーブ前に立ち位置を選べる
       const standHint = this.doubles && !this.serveDuty('you') ? 'R/F で自分が前／後ろに立つ' : '';
 
@@ -2187,13 +2248,10 @@
       } else if (server === 'youMate') {
         // 人間のチームだが、今回は相方の番。人間は（立ち位置を選ぶ以外）何もしなくてよい
         this.hooks.call(faultReason ? 'パートナーのセカンドサーブ' : 'パートナーのサーブ', faultReason || standHint);
-        this.scheduleAiServe('youMate');
       } else {
         const sub = standHint ? `CPU のサーブ ／ ${standHint}` : 'CPU のサーブ';
         this.hooks.call(faultReason ? 'セカンドサーブ' : 'リターン', faultReason ? `${faultReason}／CPU` : sub);
-        this.scheduleAiServe(server);
       }
-      this.placeServeBall();
     }
 
     /**
@@ -3381,7 +3439,7 @@
       const outcome = reason === 'ダブルフォルト' ? 'doubleFault'
         : isAce ? 'ace'
           : reason === 'ツーバウンド' ? 'winner' : 'error';
-      // かかっていた1点（ブレークポイント／セットポイント）は、取っても凌いでも
+      // かかっていた1点（ブレークポイント／マッチポイント）は、取っても凌いでも
       // 観客の沸き方が変わる。取った＝その技の見出しそのまま、凌いだ＝'saved'。
       const stakes = this.stakes;
       const stakeKey = !stakes ? null : (stakes.team === winner ? stakes.kind : 'saved');
@@ -3444,6 +3502,7 @@
         this.after(TIMING.NEXT_MATCH, () => {
           this.match.reset();
           this.resetStats(); // 次のマッチは0から数え直す（スタッツ画面はもう出した後）
+          this.matchPointCutDone = false; // 次のマッチの最初のマッチポイントでも演出を出す
           this.serverPartner = { you: 'you', cpu: 'cpu' }; // 次のセットは主力からサーブし直す
           this.hooks.score();
           // セット間の休憩。ゲーム数が奇数で終わったセットなら、その間にコートも入れ替わる。
@@ -3660,6 +3719,14 @@
     /* -------------------------------------------------------- 毎フレーム */
 
     update(dt) {
+      // マッチポイントの演出の間は、試合そのもの（タイマー・選手・球・溜め）を止める。
+      // チェンジエンズの明転だけは進める（タイブレークの入れ替わりの直後に演出が始まると、
+      // 暗転幕が掛かったまま止まってしまうため）。
+      if (this.matchPointCut) {
+        this.tickChangeover(dt);
+        this.tickMatchPointCut(dt);
+        return;
+      }
       this.tickTimers(dt);
       this.tickChangeover(dt);
 

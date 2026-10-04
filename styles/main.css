@@ -35,6 +35,15 @@ canvas{display:block}
 /* チェンジエンズの暗転幕（opacity は hud.setShade() が毎フレーム入れる） */
 #shade{position:absolute;inset:0;background:var(--ink);opacity:0}
 
+/* マッチポイントの演出の間だけ上下から出る黒い帯（#hud.cinema。hud.setCinema()）。
+   スコアボードとコールはこの上に重なって見えたまま。操作の案内（#bottom）は引っ込める。 */
+#letterbox .bar{position:absolute;left:0;right:0;height:0;background:#000;transition:height .3s ease}
+#letterbox .top{top:0}
+#letterbox .bottom{bottom:0}
+#hud.cinema #letterbox .bar{height:11vh}
+#bottom{transition:opacity .3s}
+#hud.cinema #bottom{opacity:0}
+
 /* broadcast-style scorebug */
 #bug{
   display:grid;grid-template-columns:auto 46px 56px;
@@ -60,9 +69,9 @@ canvas{display:block}
   font-size:11px;letter-spacing:.04em;color:var(--dim);
   font-variant-numeric:tabular-nums;
 }
-/* 次の1点にかかっているもの（ブレーク／ゲーム／セットポイント）。実況のテロップに
+/* 次の1点にかかっているもの（ブレーク／ゲーム／マッチポイント）。実況のテロップに
    当たるので、スコアボード脇でいちばん強く主張してよい唯一の表示にする。
-   色で意味を分ける：ブレークポイント＝赤（サーブ側が崩れる1点）、セットポイント＝金
+   色で意味を分ける：ブレークポイント＝赤（サーブ側が崩れる1点）、マッチポイント＝金
    （試合が決まる1点）、ゲームポイント＝スコアバーと同じ黄緑（ふつうの山場）。
    かかっていないポイントでは中身が空になり :empty で消える。 */
 #stakes{
@@ -75,7 +84,7 @@ canvas{display:block}
 }
 #stakes:empty{display:none}
 #stakes.brk{color:#ff6b6b}
-#stakes.set{color:#ffc83d}
+#stakes.match{color:#ffc83d}
 /* 誰にかかっているか。見出しより一段落として、色は見出しから受け継ぐ */
 #stakes .who{font-size:11px;font-weight:400;letter-spacing:.04em;opacity:.8;margin-left:6px}
 @keyframes stakePulse{0%,100%{opacity:1}50%{opacity:.62}}

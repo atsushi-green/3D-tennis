@@ -96,7 +96,7 @@ ok(pointLabel(3, 3) === '40' && pointLabel(4, 3) === 'Ad' && pointLabel(3, 4) ==
   ok(m.serveSide === -1, `after 2 tiebreak points, the serve side flips back, got ${m.serveSide}`);
 }
 
-// --- ブレークポイント／ゲームポイント／セットポイントの判定（scoring.pointStakes） ---
+// --- ブレークポイント／ゲームポイント／マッチポイントの判定（scoring.pointStakes） ---
 {
   const { pointStakes } = R.scoring;
   /** 判定結果を「呼び名(取れば決まる側) bp=ブレークのチャンスか」の1行に畳む */
@@ -117,21 +117,22 @@ ok(pointLabel(3, 3) === '40' && pointLabel(4, 3) === 'Ad' && pointLabel(3, 4) ==
   ok(at({ points: { you: 3, cpu: 4 } }, 'you') === 'ブレークポイント(cpu) bp=true', 'advantage against serve is a break point');
   ok(at({ points: { you: 2, cpu: 0 } }, 'you') === 'なし', '30-0 is not a game point yet');
 
-  // セットまで決まる1点は「セットポイント」が見出しになる
-  ok(at({ ...g(5, 0), points: { you: 3, cpu: 0 } }, 'you') === 'セットポイント(you) bp=false',
-    '5-0 40-0 on serve is a set point');
-  ok(at({ ...g(0, 5), points: { you: 0, cpu: 3 } }, 'you') === 'セットポイント(cpu) bp=true',
-    'a set point won by the receiver is still counted as a break chance');
+  // 1セットマッチなので、セット（＝試合）まで決まる1点は「マッチポイント」が見出しになる
+  // （以前は「セットポイント」と出ていた）
+  ok(at({ ...g(5, 0), points: { you: 3, cpu: 0 } }, 'you') === 'マッチポイント(you) bp=false',
+    '5-0 40-0 on serve is a match point');
+  ok(at({ ...g(0, 5), points: { you: 0, cpu: 3 } }, 'you') === 'マッチポイント(cpu) bp=true',
+    'a match point won by the receiver is still counted as a break chance');
   // 5-6 で1ゲーム取っても 6-6＝タイブレークに入るだけ（セットは決まらない）
   ok(at({ ...g(5, 6), points: { you: 3, cpu: 0 } }, 'you') === 'ゲームポイント(you) bp=false',
-    `5-6 40-0 only reaches 6-6 (a tiebreak), so it is not a set point yet, got ${at({ ...g(5, 6), points: { you: 3, cpu: 0 } }, 'you')}`);
-  ok(at({ ...g(6, 5), points: { you: 3, cpu: 0 } }, 'you') === 'セットポイント(you) bp=false',
-    '6-5 40-0 on serve is a set point (7-5 takes the set)');
+    `5-6 40-0 only reaches 6-6 (a tiebreak), so it is not a match point yet, got ${at({ ...g(5, 6), points: { you: 3, cpu: 0 } }, 'you')}`);
+  ok(at({ ...g(6, 5), points: { you: 3, cpu: 0 } }, 'you') === 'マッチポイント(you) bp=false',
+    '6-5 40-0 on serve is a match point (7-5 takes the set and the match)');
 
-  // タイブレーク：取ればセットなので常にセットポイント。ブレークとしては数えない
+  // タイブレーク：取ればセット（＝試合）なので常にマッチポイント。ブレークとしては数えない
   const tb = { games: { you: 6, cpu: 6 }, tiebreak: true };
-  ok(at({ ...tb, tiebreakPoints: { you: 6, cpu: 3 } }, 'cpu') === 'セットポイント(you) bp=false',
-    'a tiebreak point to close it out is a set point, and never a break point');
+  ok(at({ ...tb, tiebreakPoints: { you: 6, cpu: 3 } }, 'cpu') === 'マッチポイント(you) bp=false',
+    'a tiebreak point to close it out is a match point, and never a break point');
   ok(at({ ...tb, tiebreakPoints: { you: 5, cpu: 5 } }, 'you') === 'なし', '5-5 in a tiebreak has nothing riding on it');
   ok(at({ ...tb, tiebreakPoints: { you: 6, cpu: 6 } }, 'you') === 'なし', '6-6 in a tiebreak needs a 2-point margin');
 
@@ -224,6 +225,94 @@ const noHooks = {
   g3.endPoint('you', 'ツーバウンド');
   const plain = sounds.find((sfx) => sfx[0] === 'point');
   ok(!!plain && plain[4] === null, `an ordinary point passes null, got ${JSON.stringify(plain)}`);
+}
+
+// --- 試合で初めてのマッチポイントは、構えに入ったところで演出を挟み、その間は試合が止まる ---
+{
+  const { MATCH_POINT, TIMING } = R.config;
+  const calls = [];
+  const sounds = [];
+  const hooks = {
+    ...noHooks,
+    call: (big, sub) => calls.push(`${big}|${sub || ''}`),
+    sound: (name, ...args) => sounds.push([name, ...args]),
+  };
+  /** 決まった1点から、ポイント間を待って次の構えに入るところまで（実際の進行と同じ順）。 */
+  const playTo = (g, winner) => {
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.endPoint(winner, 'ツーバウンド');
+    for (let i = 0; i < 60 * 3 && g.phase === 'over'; i++) g.update(1 / 60);
+  };
+
+  // 自分のサーブで 5-0 30-0 → 40-0＝試合で初めてのマッチポイント
+  const g = new R.Game({ input: fakeInput, hooks });
+  g.start(false, 'you');
+  g.match.games = { you: 5, cpu: 0 };
+  g.match.points = { you: 2, cpu: 0 };
+  ok(!g.matchPointCut, 'precondition: no cut before the match point');
+  calls.length = 0;
+  sounds.length = 0;
+  playTo(g, 'you');
+  ok(!!g.stakes && g.stakes.kind === 'match' && g.stakes.label === 'マッチポイント',
+    `40-0 at 5-0 is labelled a match point, got ${JSON.stringify(g.stakes)}`);
+  ok(!!g.matchPointCut && g.matchPointCut.team === 'you',
+    `the first match point starts the cut, got ${JSON.stringify(g.matchPointCut)}`);
+  ok(calls[calls.length - 1].startsWith('マッチポイント|'), `and calls it out, got ${calls[calls.length - 1]}`);
+  ok(sounds.some((sfx) => sfx[0] === 'matchPoint' && sfx[1] === 'you'), 'and the crowd roars');
+  // 演出の間はトスを上げられない（いつもの画面に戻るまで待つ）
+  ok(g.chargeStart() === false && !g.tossActive, 'the server cannot toss while the cut plays');
+  for (let i = 0; i < 60; i++) g.update(1 / 60);
+  ok(!!g.matchPointCut && Math.abs(g.matchPointCut.t - 1) < 1e-6 && g.phase === 'serve',
+    `the cut runs on the game clock while the point waits, t=${g.matchPointCut && g.matchPointCut.t}`);
+  // DURATION を過ぎたら、いつものサーブの構えへ戻る（案内も出し直す）
+  calls.length = 0;
+  for (let i = 0; i < 60 * (MATCH_POINT.DURATION + 1) && g.matchPointCut; i++) g.update(1 / 60);
+  ok(!g.matchPointCut, 'the cut ends by itself after MATCH_POINT.DURATION');
+  ok(calls.some((c) => c.startsWith('サーブ|')), `the serve prompt comes back, got ${JSON.stringify(calls)}`);
+  ok(sounds.some((sfx) => sfx[0] === 'matchPointEnd'), 'and the roar is told to settle');
+  ok(g.chargeStart() === true && g.tossActive, 'after the cut the server can toss as usual');
+  g.chargeRelease();
+  untilServed(g);
+
+  // 凌がれて 40-15 になっても、2回目のマッチポイントでは演出を出さない
+  playTo(g, 'cpu');
+  ok(!!g.stakes && g.stakes.kind === 'match', 'precondition: 40-15 is still a match point');
+  ok(!g.matchPointCut, 'the second match point of the match does not replay the cut');
+
+  // CPU のサーブで CPU のマッチポイント：演出の間は CPU もサーブしてこない。Space で切り上げられる
+  const g2 = new R.Game({ input: fakeInput, hooks });
+  g2.start(false, 'cpu');
+  g2.match.games = { you: 0, cpu: 5 };
+  g2.match.points = { you: 0, cpu: 2 };
+  playTo(g2, 'cpu');
+  ok(!!g2.matchPointCut && g2.matchPointCut.team === 'cpu', 'the CPU match point starts the cut too');
+  for (let i = 0; i < 60 * (MATCH_POINT.DURATION - 0.5); i++) g2.update(1 / 60);
+  ok(!!g2.matchPointCut && !g2.aiTossActive && !g2.ball.live && g2.phase === 'serve',
+    'the CPU does not toss while the cut plays (its scheduled serve waits)');
+  g2.skipMatchPointCut();
+  ok(!g2.matchPointCut, 'Space ends the cut at once');
+  let tossed = false;
+  for (let i = 0; i < 60 * (TIMING.CPU_SERVE_READY + 0.5) && !tossed; i++) {
+    g2.update(1 / 60);
+    tossed = g2.aiTossActive;
+  }
+  ok(tossed, 'and the CPU tosses after its usual pause');
+
+  // セカンドサーブで構え直しても（同じ1点なので）出さない
+  const g3 = new R.Game({ input: fakeInput, hooks });
+  g3.start(false, 'you');
+  g3.match.games = { you: 5, cpu: 0 };
+  g3.match.points = { you: 3, cpu: 0 };
+  g3.matchPointCutDone = true; // このマッチではもう出した扱い
+  g3.beginServe('ネット');
+  ok(!g3.matchPointCut, 'a second serve never starts the cut');
+  const g4 = new R.Game({ input: fakeInput, hooks });
+  g4.start(false, 'you');
+  g4.match.games = { you: 5, cpu: 0 };
+  g4.match.points = { you: 3, cpu: 0 };
+  g4.beginServe('ネット');
+  ok(!g4.matchPointCut, 'not even when the match point first shows up on a second serve');
 }
 
 /**
@@ -6735,6 +6824,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     g.endPoint('you', 'ツーバウンド');
     if (last) return;
     for (let i = 0; i < 60 * 3 && g.phase === 'over'; i++) g.update(1 / 60);
+    // 40-0 は試合で初めてのマッチポイント＝演出が終わるまで試合が止まる（実際の進行と同じく待つ）
+    for (let i = 0; i < 60 * 8 && g.matchPointCut; i++) g.update(1 / 60);
   };
   for (let i = 0; i < 3; i++) winPoint(false);
   winPoint(true); // この1本でゲーム＝セットが決まる
@@ -6750,6 +6841,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   for (let i = 0; i < 60 * 4 && g.stats.you.winners > 0; i++) g.update(1 / 60);
   ok(g.stats.you.winners === 0 && g.match.games.you === 0, 'the next match starts from zero');
   ok(ends.length === 1, 'and the summary is not shown twice');
+  ok(g.matchPointCutDone === false, 'and the next match gets its own match point cut again');
 }
 
 // --- 試合後のスタッツ：1stサーブの本数と確率、最速サーブ（実際にサーブを打って数える） ---

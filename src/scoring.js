@@ -115,9 +115,12 @@
     }
   }
 
-  /** kind → 画面に出す呼び名。 */
+  /**
+   * kind → 画面に出す呼び名。1セットマッチなので、セットが決まる1点はそのまま試合が
+   * 決まる1点＝「マッチポイント」（kind も 'match'）。
+   */
   const STAKE_LABELS = {
-    set: 'セットポイント',
+    match: 'マッチポイント',
     break: 'ブレークポイント',
     game: 'ゲームポイント',
   };
@@ -126,17 +129,17 @@
    * 次の1点に何がかかっているか（かかっていなければ null）。
    *
    * 1点でゲームが決まるのは多くても片側だけ（40-40 では両者とも決まらない）なので、
-   * 両方を peek() して先に見つかった方を返せばよい。セットまで決まるなら
-   * 「セットポイント」が最大の見出しで、そうでなければサーバー側なら「ゲームポイント」、
+   * 両方を peek() して先に見つかった方を返せばよい。セット（＝試合）まで決まるなら
+   * 「マッチポイント」が最大の見出しで、そうでなければサーバー側なら「ゲームポイント」、
    * レシーブ側なら「ブレークポイント」。
    *
-   * breakPoint はスタッツ用の別の旗で、見出しが「セットポイント」でも、それが
+   * breakPoint はスタッツ用の別の旗で、見出しが「マッチポイント」でも、それが
    * レシーブ側の1点ならブレークのチャンスとして数える（実際のテニスのスタッツと同じ）。
    * タイブレーク中は数えない（サーブが2本ごとに回るので「ブレーク」の意味が変わるため）。
    *
    * @param {Match} match
    * @param {'you'|'cpu'} server いまサーブしている側
-   * @returns {{team:'you'|'cpu', kind:'set'|'break'|'game', label:string,
+   * @returns {{team:'you'|'cpu', kind:'match'|'break'|'game', label:string,
    *   breakPoint:boolean}|null}
    */
   function pointStakes(match, server) {
@@ -144,7 +147,7 @@
     for (const team of [server, receiver]) {
       const result = match.peek(team);
       if (result.type === 'point') continue;
-      const kind = result.type === 'set' ? 'set' : (team === server ? 'game' : 'break');
+      const kind = result.type === 'set' ? 'match' : (team === server ? 'game' : 'break');
       return {
         team,
         kind,

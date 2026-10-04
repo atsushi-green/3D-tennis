@@ -565,9 +565,9 @@
     }
 
     /**
-     * 次の1点にかかっているもの（ブレーク／ゲーム／セットポイント）をスコアボード脇に出す。
+     * 次の1点にかかっているもの（ブレーク／ゲーム／マッチポイント）をスコアボード脇に出す。
      * 毎フレーム呼ばれるので、中身が変わったときだけ組み立て直す（setSpecialUses と同じ作り）。
-     * @param {{kind:'set'|'break'|'game', label:string, team:'you'|'cpu'}|null} stakes
+     * @param {{kind:'match'|'break'|'game', label:string, team:'you'|'cpu'}|null} stakes
      *   RallyOne.Game#stakes。null（何もかかっていない／ポイントが決着した）なら消す。
      */
     setStakes(stakes) {
@@ -576,7 +576,7 @@
       this.stakesKey = key;
       const el = this.el.stakes;
       el.classList.toggle('brk', !!stakes && stakes.kind === 'break');
-      el.classList.toggle('set', !!stakes && stakes.kind === 'set');
+      el.classList.toggle('match', !!stakes && stakes.kind === 'match');
       if (!stakes) {
         el.replaceChildren(); // :empty で行ごと消える
         return;
@@ -617,6 +617,17 @@
       this.el.shade.style.opacity = amount;
     }
 
+    /**
+     * マッチポイントの演出（観客席を映すカット）の間だけ、上下に黒い帯を出して操作の案内を
+     * 引っ込める。毎フレーム呼ばれるので、変わったときだけ書き込む。
+     * @param {boolean} on game.matchPointCut があるか
+     */
+    setCinema(on) {
+      if (on === this.cinema) return;
+      this.cinema = on;
+      this.el.hud.classList.toggle('cinema', on);
+    }
+
     hideStartScreen() {
       this.el.start.style.display = 'none';
     }
@@ -631,6 +642,7 @@
       this.hideCall();
       this.setReplay(false);
       this.setShade(0);
+      this.setCinema(false);
       this.setCharge(0);
       this.setSpecialTip(null);
       this.setSmashTip(null);

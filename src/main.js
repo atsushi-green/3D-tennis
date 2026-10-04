@@ -276,6 +276,7 @@
     onSkipReplay: () => {
       world.skipReplay();
       game.skipChangeover();
+      game.skipMatchPointCut();
     },
     isMatchStatsOpen: () => matchStatsOpen,
     onCloseMatchStats: () => closeMatchStats(),
@@ -361,9 +362,11 @@
       hud.setReplay(world.isReplaying(), world.isCheckingMark());
       // 観客のざわめきはポイントの合間だけ。サーブの構えに入ると静まり、ラリー中は無音。
       // 1本目のフォールトからセカンドサーブまでの間も静かなまま（'fault' は含めない）
+      // マッチポイントの演出の間も、沸いているスタンドを映しているのでざわめきは消さない
       sfx.murmur(!game.practice && (world.isReplaying() || matchStatsOpen || !!game.changeover
-        || game.phase === 'over'));
+        || !!game.matchPointCut || game.phase === 'over'));
       hud.setShade(game.changeoverShade());
+      hud.setCinema(!!game.matchPointCut);
       hud.setPractice(game.practice);
       // いま Space を押していて技が出る状態なら、溜めバーも金色にする（＝離した瞬間に
       // 何が起きるかが、視線を動かさずにバーだけで分かる）。

@@ -1879,19 +1879,19 @@
       },
       /**
        * 何かがかかっていた1点（scoring.pointStakes()）の上乗せ。キーは取った側から見た
-       * 意味で、'set'/'break'/'game' はかかっていた側が取った＝決めた場合、'saved' は
+       * 意味で、'match'/'break'/'game' はかかっていた側が取った＝決めた場合、'saved' は
        * かけられていた側が凌いだ場合（ブレークポイントを守り切った拍手）。
        * 音量は OUTCOME_VOL_MULT と掛け算になるので控えめに：いちばん重なる
-       * 「セットポイントをエースで決めて自分が取る」で 0.20×1.35×1.2×1.30 ＝ 0.42 と、
+       * 「マッチポイントをエースで決めて自分が取る」で 0.20×1.35×1.2×1.30 ＝ 0.42 と、
        * 打球音のピーク（0.3〜0.5）と同じ範囲に収まるところまで。
        * 長さ（DUR）は別に持つ：大きくするより長く沸かせるほうが「大きな1点だった」
        * という感じが出るため。
        */
       STAKE_VOL_MULT: {
-        set: 1.30, break: 1.15, game: 1.06, saved: 1.12,
+        match: 1.30, break: 1.15, game: 1.06, saved: 1.12,
       },
       STAKE_DUR_MULT: {
-        set: 1.45, break: 1.20, game: 1.05, saved: 1.15,
+        match: 1.45, break: 1.20, game: 1.05, saved: 1.15,
       },
       FILTER_BASE_HZ: 650,    // ざわめき寄りの低め
       FILTER_EXCITED_HZ: 1900, // 歓声寄りの高め（盛り上がるほどこちらに近づく）
@@ -1978,6 +1978,29 @@
         VOICES: 14, PITCH_MIN: 110, PITCH_MAX: 260, PITCH_PEAK: 1.03, PITCH_END: 0.68,
         VOWEL: [600, 1000, 2450], FORMANT_GAIN: [1, 0.55, 0.15], FORMANT_Q: 5, BREATH: 0.6,
       },
+      /**
+       * 試合で初めてのマッチポイントの演出（MATCH_POINT）の間、スタンドが沸き続ける音
+       * （sfx.matchPoint）。ポイントの歓声と同じ材料（帯域を曲げたノイズの山＋拍手の粒）を
+       * 演出の長さぶん伸ばし、「ワー」という声の波を何度か重ねる。演出が終わったら
+       * （Space で切り上げても）SETTLE 秒で静める（sfx.matchPointEnd）＝サーブの構えに合わせて
+       * 会場が静まる。音量はポイントの歓声のいちばん大きい場合（0.42）を超えない範囲。
+       */
+      MATCH_POINT: {
+        VOL: 0.24, DUR: 5.6, ATTACK: 0.35, HOLD: 0.75, // 歓声の山（立ち上がり→HOLDの割合まで保つ→DURで消える）
+        HZ: 1500, Q: 0.6,
+        TEAM_VOL: { you: 1, cpu: 0.75 }, // CPU のマッチポイントでも沸くが、自分のときほどではない
+        CLAP: {
+          COUNT: 110, DELAY: 0.08, WINDOW: 4.6, VOL: 0.05, HZ: 1800, DUR: 0.022,
+        },
+        // 「ワー」（母音アのフォルマント）。CHEER_AT 秒ごとに波を重ねる
+        CHEER: {
+          DELAY: 0, VOL: 0.15, DUR: 1.9, ATTACK: 0.2, HOLD: 0.5, SPREAD: 0.35,
+          VOICES: 16, PITCH_MIN: 140, PITCH_MAX: 330, PITCH_PEAK: 1.15, PITCH_END: 0.92,
+          VOWEL: [760, 1250, 2650], FORMANT_GAIN: [1, 0.6, 0.2], FORMANT_Q: 5, BREATH: 0.5,
+        },
+        CHEER_AT: [0.05, 1.6, 3.1],
+        SETTLE: 0.7,
+      },
     },
   };
 
@@ -2038,6 +2061,66 @@
     },
     // コールに出す、実際のルールでの休憩の長さ（秒。ITF ルール29）。表示の文言にだけ使う。
     RULE_SEC: { rest: 90, setBreak: 120 },
+  };
+
+  /**
+   * 試合で初めてのマッチポイントの演出（Game#beginMatchPointCut）。構えに入ったところで
+   * カメラを観客席へ切り替え、コートの外周を回りながら沸き立つスタンドを映してから、
+   * いつもの画面へ切り戻す。演出の間は試合を止める（サーブは演出が終わってから。Space で
+   * 切り上げられる）。2回目以降のマッチポイントでは出さない（毎回だとくどい）。
+   * ゲーム（game.js）が使うのは DURATION だけで、残りは表示側の値。
+   */
+  const MATCH_POINT = {
+    DURATION: 5.2, // 演出の長さ（秒）。Game#update() の時計で数える
+    /**
+     * カメラ（scene/world.js#placeMatchPointCamera）。コートの中心を囲む楕円の上を回り、
+     * 外側＝観客席のほうを向いて、進む向きへ少し先回りした先を見る（流れていくスタンドを
+     * 横から追いかける形になる）。角度は +z（奥のスタンド）を0とし、+x 側へ回る向き（rad）。
+     * 楕円はスタンドの壁（STANDS.WALLS：x=±26, z=±20）より内側で、ボールボーイ・線審・
+     * 審判台の頭より上を通る高さにしてある。
+     */
+    CAMERA: {
+      // 横のスタンドは奥のスタンドより 6m 遠い（x=±26 と z=±20）ので、そのぶん横長の楕円にして
+      // どちらのスタンドにも同じくらい（6m ほど）まで寄る
+      RADIUS_X: 21.5,
+      RADIUS_Z: 15.8,
+      HEIGHT: 3.0, // 最前列の足元（壁の上端 STANDS.HEIGHT）より少し上から、見上げ気味に映す
+      FROM: -0.75, // 奥のスタンドの左寄りから
+      TO: 2.35,    // 右のスタンドを回り込み、手前寄りまで
+      // 回り方の緩急（0＝等速、1＝smoothstep）。切り替わった瞬間から動いて見えるよう少しだけ
+      EASE: 0.45,
+      // 見る先の楕円＝観客の並び（スタンドの壁の外側、SPECTATORS の最前列〜最後列）
+      LOOK_RADIUS_X: 28,
+      LOOK_RADIUS_Z: 22,
+      LOOK_Y: 3.6,  // 見る高さ（最前列の頭〜最後列の胸）
+      LEAD: 0.38,   // 見る先をカメラの角度からどれだけ先回りさせるか（rad）
+      FOV: 38,      // いつもの CAMERA.FOV より絞って、観客を大きく映す
+    },
+    /**
+     * 観客の盛り上がり（scene/crowd.js#updateCrowd）。hype（0〜1）は演出が始まると RISE/秒で
+     * 上がり、終わると FALL/秒で収まる（いつもの画面に戻ってからも、奥のスタンドがしばらく
+     * 沸いたまま静まっていくのが見える）。長さはすべて観客の大きさ（SPECTATORS.SCALE）を
+     * 掛ける前の値（m）。
+     */
+    CROWD: {
+      RISE: 5,
+      FALL: 0.9,
+      STAND_UP: 0.22,   // 立ち上がる高さ（脚は作っていないので、胴を縦に伸ばして見せる）
+      JUMPERS: 0.55,    // その場で跳ねる人の割合（残りは両手を振る）
+      JUMP: 0.13,       // 跳ねる高さ
+      HZ: [1.4, 2.4],   // 跳ねる・手を振る速さ（人ごとにこの範囲から引く）
+      ARM_UP: 2.55,     // 腕を振り上げる角度（rad。0＝下ろしたまま、π＝真上）
+      ARM_SPREAD: 0.35, // 人ごとの振り上げ方のばらつき（ARM_UP からこの割合だけ下げる）
+      WAVE: 0.38,       // 振り上げた腕を左右に振る幅（rad）
+      // カメラのフラッシュ。盛り上がっている間、客席のあちこちで一瞬だけ光る。
+      FLASH: {
+        POOL: 64,      // 同時に光っていられる数
+        RATE: 70,      // 1秒あたりに光る数（hype=1 のとき。客席は全周なので映るのはその一部）
+        LIFE: 0.1,     // 1回の光の長さ（秒）
+        SIZE: 1.3,     // 光の大きさ（m）
+        FORWARD: 0.35, // 顔の前（コート側）へ出す距離（体の中に埋もれないように）
+      },
+    },
   };
 
   /**
@@ -3785,7 +3868,7 @@
 
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
-    BOUNDS, CPU, DOUBLES, RULES, TIMING, CHANGEOVER, PRACTICE, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
+    BOUNDS, CPU, DOUBLES, RULES, TIMING, CHANGEOVER, MATCH_POINT, PRACTICE, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT, GUIDE,
     SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, STAMINA, TOSS, OFFICIALS, LINE_CALL, BALL_MARK,
     STANDS, SPECTATORS, FLAG, MOTION,
