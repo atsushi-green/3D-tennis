@@ -159,13 +159,27 @@ canvas{display:block}
 #matchLevel[data-level="hard"]{color:#f2a65a}
 #matchLevel[data-level="extreme"]{color:#ff6b6b}
 
-/* ポイントごとのコール（ポイント／アウト／ゲーム …） */
+/* ポイントごとのコール（ポイント／アウト／ゲーム …）。
+   観客席の並び（画面の上から1/3あたり）より上の、空の位置に出す。上端で位置を決めるので、
+   球種や長い案内で札が高くなっても下へ伸びるだけで、マッチポイントの黒帯（11vh）には
+   食い込まない。白い文字が観客に溶けないよう、スコアボードと同じ地の色の札に載せ、上辺に
+   同じ黄緑のアクセントを引く（中継のテロップの体裁）。札は文字の幅に合わせて縮み、
+   長い案内だけ折り返す。 */
 #call{
-  position:absolute;left:50%;top:34%;transform:translate(-50%,-50%);
+  position:absolute;left:50%;top:14%;transform:translateX(-50%);
+  width:max-content;max-width:min(720px,calc(100vw - 28px));
+  padding:10px 26px 12px;
+  background:rgba(9,20,34,.85);
+  border-top:3px solid var(--ball);
+  border-radius:2px;
+  box-shadow:0 6px 24px rgba(0,0,0,.35);
+  text-shadow:0 1px 2px rgba(0,0,0,.6);
   text-align:center;opacity:0;transition:opacity .18s
 }
-#call .big{font-size:34px;font-weight:700;letter-spacing:.02em}
-#call .sub{font-size:13px;color:var(--dim);margin-top:4px;letter-spacing:.06em}
+#call .big{font-size:34px;font-weight:700;letter-spacing:.02em;line-height:1.2}
+/* 補足は地の濃い札の上なので、他の札の --dim より一段明るくして読みやすくする */
+#call .sub{font-size:13px;line-height:1.5;color:rgba(232,238,245,.8);margin-top:4px;letter-spacing:.06em}
+#call .sub:empty{display:none}
 /* 決めた側が最後に放った球種。無いポイントもあるので .on のときだけ出す */
 #call .shot{
   display:none;margin-top:9px;font-size:12px;letter-spacing:.14em;
