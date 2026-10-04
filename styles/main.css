@@ -126,6 +126,30 @@ canvas{display:block}
 .spUse{flex:0 0 calc(50% - 4px);color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .spUse.on{color:#ffc83d}
 
+/* ダブルスの立ち位置の指示（Q/E＝パートナー、R/F＝自分）。効いている方を黄緑で点灯させ、
+   押すキーを添える。サーブ待ちの担当の注記（.fmNote）は行の下に出す。シングルスでは
+   hud が中身を空にするので :empty で行ごと消える（風・サーブ速度と同じ作り）。
+   注記は width:0＋min-width:100% で、列の幅（スコアボードで決まる）を押し広げずに
+   その幅いっぱいで折り返す（ふつうに置くと、注記の1行の長さまで左上の列全体が広がる）。 */
+#formation{
+  margin-top:6px;padding:4px 10px 5px;
+  background:rgba(9,20,34,.6);border-radius:2px;
+  border-left:3px solid var(--ball);
+  font-size:11px;letter-spacing:.04em;
+}
+#formation:empty{display:none}
+.fmHead{color:var(--dim);letter-spacing:.12em}
+.fmRow{display:flex;flex-wrap:wrap;align-items:center;gap:3px 4px;margin-top:4px}
+.fmWho{min-width:64px;white-space:nowrap}
+.fmOpt{padding:1px 7px;border-radius:2px;white-space:nowrap;
+  color:var(--dim);border:1px solid rgba(232,238,245,.18)}
+.fmOpt.on{color:var(--ink);background:var(--ball);border-color:var(--ball);font-weight:700}
+.fmKey{font-size:9px;font-weight:600;margin-right:4px;opacity:.75}
+.fmOpt.flash{animation:fmFlash .6s ease-out}
+.fmNote{width:0;min-width:100%;margin-top:2px;font-size:10px;color:#f2a65a}
+@keyframes fmFlash{from{box-shadow:0 0 0 4px rgba(216,242,74,.55)}to{box-shadow:0 0 0 0 rgba(216,242,74,0)}}
+@media (prefers-reduced-motion:reduce){.fmOpt.flash{animation:none}}
+
 /* スタミナ（自分以外も含めた全員を常時表示。パートナー/CPU2はダブルスのときだけ）。
    ラリーで減り、ポイント間で少し回復する */
 #stamina{

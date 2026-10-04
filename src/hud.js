@@ -27,6 +27,16 @@
   const accentOf = (c) => (c.look ? c.look.accent : c.accent);
   /** レーダーチャートの軸＝人間にも効く項目（ネット志向は AI の動き方の好みなので外す）。 */
   const RADAR_SKILLS = SKILLS.filter((s) => !s.aiOnly);
+  /**
+   * ダブルスの「立ち位置の指示」の札（setFormation）の行。keys は input.js の
+   * FORMATION_NET/BACK（パートナー）・STAND_NET/BACK（自分）と同じキー。duty は、サーブ待ちで
+   * その人がサーバー／レシーバーの番のときに添える「指示がどう効くか」（Game#formationOrders）。
+   */
+  const FORMATION_ROWS = [
+    { who: 'youMate', label: 'パートナー', keys: { net: 'Q', back: 'E' }, duty: '打ってから効く' },
+    { who: 'you', label: '自分', keys: { net: 'R', back: 'F' }, duty: 'このポイントは動けない' },
+  ];
+  const FORMATION_LABEL = { net: '前', back: '後ろ' };
   /** レーダーチャートの半径（viewBox -100〜100 の単位）。軸の名前はこの外側に置く。 */
   const RADAR = { R: 56, LABEL_R: 67 };
   /** ガイドで「タイミングが効かない」と伝えるときの打ち方の呼び名。 */
@@ -258,6 +268,7 @@
         smashTip: $('smashTip'),
         specialTip: $('specialTip'),
         specialUses: $('specialUses'),
+        formation: $('formation'),
         specialSegs: $('specialSegs'),
         specialPresets: $('specialPresets'),
         specialBadge: $('specialBadge'),
@@ -892,6 +903,57 @@
       // スコアボードと同じ呼び名（ダブルスでもチーム名としてそのまま通る）
       who.textContent = stakes.team === 'you' ? 'YOU' : 'CPU';
       el.replaceChildren(document.createTextNode(stakes.label), who);
+    }
+
+    /**
+     * ダブルスの立ち位置の指示のいまの状態（パートナー＝Q/E、自分＝R/F）。指示を受けたときの
+     * コールはすぐ消えるので、いまどちらになっているかを常に出しておく。効いている方を点灯させて
+     * 押すキーを添え、サーブ待ちでその人がサーバー／レシーバーの番なら、指示がどう効くかを添える。
+     * 指示が変わった行は点灯をひと瞬き光らせる（担当の注記が変わっただけでは光らせない）。
+     * 毎フレーム呼ばれるので、中身が変わったときだけ組み立て直す（setStakes と同じ作り）。
+     * @param {{youMate:'net'|'back', you:'net'|'back', youMateDuty:string|null,
+     *   youDuty:string|null}|null} orders RallyOne.Game#formationOrders()。null（シングルス）なら消す。
+     */
+    setFormation(orders) {
+      const key = orders ? FORMATION_ROWS.map((r) => `${orders[r.who]}:${orders[`${r.who}Duty`]}`).join(',') : '';
+      if (key === this.formationKey) return;
+      this.formationKey = key;
+      const prev = this.formationPrev;
+      this.formationPrev = orders;
+      const el = this.el.formation;
+      if (!orders) {
+        el.replaceChildren(); // :empty で行ごと消える
+        return;
+      }
+      const span = (cls, text) => {
+        const s = document.createElement('span');
+        s.className = cls;
+        s.textContent = text;
+        return s;
+      };
+      const head = document.createElement('div');
+      head.className = 'fmHead';
+      head.textContent = '立ち位置の指示';
+      const rows = FORMATION_ROWS.map((r) => {
+        const row = document.createElement('div');
+        row.className = 'fmRow';
+        const flash = !!prev && prev[r.who] !== orders[r.who];
+        const opts = ['net', 'back'].map((f) => {
+          const on = orders[r.who] === f;
+          const opt = span(`fmOpt${on ? ' on' : ''}${on && flash ? ' flash' : ''}`, FORMATION_LABEL[f]);
+          opt.prepend(span('fmKey', r.keys[f]));
+          return opt;
+        });
+        row.append(span('fmWho', r.label), ...opts);
+        const duty = orders[`${r.who}Duty`];
+        if (!duty) return [row];
+        // 注記は行の外に置く：行（flex）の中に入れると、その幅までスコアボードの列が広がる
+        const note = document.createElement('div');
+        note.className = 'fmNote';
+        note.textContent = `${duty}担当：${r.duty}`;
+        return [row, note];
+      });
+      el.replaceChildren(head, ...[].concat(...rows));
     }
 
     /**

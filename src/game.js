@@ -1162,6 +1162,27 @@
     }
 
     /**
+     * ダブルスの立ち位置の指示の、いまの状態（HUD の「立ち位置の指示」の札に出す。表示専用で、
+     * ゲームの判定はここを読まない）。シングルスでは null。
+     * youMateDuty／youDuty は、サーブ待ちの間（phase==='serve'）にその人がサーバー／
+     * レシーバーの番なら serveDuty() の値（'サーブ'／'レシーブ'）、それ以外は null。担当の番は
+     * 立つ位置がルールで決まっているので、パートナーへの指示は打ってからのラリーにだけ効き
+     * （setYouMateFormation）、自分の R/F は受け付けない（setYouFormation）。
+     * @returns {{youMate:'net'|'back', you:'net'|'back',
+     *   youMateDuty:string|null, youDuty:string|null}|null}
+     */
+    formationOrders() {
+      if (!this.doubles) return null;
+      const waiting = this.phase === 'serve';
+      return {
+        youMate: this.youMateFormation,
+        you: this.youFormation,
+        youMateDuty: waiting ? this.serveDuty('youMate') : null,
+        youDuty: waiting ? this.serveDuty('you') : null,
+      };
+    }
+
+    /**
      * いまのポイントで who がサーバーなら 'サーブ'、レシーバーなら 'レシーブ'、
      * どちらでもない（相方が担当している）なら null。
      * @param {'you'|'youMate'|'cpu'|'cpuMate'} who

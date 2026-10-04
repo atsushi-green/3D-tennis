@@ -452,6 +452,7 @@
       hud.setSpecialTip(armed);
       hud.setSpecialUses(game.specials, game.specialUses);
       hud.setStakes(game.stakes);
+      hud.setFormation(game.formationOrders());
       hud.setSmashTip(game.smashHint);
       hud.setSwingGuide(game.swingGuide, game.you.x);
       syncStamina();

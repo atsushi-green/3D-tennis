@@ -3805,6 +3805,30 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     s.setYouFormation('net');
     ok(near(s.you.z, z), 'R/F do nothing in singles');
   }
+
+  // HUD の「立ち位置の指示」の札に渡す状態（formationOrders）：指示の今の値と、サーブ待ちの担当
+  {
+    const { g } = setup('you');
+    let o = g.formationOrders();
+    ok(o && o.youMate === 'net' && o.you === 'net', `both orders start at the net, got ${JSON.stringify(o)}`);
+    ok(o.youDuty === 'サーブ' && o.youMateDuty === null, `you are serving, the partner is not, got ${JSON.stringify(o)}`);
+    g.setYouMateFormation('back');
+    ok(g.formationOrders().youMate === 'back', 'E shows up as the partner standing back');
+
+    const { g: g2 } = setup('cpu', -1);
+    g2.setYouFormation('back');
+    o = g2.formationOrders();
+    ok(o.you === 'back' && o.youMateDuty === 'レシーブ' && o.youDuty === null,
+      `F shows up while the partner receives, got ${JSON.stringify(o)}`);
+    g2.phase = 'rally';
+    o = g2.formationOrders();
+    ok(o.you === 'back' && o.youDuty === null && o.youMateDuty === null,
+      `in a rally the orders stay but no one is on serve/return duty, got ${JSON.stringify(o)}`);
+
+    const s = new R.Game({ input: fakeInput, hooks: noHooks });
+    s.start(false);
+    ok(s.formationOrders() === null, 'singles has no formation orders to show');
+  }
 }
 
 // --- ダブルス：「下がれ」を指示したパートナーは、ロブを叩きに前へ出ない ---

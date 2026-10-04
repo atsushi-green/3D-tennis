@@ -62,6 +62,9 @@
     <div id="serveSpeed"></div>
     <!-- 必殺技の残り回数（●＝使える／○＝使用済み）。1つも装備していなければ hud が行ごと隠す。 -->
     <div id="specialUses"></div>
+    <!-- ダブルスの立ち位置の指示（Q/E＝パートナー、R/F＝自分）のいまの状態。シングルスでは
+         hud が中身を空にするので :empty で行ごと消える（hud.setFormation）。 -->
+    <div id="formation"></div>
     <div id="stamina">
       <div class="staminaRow"><div class="staminaLabel">YOU</div><div class="staminaBar"><div class="staminaFill" id="staminaFillYou"></div></div></div>
       <div class="staminaRow"><div class="staminaLabel">CPU</div><div class="staminaBar"><div class="staminaFill" id="staminaFillCpu"></div></div></div>
