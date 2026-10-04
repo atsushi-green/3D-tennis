@@ -6659,6 +6659,71 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   }));
 }
 
+// --- 選べる選手（スタート画面の「選手」）：個性はあっても強さは同じ（最強の選手だけは別格）、
+//     既定は従来どおり ---
+{
+  const {
+    CHARACTERS, CHARACTER_BUDGET, CHARACTER_DEFAULT, SKILLS, ROSTER, ATTRS, THEME,
+    SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, applyCharacter, getRating, resetRatings,
+  } = R.config;
+  const core = SKILLS.filter((s) => !s.aiOnly);
+  const STYLES = ['short', 'buzz', 'ponytail', 'cap', 'curly', 'bun', 'long', 'band', 'crown']; // hud.js#portrait が描ける髪型
+  const HEX = /^#[0-9a-f]{6}$/i;
+
+  ok(CHARACTERS.length >= 6, `there is a real choice of players: ${CHARACTERS.length}`);
+  ok(new Set(CHARACTERS.map((c) => c.key)).size === CHARACTERS.length, 'player keys are unique');
+  ok(CHARACTERS.every((c) => c.key !== 'custom'), '"custom" is reserved for the slider-made player');
+  ok(CHARACTER_BUDGET === SKILL_DEFAULT * core.length, `the budget equals an all-${SKILL_DEFAULT} player: ${CHARACTER_BUDGET}`);
+  CHARACTERS.forEach((c) => {
+    SKILLS.forEach((s) => {
+      const v = c.ratings[s.key];
+      ok(Number.isInteger(v) && v >= SKILL_MIN && v <= SKILL_MAX, `${c.key}.${s.key} is a whole ${SKILL_MIN}..${SKILL_MAX}, got ${v}`);
+    });
+    const total = core.reduce((sum, s) => sum + c.ratings[s.key], 0);
+    if (c.champion) {
+      ok(core.every((s) => c.ratings[s.key] === SKILL_MAX), `${c.key} (the strongest) is maxed out in every ability`);
+      ok(c.ratings.netPlay === SKILL_DEFAULT, 'but net play is a taste, not an ability, so it stays neutral');
+    } else {
+      ok(total === CHARACTER_BUDGET, `${c.key} is personality, not power: total ${total} vs ${CHARACTER_BUDGET}`);
+    }
+    ok(c.name && c.type && c.text, `${c.key} has a name, a type and a description`);
+    ok(STYLES.includes(c.look.style), `${c.key} has a hair style the portrait can draw: ${c.look.style}`);
+    ok(['skin', 'hair', 'accent'].every((k) => HEX.test(c.look[k])), `${c.key} has #rrggbb portrait colours`);
+    if (c.key !== CHARACTER_DEFAULT && !c.champion) {
+      ok(core.some((s) => c.ratings[s.key] > SKILL_DEFAULT) && core.some((s) => c.ratings[s.key] < SKILL_DEFAULT),
+        `${c.key} has both a strength and a weakness`);
+    }
+  });
+  ok(CHARACTERS.filter((c) => c.champion).length === 1, 'there is exactly one strongest player (the only one off-budget)');
+  const profiles = CHARACTERS.map((c) => SKILLS.map((s) => c.ratings[s.key]).join(','));
+  ok(new Set(profiles).size === profiles.length, 'no two players share the same ratings');
+  ROSTER.forEach((r) => ok(THEME[r.kit] && typeof THEME[r.kit].shirt === 'number', `${r.key} wears THEME.${r.kit}`));
+
+  // 既定の選手は全項目3＝何も選ばなければ従来と同じ（main.js の「既定に戻す」もこれを前提にしている）
+  const standard = CHARACTERS.find((c) => c.key === CHARACTER_DEFAULT);
+  ok(standard && SKILLS.every((s) => standard.ratings[s.key] === SKILL_DEFAULT),
+    `the default player (${CHARACTER_DEFAULT}) is all ${SKILL_DEFAULT}s`);
+
+  try {
+    const big = CHARACTERS.find((c) => c.ratings.serve === SKILL_MAX);
+    applyCharacter('cpu', big.key);
+    ok(SKILLS.every((s) => getRating('cpu', s.key) === big.ratings[s.key]), `applyCharacter copies ${big.key}'s ratings`);
+    ok(ATTRS.cpu.serve < 1, `and the multipliers follow (serve ${ATTRS.cpu.serve})`);
+    ok(SKILLS.every((s) => getRating('you', s.key) === SKILL_DEFAULT), 'other slots are untouched');
+    applyCharacter('cpu', 'nobody');
+    ok(getRating('cpu', 'serve') === SKILL_MAX, 'an unknown player key changes nothing');
+    // 最強の選手は、どの倍率も既定より有利な側にある（速く走り・速い球・ミスが少ない…）
+    applyCharacter('cpu', CHARACTERS.find((c) => c.champion).key);
+    const higherIsBetter = ['speed', 'recover', 'reach', 'volleySharp', 'serveWindow'];
+    const lowerIsBetter = ['drain', 'react', 'forehand', 'backhand', 'volley', 'smash', 'serve', 'out', 'timing'];
+    higherIsBetter.forEach((k) => ok(ATTRS.cpu[k] > 1, `the strongest player's ${k} is above 1.0, got ${ATTRS.cpu[k]}`));
+    lowerIsBetter.forEach((k) => ok(ATTRS.cpu[k] < 1, `the strongest player's ${k} is below 1.0, got ${ATTRS.cpu[k]}`));
+    ok(ATTRS.cpu.net === 1, 'and goes to the net as often as usual');
+    applyCharacter('cpu', CHARACTER_DEFAULT);
+    ok(Object.values(ATTRS.cpu).every((m) => m === 1), 'picking the default player puts every multiplier back to 1.0');
+  } finally { resetRatings(); }
+}
+
 // --- 能力値が実際のプレーに効く（移動・スタミナ・サーブ・打球の速さ） ---
 {
   const { setRating, resetRatings, SKILL_MIN, SKILL_MAX } = R.config;

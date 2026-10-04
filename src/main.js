@@ -4,7 +4,8 @@
 
   const {
     PHYSICS, applyCpuLevel, applyCpuStyle, applySurface, TOSS,
-    setRating, resetRatings, randomizeRatings,
+    setRating, getRating, resetRatings, randomizeRatings, applyCharacter,
+    SKILLS, ROSTER, CHARACTER_DEFAULT,
     SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE, LINE_CALL,
   } = RallyOne.config;
   const { clamp } = RallyOne.math;
@@ -25,6 +26,14 @@
   /** スタート画面で選んだガイド付きモード。true ＝ 打つ方向のガイドを出す（既定は なし）。 */
   let guide = false;
   /**
+   * スタート画面で選んだ最初のサーブ。'toss'＝コイントス（勝った側が選ぶ。既定＝従来どおり）、
+   * 'serve'／'receive'＝トスをせず、自分のサーブ／相手のサーブで始める。
+   * 決めるのは最初の試合の第1ゲームだけで、その後は普段どおりサーブが交代していく。
+   */
+  let firstServe = 'toss';
+  /** T キーで切り替える順番（画面のカードの並びと同じ） */
+  const FIRST_SERVE_ORDER = ['toss', 'serve', 'receive'];
+  /**
    * スタート画面で選んだ必殺技（config.SPECIAL_MOVES の key の配列）。
    * 既定は空＝必殺技なし＝これまでと完全に同じゲーム。複数選べる。
    */
@@ -36,6 +45,18 @@
     all: SPECIAL_MOVES.map((m) => m.key),
   };
   const sameSpecials = (a, b) => a.length === b.length && a.every((k) => b.indexOf(k) !== -1);
+  /**
+   * スタート画面の「選手」で、4つの枠（config.ROSTER）それぞれに選んでいる選手
+   * （config.CHARACTERS の key、または 'custom'＝つまみで自由に決めた能力値）。
+   * 既定は全員 CHARACTER_DEFAULT（全項目3＝これまでとまったく同じ強さ）。
+   */
+  const picks = Object.fromEntries(ROSTER.map((r) => [r.key, CHARACTER_DEFAULT]));
+  /**
+   * 枠ごとの「カスタム」の能力値。カスタムから別の選手を選んで、また「カスタム」に戻したとき、
+   * 作りかけの値から続けられるように覚えておく。
+   */
+  const customRatings = {};
+  const ratingsOf = (who) => Object.fromEntries(SKILLS.map((s) => [s.key, getRating(who, s.key)]));
   /** トス（コイントス）に人間が勝ち、サーブ/レシーブの選択を待っている間だけ true。 */
   let awaitingToss = false;
   /** トスを始めた時点で選ばれていたダブルスの有無（トスの選択後にそのまま渡す）。 */
@@ -85,11 +106,6 @@
     game.start(wantDoubles, initialServer);
   }
 
-  /**
-   * 試合開始時のトス（コイントス）。実際の試合と同じく、勝った側がサーブ／レシーブを選ぶ。
-   * 人間が勝ったらスタート画面で選ばせ（onSelectToss を待つ）、CPUが勝ったら
-   * TOSS.CPU_SERVE_CHANCE の確率で自動的に選んで、選んだ側の結果でそのまま試合を始める。
-   */
   /* ------------------------------------------------------------ 練習モード */
 
   function openLessons() {
@@ -155,8 +171,18 @@
     else beginPractice(next);
   }
 
+  /**
+   * 試合開始時のトス（コイントス）。実際の試合と同じく、勝った側がサーブ／レシーブを選ぶ。
+   * 人間が勝ったらスタート画面で選ばせ（onSelectToss を待つ）、CPUが勝ったら
+   * TOSS.CPU_SERVE_CHANCE の確率で自動的に選んで、選んだ側の結果でそのまま試合を始める。
+   * スタート画面の「最初のサーブ」でサーブ／レシーブを選んであれば、トスはせずにそのまま始める。
+   */
   function beginToss(wantDoubles) {
     unlock(); // AudioContext はユーザー操作の中でしか起こせない
+    if (firstServe !== 'toss') {
+      beginMatch(wantDoubles, firstServe === 'serve' ? 'you' : 'cpu');
+      return;
+    }
     doublesPending = wantDoubles;
     if (Math.random() < 0.5) {
       awaitingToss = true;
@@ -186,6 +212,15 @@
     onSelectStyle: (name) => {
       cpuStyle = name;
       hud.setStyle(name);
+    },
+    onSelectFirstServe: (choice) => {
+      firstServe = choice;
+      hud.setFirstServe(choice);
+    },
+    // T キー：コイントス → サーブから → レシーブから → コイントス
+    onCycleFirstServe: () => {
+      const at = FIRST_SERVE_ORDER.indexOf(firstServe);
+      menu.onSelectFirstServe(FIRST_SERVE_ORDER[(at + 1) % FIRST_SERVE_ORDER.length]);
     },
     // ガイド付きモードは試合中でも切り替わって困らない（表示専用）ので、選んだ時点で
     // そのまま game へ渡す。次の試合にもそのまま引き継がれる。
@@ -222,13 +257,46 @@
     },
   };
 
-  // スタート画面の「選手設定」パネル。値を持つのは config で、hud は表示とマウス操作の
-  // 受け付けだけ、実際の適用（setRating 等）はここで行う＝難易度・サーフェスの選択と同じ流れ。
+  // スタート画面の「選手」パネル。能力値を持つのは config、誰を選んでいるか（picks）はここで、
+  // hud は表示とマウス操作の受け付けだけ。実際の適用（applyCharacter/setRating 等）はここで
+  // 行う＝難易度・サーフェスの選択と同じ流れ。
   hud.buildRoster({
-    onChange: (who, key, value) => setRating(who, key, value),
-    onReset: () => resetRatings(),
-    onRandom: () => randomizeRatings(),
+    onPick: (who, key) => {
+      // カスタムは、前に作りかけた値があればそれを戻す。初めてなら何も書き換えない
+      // ＝いま選んでいた選手の値がそのまま出発点になる。
+      if (key !== 'custom') applyCharacter(who, key);
+      else if (customRatings[who]) {
+        SKILLS.forEach((s) => setRating(who, s.key, customRatings[who][s.key]));
+      }
+      picks[who] = key;
+      hud.setPicks(picks);
+    },
+    // つまみを動かしたら、その枠は「カスタム」になる（選んでいた選手をもとにした微調整）
+    onChange: (who, key, value) => {
+      setRating(who, key, value);
+      picks[who] = 'custom';
+      customRatings[who] = ratingsOf(who);
+      hud.setPicks(picks);
+    },
+    // 既定（全項目3）は CHARACTER_DEFAULT の能力値そのもの（tests/smoke.mjs で確かめている）
+    onReset: () => {
+      resetRatings();
+      ROSTER.forEach((r) => {
+        picks[r.key] = CHARACTER_DEFAULT;
+        delete customRatings[r.key];
+      });
+      hud.setPicks(picks);
+    },
+    onRandom: () => {
+      randomizeRatings();
+      ROSTER.forEach((r) => {
+        picks[r.key] = 'custom';
+        customRatings[r.key] = ratingsOf(r.key);
+      });
+      hud.setPicks(picks);
+    },
   });
+  hud.setPicks(picks);
   hud.buildMenu(menu);
   hud.buildSpecials({ onToggle: menu.onToggleSpecial, onPreset: menu.onSpecialPreset });
   hud.setSpecials(specials);
@@ -269,6 +337,7 @@
     onSelectStyle: menu.onSelectStyle,
     onToggleGuide: () => menu.onToggleGuide(),
     onCycleSpecials: () => menu.onCycleSpecials(),
+    onCycleFirstServe: () => menu.onCycleFirstServe(),
     // リプレイのスキップは Space だけ（以前はどのキーでも飛んでしまい、ラリー用の
     // キーに触れただけで意図せずスキップされていた）。チェンジエンズの休憩も同じ Space で
     // 切り上げる。リプレイ中は game.update() が止まっていて休憩はまだ始まっていないので、

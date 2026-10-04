@@ -3858,7 +3858,7 @@
   /* ------------------------------------------------------------ 選手の能力値 */
 
   /**
-   * 選手ごとの能力値。スタート画面の「選手設定」で 1〜5 の5段階から選ぶ。
+   * 選手ごとの能力値。スタート画面の「選手」で選手（CHARACTERS）を選ぶか、カスタムで 1〜5 の5段階から決める。
    * **既定はすべて 3 ＝ どの倍率もちょうど 1.0** なので、何も触らなければこれまでの挙動と
    * 完全に一致する（既存のバランス・テストを一切動かさないための設計）。
    *
@@ -3894,27 +3894,156 @@
   /**
    * スタート画面に並べる項目。表示の順序もこの配列のまま。
    * `aiOnly` の項目は人間（you）には効かない（自分で操作する部分なので）。
+   * `short` はレーダーチャートの軸の名前（円の周りに並べるので短く）。
    */
   const SKILLS = [
-    { key: 'forehand', label: 'フォアハンド', hint: 'フォア側の打球の速さ' },
-    { key: 'backhand', label: 'バックハンド', hint: 'バック側の打球の速さ' },
-    { key: 'volley', label: 'ボレー', hint: 'ノーバウンドの球の速さ・鋭さ' },
-    { key: 'smash', label: 'スマッシュ', hint: '頭上の球を叩く速さ' },
-    { key: 'serve', label: 'サーブ', hint: '威力と、タイミングの許容幅' },
-    { key: 'stamina', label: '体力', hint: 'バテにくさと回復の速さ' },
-    { key: 'speed', label: '移動速度', hint: 'コートを動く速さ' },
-    { key: 'reach', label: 'リーチ・読み', hint: '手の届く範囲と反応の速さ' },
-    { key: 'consistency', label: '安定感', hint: 'ミスの少なさ・打点のズレへの強さ' },
-    { key: 'netPlay', label: 'ネット志向', hint: '前へ詰める積極性', aiOnly: true },
+    { key: 'forehand', label: 'フォアハンド', short: 'フォア', hint: 'フォア側の打球の速さ' },
+    { key: 'backhand', label: 'バックハンド', short: 'バック', hint: 'バック側の打球の速さ' },
+    { key: 'volley', label: 'ボレー', short: 'ボレー', hint: 'ノーバウンドの球の速さ・鋭さ' },
+    { key: 'smash', label: 'スマッシュ', short: 'スマッシュ', hint: '頭上の球を叩く速さ' },
+    { key: 'serve', label: 'サーブ', short: 'サーブ', hint: '威力と、タイミングの許容幅' },
+    { key: 'stamina', label: '体力', short: '体力', hint: 'バテにくさと回復の速さ' },
+    { key: 'speed', label: '移動速度', short: '足', hint: 'コートを動く速さ' },
+    { key: 'reach', label: 'リーチ・読み', short: 'リーチ', hint: '手の届く範囲と反応の速さ' },
+    { key: 'consistency', label: '安定感', short: '安定感', hint: 'ミスの少なさ・打点のズレへの強さ' },
+    { key: 'netPlay', label: 'ネット志向', short: 'ネット', hint: '前へ詰める積極性', aiOnly: true },
   ];
 
-  /** 設定できる4人。ダブルスでない場合はパートナー/CPU2の値は使われないだけ。 */
+  /**
+   * 設定できる4人。ダブルスでない場合はパートナー/CPU2の値は使われないだけ。
+   * `kit` はその枠の選手が着るウェア（THEME のキー）。コート上の3Dモデル（world.js）と同じ
+   * 配色で、スタート画面の似顔絵のシャツにも使う＝「白いシャツの選手が自分」が画面の前後でつながる。
+   */
   const ROSTER = [
-    { key: 'you', label: 'YOU', note: 'あなた' },
-    { key: 'youMate', label: 'パートナー', note: 'ダブルスの味方AI' },
-    { key: 'cpu', label: 'CPU', note: '相手の主力' },
-    { key: 'cpuMate', label: 'CPU2', note: 'ダブルスの相手2人目' },
+    { key: 'you', label: 'YOU', note: 'あなた', kit: 'YOU' },
+    { key: 'youMate', label: 'パートナー', note: 'ダブルスの味方AI', kit: 'YOU_MATE' },
+    { key: 'cpu', label: 'CPU', note: '相手の主力', kit: 'CPU' },
+    { key: 'cpuMate', label: 'CPU2', note: 'ダブルスの相手2人目', kit: 'CPU_MATE' },
   ];
+
+  /**
+   * 選べる選手（スタート画面の「選手」）。能力値（SKILLS）の組み合わせに名前と性格を付けたもの。
+   * 4人の枠（ROSTER）それぞれに、この中の誰か、または「カスタム」（つまみで自由に決める）を選ぶ。
+   *
+   * - **強さではなく個性の違い**にするため、ネット志向を除く9項目の合計は
+   *   CHARACTER_BUDGET（＝すべて3と同じ）に揃えてある。どこかが高い選手は、どこかが低い。
+   *   強さそのものは「CPUの強さ」（難易度）で選ぶ。ネット志向は能力ではなく AI の動き方の
+   *   好み（前へ詰める頻度）なので、予算の外に置く。
+   * - 唯一の例外が `champion: true` の「最強の選手」（ユーザー要望）。全項目が最高で、
+   *   個性ではなく強さそのものが違う。相手に選べば難易度をもう1段上げるのと同じ意味になり、
+   *   自分に選べば楽に勝てる。
+   * - 先頭（standard）は全項目3＝既定。何も選ばなければ、これまでとまったく同じ試合になる。
+   * - look は似顔絵（hud.js が SVG で描く）。肌・髪の色と髪型、カードの差し色。
+   *   シャツの色は選手ではなく枠（ROSTER の kit）で決まる。
+   *   style は 'short' | 'buzz' | 'ponytail' | 'cap' | 'curly' | 'bun' | 'long' | 'band' | 'crown'。
+   */
+  const CHARACTER_BUDGET = SKILL_DEFAULT * SKILLS.filter((s) => !s.aiOnly).length;
+  const CHARACTERS = [
+    {
+      key: 'standard',
+      name: 'ケン・アサギ',
+      type: 'オールラウンダー',
+      text: '得意も苦手もない、基準になる選手。迷ったらこの人。',
+      ratings: {
+        forehand: 3, backhand: 3, volley: 3, smash: 3, serve: 3,
+        stamina: 3, speed: 3, reach: 3, consistency: 3, netPlay: 3,
+      },
+      look: { skin: '#f0c8a0', hair: '#20232a', style: 'short', accent: '#d8f24a' },
+    },
+    {
+      key: 'bigServer',
+      name: 'ボリス・ヴァルガ',
+      type: 'ビッグサーバー',
+      text: '重いサーブとスマッシュで、ポイントを短く決める。足が遅く、走らされると苦しい。',
+      ratings: {
+        forehand: 4, backhand: 2, volley: 3, smash: 4, serve: 5,
+        stamina: 2, speed: 1, reach: 3, consistency: 3, netPlay: 3,
+      },
+      look: { skin: '#f3d2b8', hair: '#c8a46a', style: 'buzz', accent: '#ff8a3d' },
+    },
+    {
+      key: 'counterPuncher',
+      name: 'ルシア・ベガ',
+      type: 'カウンターパンチャー',
+      text: 'どこまでも走って拾い、ミスをしない。決め球は持たず、相手が崩れるのを待つ。',
+      ratings: {
+        forehand: 2, backhand: 2, volley: 2, smash: 1, serve: 2,
+        stamina: 5, speed: 4, reach: 4, consistency: 5, netPlay: 1,
+      },
+      look: { skin: '#d9a27a', hair: '#3b2418', style: 'ponytail', accent: '#4ad9f2' },
+    },
+    {
+      key: 'serveVolley',
+      name: 'オリバー・ハート',
+      type: 'サーブ&ボレーヤー',
+      text: 'サーブから一気にネットへ詰め、ボレーで仕留める。後ろでの打ち合いは苦手で、ミスも出る。',
+      ratings: {
+        forehand: 2, backhand: 2, volley: 5, smash: 4, serve: 4,
+        stamina: 2, speed: 3, reach: 4, consistency: 1, netPlay: 5,
+      },
+      look: { skin: '#eac2a0', hair: '#6b4a2e', style: 'cap', accent: '#a98bff' },
+    },
+    {
+      key: 'powerHitter',
+      name: 'レオ・ブラント',
+      type: 'パワーヒッター',
+      text: 'フォアの強打で押し込む。当たれば誰より速いが、ミスも多い。',
+      ratings: {
+        forehand: 5, backhand: 4, volley: 2, smash: 3, serve: 3,
+        stamina: 3, speed: 3, reach: 3, consistency: 1, netPlay: 2,
+      },
+      look: { skin: '#8d5a3b', hair: '#15110f', style: 'curly', accent: '#ef4b5a' },
+    },
+    {
+      key: 'speedster',
+      name: 'ミア・ソーン',
+      type: 'スピードスター',
+      text: 'コートを駆け回る俊足で、届かないはずの球に届く。サーブの威力はない。',
+      ratings: {
+        forehand: 3, backhand: 3, volley: 3, smash: 2, serve: 1,
+        stamina: 3, speed: 5, reach: 4, consistency: 3, netPlay: 3,
+      },
+      look: { skin: '#f1cfb4', hair: '#b4432a', style: 'bun', accent: '#5fe08a' },
+    },
+    {
+      key: 'technician',
+      name: 'エマ・ルグラン',
+      type: 'テクニシャン',
+      text: 'バックハンドとボレーの名手。崩れずに打ち分ける。足は速くない。',
+      ratings: {
+        forehand: 3, backhand: 5, volley: 4, smash: 2, serve: 2,
+        stamina: 3, speed: 2, reach: 2, consistency: 4, netPlay: 3,
+      },
+      look: { skin: '#f5d9c4', hair: '#e2c27a', style: 'long', accent: '#f28ad2' },
+    },
+    {
+      key: 'veteran',
+      name: 'ヨハン・ベルク',
+      type: 'ベテラン',
+      text: '読みの速さと広い守備範囲、組み立てのうまいサーブ。足と体力は衰えた。',
+      ratings: {
+        forehand: 3, backhand: 3, volley: 3, smash: 2, serve: 4,
+        stamina: 2, speed: 1, reach: 5, consistency: 4, netPlay: 3,
+      },
+      look: { skin: '#e6bb98', hair: '#b9bec6', style: 'band', accent: '#e0b86a' },
+    },
+    // 最強の選手（上のコメントの「唯一の例外」）。ネット志向だけは能力ではなく好みなので、
+    // 最高にはせず既定の3（＝AI のふだんどおりの詰め方）のまま。差し色は必殺技と同じ金。
+    {
+      key: 'champion',
+      name: 'レイ・カグラ',
+      type: '最強のチャンピオン',
+      text: 'すべての能力が最高。弱点のない、最強の選手。相手に選べば、どの強さでも手ごわい。',
+      champion: true,
+      ratings: {
+        forehand: 5, backhand: 5, volley: 5, smash: 5, serve: 5,
+        stamina: 5, speed: 5, reach: 5, consistency: 5, netPlay: 3,
+      },
+      look: { skin: '#ecc19c', hair: '#2a1a12', style: 'crown', accent: '#ffc83d' },
+    },
+  ];
+  /** スタート画面で4人とも最初に選ばれている選手（全項目3＝従来どおり）。 */
+  const CHARACTER_DEFAULT = CHARACTERS[0].key;
 
   /**
    * 能力値を範囲内へ丸めるためだけの小さなクランプ。math.js の clamp() と同じものだが、
@@ -4001,6 +4130,18 @@
   }
 
   /**
+   * 1人の能力値を、選んだ選手（CHARACTERS）のものにまるごと置き換える。
+   * @param {'you'|'youMate'|'cpu'|'cpuMate'} who
+   * @param {string} key CHARACTERS のキー
+   */
+  function applyCharacter(who, key) {
+    const character = CHARACTERS.find((c) => c.key === key);
+    if (!character || !RATINGS[who]) return;
+    SKILLS.forEach((s) => { RATINGS[who][s.key] = clampSkill(character.ratings[s.key]); });
+    deriveAttr(RATINGS[who], ATTRS[who]);
+  }
+
+  /**
    * AI のショット計算（ai.js）へ渡す、その1本ぶんの能力。ai.js は「誰が打つか」を知らずに
    * 済ませたいので、game.js がここで倍率だけの小さなオブジェクトに畳んでから渡す。
    * @param {object} attr ATTRS の1人ぶん
@@ -4018,6 +4159,7 @@
     STANDS, SPECTATORS, FLAG, MOTION,
     SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET,
     SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, ATTR_SPREAD, ATTRS, NEUTRAL_ATTR,
-    setRating, getRating, resetRatings, randomizeRatings, shotSkill,
+    CHARACTERS, CHARACTER_BUDGET, CHARACTER_DEFAULT,
+    setRating, getRating, resetRatings, randomizeRatings, applyCharacter, shotSkill,
   };
 })(window.RallyOne = window.RallyOne || {});

@@ -300,63 +300,7 @@ canvas{display:block}
 #guide.risk #guideNeedle{background:#ff6b5a}
 #guide.risk #guideText{color:#ff6b5a}
 
-/* スタート画面。設定はすべてマウスで操作できる（ボタン＝.seg／つまみバー＝.skillBar）ので、
-   背景そのものはクリックしても何も起きない（cursor も既定のまま）。キーボードでも同じ操作が
-   できるよう、各ボタンには対応するキーを <kbd> で添えてある。 */
-#start{
-  position:fixed;inset:0;display:grid;place-items:center;
-  background:radial-gradient(120% 90% at 50% 40%,rgba(11,26,43,.55),rgba(11,26,43,.95));
-  pointer-events:auto
-}
-#start .card{text-align:center;max-width:560px;max-height:94vh;overflow-y:auto;padding:0 24px}
-#start h1{font-size:40px;margin:0;letter-spacing:-.01em;font-weight:700}
-#start h1 span{color:var(--ball)}
-#start p{color:var(--dim);font-size:13px;line-height:1.8;margin:10px 0 16px}
-
-/* 設定1行＝「見出し＋横並びのボタン」。ラベル幅を揃えてボタンの左端を通す */
-.menuRow{display:flex;align-items:center;gap:10px;margin-bottom:8px;text-align:left}
-.menuLabel{flex:0 0 88px;font-size:11px;color:var(--dim);letter-spacing:.06em;white-space:nowrap}
-.segs{display:flex;flex:1;min-width:0;gap:6px;flex-wrap:wrap}
-
-/* 選択ボタン（試合形式・強さ・サーフェス・プレースタイル・トスの選択で共通） */
-.seg{
-  flex:1;min-width:56px;text-align:center;cursor:pointer;
-  border:1px solid var(--dim);border-radius:2px;padding:5px 8px;
-  font-size:11px;letter-spacing:.04em;color:var(--line);opacity:.5;
-  transition:opacity .12s,border-color .12s,background-color .12s;
-  white-space:nowrap
-}
-.seg:hover{opacity:.85;border-color:var(--ball)}
-.seg.on{opacity:1;color:var(--ball);border-color:var(--ball);font-weight:700;
-  background:rgba(216,242,74,.10)}
-/* ボタン（と必殺技の行の見出し）に添える対応キー。押せる場所そのものではないので、常に控えめに */
-.seg kbd,.menuLabel kbd{
-  display:inline-block;margin-left:6px;padding:0 4px;
-  border:1px solid currentColor;border-radius:2px;
-  font:inherit;font-size:9px;font-weight:400;opacity:.7;vertical-align:1px
-}
-
-/* 必殺技（複数選択）。他の設定行が排他選択なのに対し、ここは押した技だけが入/切する。
-   技名（b）の下に「どんな場面で出るか」（em）を小さく添えるので、1つぶんが2行になる。 */
-.specialSegs .seg.spec{
-  flex:0 1 auto;min-width:104px;display:flex;flex-direction:column;gap:2px;
-  padding:5px 8px;line-height:1.25
-}
-.specialSegs .seg.spec b{font-size:11px;font-weight:600}
-.specialSegs .seg.spec em{font-size:9px;font-style:normal;opacity:.65;letter-spacing:0}
-.specialSegs .seg.spec.on b{font-weight:700}
-/* プリセット（なし／おすすめ／すべて）。技そのものではないので、色を変えて区別する */
-.specialSegs .seg.specPreset{
-  flex:0 0 auto;min-width:0;font-size:10px;opacity:.45;border-style:dashed
-}
-.specialSegs .seg.specPreset:hover{opacity:.8}
-/* 選択中の技についての一言（選んだ数と使い方）。設定行の下に小さく敷く */
-.menuNote{
-  margin:-4px 0 10px 98px;text-align:left;
-  font-size:10px;line-height:1.6;color:var(--dim)
-}
-
-/* 開始ボタン。この画面で唯一の「決定」なので、選択ボタンより大きく明るくする */
+/* 決定ボタン（試合後のスタッツ画面の「次の試合へ」）。スタート画面のものは下の #start 側で上書きする */
 .playBtn{
   margin-top:16px;cursor:pointer;
   border:1px solid var(--ball);border-radius:2px;color:var(--ball);
@@ -365,52 +309,244 @@ canvas{display:block}
 }
 .playBtn:hover{background:var(--ball);color:var(--ink);font-weight:700}
 
-/* コイントスに人間が勝ったときだけ出るサーブ／レシーブの選択（既定は非表示）。
-   このときは設定（#menuBody）を隠して、選択だけを残す。 */
-/* 練習モードへの入口。試合開始より一段控えめにする */
-.playBtn.sub{margin-top:8px;border-color:var(--dim);color:var(--line);opacity:.75;
-  font-size:11px;padding:8px 20px}
-.playBtn.sub:hover{opacity:1;background:var(--line);color:var(--ink)}
-.playBtn.sub kbd{display:inline-block;margin-left:8px;padding:0 4px;border:1px solid currentColor;
-  border-radius:2px;font:inherit;font-size:9px;opacity:.7;vertical-align:1px}
+/* ---------------------------------------------- スタート画面（#start）
+   左＝試合の設定、右＝選手、下＝開始ボタンの帯。設定はすべてマウスで操作でき（カード＝.seg／
+   選手＝.slot・.charCard／つまみバー＝.skillBar）、背景そのものはクリックしても何も起きない。
+   キーボードでも同じ操作ができるよう、各カードには対応するキーを <kbd> で右上に添えてある。
+   スタート画面を出している間は、試合中の表示（#hud）をまるごと隠す。 */
+#hud.menu{visibility:hidden}
+#start{
+  --panel:rgba(9,20,34,.84);--edge:rgba(232,238,245,.13);--soft:rgba(232,238,245,.05);
+  --accent:var(--ball);
+  position:fixed;inset:0;overflow-x:hidden;overflow-y:auto;
+  background:linear-gradient(180deg,rgba(11,26,43,.5),rgba(11,26,43,.86) 45%,rgba(11,26,43,.94));
+  pointer-events:auto
+}
+/* --gutter は画面の左右の余白、--wide は中身（見出し・パネル）の最大幅。
+   縦に余裕のある画面では、見出しとパネル（または練習モードの一覧・トスの選択）をひとかたまりに
+   して上下の真ん中に置く（見出しの上と中身の下に auto の余白）。下の帯は常に画面の下端。 */
+#start .card{
+  --gutter:24px;--wide:1272px;
+  min-height:100%;display:flex;flex-direction:column;padding:18px var(--gutter) 0
+}
+.startHead,.menuCols{width:100%;max-width:var(--wide);margin-left:auto;margin-right:auto}
+.startHead{display:flex;align-items:center;gap:22px;margin-top:auto;margin-bottom:14px}
+#start h1{font-size:34px;margin:0;letter-spacing:-.01em;font-weight:700;line-height:1;white-space:nowrap}
+#start h1 span{color:var(--ball)}
+.startHead p{margin:0;color:var(--dim);font-size:12px;line-height:1.7}
+.startHead p b{color:var(--line)}
 
-/* 練習モードのレッスン一覧（既定は非表示）。出すときは #menuBody を隠す */
-#practiceMenu{display:none;margin-top:10px;text-align:left}
-#practiceMenu.on{display:block}
-/* 一覧を出している間は、タイトル下の説明文を畳んで一覧に場所を譲る */
-#start.lessons .card > p{display:none}
-.pmHead{font-size:15px;font-weight:700;letter-spacing:.06em;margin-bottom:4px}
-.pmHead span{margin-left:10px;font-size:11px;font-weight:400;color:var(--dim)}
-.pmGroup{font-size:10px;letter-spacing:.2em;color:var(--dim);margin:6px 0 1px}
-#lessonList{display:grid;grid-template-columns:1fr 1fr;gap:3px 8px}
-#lessonList .pmGroup{grid-column:1/-1}
-.lessonRow{display:flex;align-items:center;gap:8px;cursor:pointer;
-  border:1px solid rgba(232,238,245,.18);border-radius:2px;padding:3px 8px;font-size:12px;
-  transition:border-color .12s,background-color .12s}
-.lessonRow:hover{border-color:var(--ball)}
-.lessonRow.cur{border-color:var(--ball);background:rgba(216,242,74,.10)}
-.lessonRow .no{flex:0 0 18px;font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums}
-.lessonRow .name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.lessonRow .done{color:var(--ball);font-size:11px;visibility:hidden}
-.lessonRow.cleared .done{visibility:visible}
-.pmFoot{margin-top:8px;font-size:10px;color:var(--dim);text-align:center}
+/* #menuBody は箱を作らず、中身（パネルの段・下の帯）を .card の縦並びに直接参加させる */
+#menuBody{display:contents}
+.menuCols{
+  display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.08fr);gap:16px;
+  align-items:start;margin-bottom:auto
+}
+.panel{background:var(--panel);border:1px solid var(--edge);border-radius:6px;padding:12px 16px 14px}
 
-#tossChoice{display:none;margin-top:14px;font-size:12px;color:var(--dim);letter-spacing:.06em}
-#tossChoice.on{display:block}
-.tossSegs{margin-top:8px}
-#roster{text-align:left;cursor:default;line-height:1.4;margin-top:14px;
-  border:1px solid var(--dim);border-radius:2px;padding:8px 12px;color:var(--dim)}
-.rosterHead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
-.rosterBtns{white-space:nowrap}
-.rosterBtn{cursor:pointer;border:1px solid var(--dim);padding:2px 8px;margin-left:6px;opacity:.7}
-.rosterBtn:hover{opacity:1;color:var(--ball);border-color:var(--ball)}
-.rosterTabs{display:flex;gap:6px;margin-bottom:6px}
-.rosterTab{flex:1;text-align:center;cursor:pointer;border:1px solid var(--dim);padding:3px 0;opacity:.5}
-.rosterTab:hover{opacity:.8}
-.rosterTab.on{opacity:1;color:var(--ball);border-color:var(--ball);font-weight:700}
-.rosterRow{display:flex;align-items:center;gap:8px;padding:1px 0}
+/* 区切りの見出し（試合／相手／アシスト／必殺技／選手） */
+.panelHead{
+  display:flex;align-items:baseline;gap:10px;min-width:0;
+  margin:14px 0 8px;padding-bottom:5px;border-bottom:1px solid var(--edge)
+}
+.panel > .panelHead:first-child,.tabPage > .panelHead:first-child{margin-top:0}
+
+/* 左のパネルのタブ（試合の設定／必殺技）。必殺技のタブには今の選択（.tabBadge）を出す */
+.panelTabs{display:flex;gap:2px;margin:-4px 0 12px;border-bottom:1px solid var(--edge)}
+.panelTab{
+  display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:-1px;padding:5px 12px 8px;
+  border-bottom:2px solid transparent;
+  font-size:12px;font-weight:700;letter-spacing:.14em;color:var(--dim);white-space:nowrap;
+  transition:color .12s,border-color .12s
+}
+.panelTab:hover{color:var(--line)}
+.panelTab.on{color:var(--line);border-bottom-color:var(--ball)}
+.panelTab kbd{color:var(--dim)}
+.tabBadge{
+  font-size:10px;font-weight:700;letter-spacing:.04em;line-height:16px;padding:0 7px;border-radius:8px;
+  color:var(--ink);background:rgba(232,238,245,.45)
+}
+.tabBadge.on{background:var(--ball)}
+.tabPage{display:none}
+.tabPage.on{display:block}
+.panelHead h2{margin:0;font-size:12px;font-weight:700;letter-spacing:.24em;white-space:nowrap}
+.panelHint{min-width:0;font-size:10px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* 設定1行＝「小さな見出し＋その下に横並びのカード」 */
+.menuRow{margin-bottom:10px}
+.menuLabel{margin-bottom:4px;font-size:10px;color:var(--dim);letter-spacing:.08em}
+.segs{display:flex;min-width:0;gap:6px}
+
+/* 選択カード（試合形式・サーフェス・強さ・プレースタイル・ガイド・必殺技・トスの選択で共通）。
+   名前（.optName）の下に「それを選ぶとどうなるか」（em）を添える＝押す前に結果が想像できる。 */
+.seg{
+  position:relative;flex:1 1 0;min-width:0;cursor:pointer;
+  display:flex;flex-direction:column;gap:3px;
+  border:1px solid var(--edge);border-radius:4px;padding:7px 9px 8px;background:var(--soft);
+  transition:border-color .12s,background-color .12s,box-shadow .12s
+}
+.seg:hover{border-color:rgba(216,242,74,.55);background:rgba(232,238,245,.09)}
+.seg.on{border-color:var(--ball);background:rgba(216,242,74,.12);box-shadow:inset 0 0 0 1px var(--ball)}
+.seg .optName{
+  padding-right:20px;font-size:12px;font-weight:600;letter-spacing:.03em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis
+}
+.seg.on .optName{color:var(--ball);font-weight:700}
+.seg em{font-style:normal;font-size:10px;line-height:1.45;color:var(--dim)}
+.seg.on em{color:rgba(232,238,245,.82)}
+/* 対応キー。押せる場所そのものではないので、カードの右上に控えめに */
+#start kbd{
+  display:inline-block;padding:0 4px;border:1px solid currentColor;border-radius:2px;
+  font:inherit;font-size:9px;font-weight:400;line-height:14px;letter-spacing:0;opacity:.65
+}
+.seg kbd{position:absolute;top:6px;right:6px;color:var(--dim)}
+.seg.on kbd{color:var(--ball)}
+.panelHead h2 kbd{margin-left:8px;color:var(--dim);vertical-align:1px}
+
+/* サーフェスの色見本＝ミニチュアのコート（色は hud.js が config.SURFACE_COLORS で塗る）。
+   名前の左に並べる（目盛りも同じ）＝カードが縦に1段ぶん低く済む */
+.seg .sw{
+  display:inline-block;width:24px;height:14px;margin-right:7px;vertical-align:-2px;
+  border:3px solid transparent;border-radius:2px;
+  background-image:linear-gradient(90deg,transparent calc(50% - .5px),rgba(255,255,255,.75) 0 calc(50% + .5px),transparent 0)
+}
+/* CPUの強さの目盛り（--n 本ぶん点灯） */
+.seg .pips{
+  position:relative;display:inline-block;width:30px;height:7px;margin-right:7px;vertical-align:1px;overflow:hidden;
+  background:repeating-linear-gradient(90deg,rgba(232,238,245,.22) 0 6px,transparent 6px 8px)
+}
+.seg .pips::after{
+  content:"";position:absolute;left:0;top:0;bottom:0;width:calc(var(--n) * 8px);
+  background:repeating-linear-gradient(90deg,var(--line) 0 6px,transparent 6px 8px)
+}
+.seg.on .pips::after{background:repeating-linear-gradient(90deg,var(--ball) 0 6px,transparent 6px 8px)}
+
+/* 必殺技（複数選択）。他の行が排他選択なのに対し、ここは押した技だけが入/切する。
+   左のチェック枠で「いくつでも選べる」ことを形で伝える。技名の下に「いつ出るか」（em）と
+   「何が起きるか」（.hint）を並べる。 */
+.specPresets{margin-left:auto;display:flex;gap:4px;flex:0 0 auto}
+.specPreset{
+  cursor:pointer;font-size:10px;color:var(--dim);
+  border:1px dashed var(--edge);border-radius:3px;padding:1px 8px;white-space:nowrap
+}
+.specPreset:hover{color:var(--line);border-color:var(--dim)}
+.specPreset.on{color:var(--ball);border:1px solid var(--ball)}
+.specialSegs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
+.specialSegs .seg{padding:7px 10px 8px 31px;gap:2px}
+.specialSegs .seg .optName{padding-right:0}
+.specialSegs .seg em,.specialSegs .seg .hint{font-size:10px;line-height:1.45}
+.specialSegs .seg .hint{color:rgba(232,238,245,.66)}
+.specialSegs .seg.on .hint{color:rgba(232,238,245,.86)}
+/* 「いつ」「効果」の小さな札 */
+.specialSegs .seg i{
+  display:inline-block;margin-right:5px;padding:0 4px;border-radius:2px;
+  font-style:normal;font-size:9px;line-height:13px;color:var(--ink);background:rgba(232,238,245,.45)
+}
+.specialSegs .seg.on i{background:var(--ball)}
+.specialSegs .seg::before{
+  content:"";position:absolute;left:10px;top:9px;width:12px;height:12px;
+  border:1px solid var(--dim);border-radius:3px;
+  font-size:10px;font-weight:700;line-height:12px;text-align:center;color:var(--ink)
+}
+.specialSegs .seg.on::before{content:"✓";background:var(--ball);border-color:var(--ball)}
+.menuNote{margin:-2px 0 8px;font-size:10px;line-height:1.6;color:var(--dim)}
+
+/* ---- 選手 */
+.rosterBtns{margin-left:auto;display:flex;gap:4px;flex:0 0 auto}
+.rosterBtn{
+  cursor:pointer;font-size:10px;color:var(--dim);
+  border:1px solid var(--edge);border-radius:3px;padding:1px 8px;white-space:nowrap
+}
+.rosterBtn:hover{color:var(--ball);border-color:var(--ball)}
+
+/* 対戦カード。左が自分のチーム、右が相手（似顔絵が外側を向くよう左右対称に並べる）。
+   押した枠が「いま選手を選んでいる枠」になる。 */
+#matchup{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:10px}
+#matchup .vs{font-size:17px;font-weight:800;font-style:italic;letter-spacing:.04em;color:var(--ball)}
+.team{display:flex;flex-direction:column;gap:5px}
+.slot{
+  position:relative;display:flex;align-items:center;gap:9px;cursor:pointer;min-width:0;
+  border:1px solid var(--edge);border-radius:4px;padding:4px 8px 4px 4px;background:var(--soft);
+  transition:border-color .12s,background-color .12s,box-shadow .12s,opacity .12s
+}
+.slot:hover{border-color:rgba(216,242,74,.55)}
+.slot.on{border-color:var(--ball);background:rgba(216,242,74,.12);box-shadow:inset 0 0 0 1px var(--ball)}
+.team.cpu .slot{flex-direction:row-reverse;padding:4px 4px 4px 8px;text-align:right}
+/* 似顔絵（hud.js#portrait）。丸く切り抜く。大きさは置き場所ごとに .face の幅で決める */
+.faceBox{flex:0 0 auto;display:block;line-height:0}
+svg.face{display:block;border-radius:50%;overflow:hidden;box-shadow:0 0 0 1px rgba(232,238,245,.18)}
+.slot .face{width:40px;height:40px}
+.slotText{min-width:0;display:flex;flex-direction:column;line-height:1.3}
+.slotRole{font-size:9px;font-weight:700;letter-spacing:.16em;color:var(--dim)}
+.slot.on .slotRole{color:var(--ball)}
+.slotName{font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.slotType{font-style:normal;font-size:10px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* シングルスではパートナー／CPU2 の枠は使われない（選んでおくことはできる） */
+#matchup.singles .slot.mate{opacity:.42}
+#matchup.singles .slot.mate:hover,#matchup.singles .slot.mate.on{opacity:.8}
+#matchup.singles .slot.mate::after{
+  content:"ダブルスのみ";position:absolute;top:4px;right:6px;
+  font-size:9px;letter-spacing:.04em;color:var(--dim)
+}
+#matchup.singles .team.cpu .slot.mate::after{right:auto;left:6px}
+
+.pickHead{margin:9px 0 5px;font-size:11px;color:var(--dim);letter-spacing:.04em}
+.pickHead b{color:var(--ball);font-weight:700}
+
+/* 選手の一覧（＋カスタム）。似顔絵を上、名前とタイプを下にした「選手選択」の並び。
+   カードの差し色（--accent）は選手ごと（hud.js が入れる） */
+#charGrid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px}
+.charCard{
+  position:relative;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;min-width:0;
+  border:1px solid var(--edge);border-radius:4px;padding:5px 4px 4px;background:var(--soft);text-align:center;
+  transition:border-color .12s,box-shadow .12s
+}
+.charCard::before{
+  content:"";position:absolute;inset:0;border-radius:3px;background:var(--accent);opacity:0;
+  transition:opacity .12s;pointer-events:none
+}
+/* 最強の選手は、選んでいなくてもうっすら金色に光らせて別格だと分かるようにする */
+.charCard.champion{border-color:rgba(255,200,61,.45)}
+.charCard.champion::before{opacity:.08}
+.charCard:hover{border-color:var(--accent)}
+.charCard:hover::before{opacity:.06}
+.charCard.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.charCard.on::before{opacity:.14}
+.charCard .face{width:36px;height:36px}
+.ccText{width:100%;min-width:0;display:flex;flex-direction:column;line-height:1.3}
+.ccName{font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ccType{font-style:normal;font-size:10px;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* 選んでいる選手の詳しい情報：似顔絵・名前・説明、レーダーチャート、能力値のつまみ */
+#charDetail{
+  margin-top:8px;border:1px solid var(--edge);border-radius:4px;padding:8px 12px 7px;
+  background:rgba(0,0,0,.18)
+}
+.cdTop{display:flex;gap:12px;align-items:center}
+.cdTop .face{width:54px;height:54px}
+.cdTitle{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px}
+.cdName{font-size:16px;font-weight:700;letter-spacing:.02em}
+.cdType{
+  font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--ink);
+  background:var(--accent);border-radius:2px;padding:1px 6px
+}
+.cdFor{font-size:10px;color:var(--dim)}
+.cdText{margin-top:3px;font-size:11px;line-height:1.6;color:rgba(232,238,245,.8)}
+.cdBody{display:flex;gap:12px;align-items:center;margin-top:2px}
+#radar{flex:0 0 168px;width:168px;height:168px;overflow:visible}
+#radar .ring{fill:none;stroke:rgba(232,238,245,.12);stroke-width:1}
+#radar .ring.base{stroke:rgba(232,238,245,.32);stroke-dasharray:3 3}
+#radar .axis{stroke:rgba(232,238,245,.10);stroke-width:1}
+#radar .area{fill:var(--accent);fill-opacity:.24;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;
+  transition:all .12s}
+#radar .dot{fill:var(--accent)}
+#radar .lbl{fill:var(--dim);font-size:10px}
+#radar .lbl.hi{fill:var(--line);font-weight:700}
+
+.rosterRows{flex:1;min-width:0}
+.rosterRow{display:flex;align-items:center;gap:8px;padding:0;line-height:19px;font-size:11px}
 .rosterRow.off{opacity:.35}
-.rosterName{flex:0 0 88px;font-size:11px;white-space:nowrap}
+.rosterName{flex:0 0 76px;white-space:nowrap}
 
 /* 能力値のつまみバー（1〜5）。バーのどこかを押すとその値になり、押したまま左右へ
    ドラッグすると連続で変わる（hud.js#buildSkillBar）。--knob はつまみの直径で、
@@ -426,20 +562,120 @@ canvas{display:block}
 }
 .skillFill{
   position:absolute;left:0;top:50%;transform:translateY(-50%);
-  height:3px;border-radius:2px;background:var(--ball);opacity:.8
+  height:3px;border-radius:2px;background:var(--accent);opacity:.85
 }
 .skillKnob{
   position:absolute;top:50%;width:var(--knob);height:var(--knob);
   transform:translateY(-50%);border-radius:50%;
-  background:var(--ball);border:1px solid var(--ball);
+  background:var(--accent);border:1px solid var(--accent);
   transition:left .08s ease-out,box-shadow .12s
 }
-.skillBar:hover .skillKnob{box-shadow:0 0 0 3px rgba(216,242,74,.25)}
+.skillBar:hover .skillKnob{box-shadow:0 0 0 3px rgba(232,238,245,.2)}
 .skillValue{width:10px;font-size:11px;color:var(--line);text-align:right;
   font-variant-numeric:tabular-nums}
-.rosterHint{flex:1;font-size:10px;opacity:.5;text-align:right;
+.rosterHint{flex:1;min-width:0;font-size:10px;color:var(--dim);text-align:right;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.rosterFoot{margin-top:6px;font-size:10px;opacity:.6}
+.rosterFoot{margin-top:4px;font-size:10px;color:var(--dim)}
+
+/* ---- 下の帯：練習モード／キーの案内／試合開始。設定がどれだけ縦に伸びても常に見えている */
+.startFoot{
+  position:sticky;bottom:0;z-index:1;display:flex;align-items:center;gap:16px;
+  /* 画面の端から端まで伸ばし、中身だけをパネルの左右の端に揃える（100% は .card の中身の幅） */
+  margin:14px calc(-1 * var(--gutter)) 0;
+  padding:12px calc(var(--gutter) + max(0px, (100% - var(--wide)) / 2));
+  background:rgba(8,18,31,.94);border-top:1px solid var(--edge)
+}
+.footHint{flex:1;min-width:0;text-align:center;font-size:10px;color:var(--dim)}
+.footHint b{color:var(--line);font-weight:600}
+#start .playBtn{
+  margin:0;cursor:pointer;white-space:nowrap;text-transform:none;
+  border:1px solid var(--ball);border-radius:4px;background:var(--ball);color:var(--ink);
+  padding:12px 34px;font-size:15px;font-weight:700;letter-spacing:.2em;
+  transition:box-shadow .12s,background-color .12s,color .12s
+}
+#start .playBtn:hover{box-shadow:0 0 0 3px rgba(216,242,74,.28),0 0 26px rgba(216,242,74,.35)}
+#start .playBtn kbd{margin-left:10px;vertical-align:2px}
+/* 練習モードへの入口・一覧から戻る。試合開始より一段控えめにする */
+#start .playBtn.sub{
+  background:transparent;color:var(--line);border-color:var(--edge);
+  padding:9px 14px;font-size:11px;font-weight:600;letter-spacing:.06em
+}
+#start .playBtn.sub:hover{border-color:var(--line);background:rgba(232,238,245,.08);box-shadow:none}
+
+/* 練習モードのレッスン一覧（既定は非表示）。出すときは #menuBody を隠す */
+#practiceMenu{display:none;width:min(640px,100%);margin:4px auto auto}
+#practiceMenu.on{display:block}
+/* 一覧を出している間は、タイトル横の説明文を畳んで一覧に場所を譲る */
+#start.lessons .startHead p{display:none}
+#start.lessons .card{padding-bottom:24px}
+.pmHead{font-size:15px;font-weight:700;letter-spacing:.06em;margin-bottom:4px}
+.pmHead span{margin-left:10px;font-size:11px;font-weight:400;color:var(--dim)}
+.pmGroup{font-size:10px;letter-spacing:.2em;color:var(--dim);margin:8px 0 2px}
+#lessonList{display:grid;grid-template-columns:1fr 1fr;gap:4px 8px}
+#lessonList .pmGroup{grid-column:1/-1}
+.lessonRow{display:flex;align-items:center;gap:8px;cursor:pointer;
+  border:1px solid var(--edge);border-radius:4px;padding:5px 8px;font-size:12px;background:var(--soft);
+  transition:border-color .12s,background-color .12s}
+.lessonRow:hover{border-color:var(--ball)}
+.lessonRow.cur{border-color:var(--ball);background:rgba(216,242,74,.12)}
+.lessonRow .no{flex:0 0 18px;font-size:10px;color:var(--dim);font-variant-numeric:tabular-nums}
+.lessonRow .name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lessonRow .done{color:var(--ball);font-size:11px;visibility:hidden}
+.lessonRow.cleared .done{visibility:visible}
+.pmFoot{margin:10px 0;font-size:10px;color:var(--dim);text-align:center}
+#practiceMenu .playBtn.sub{text-align:center}
+
+/* コイントスに人間が勝ったときだけ出るサーブ／レシーブの選択（既定は非表示）。
+   このときは設定（#menuBody）を隠して、選択だけを残す。 */
+#tossChoice{display:none;width:min(520px,100%);margin:4px auto auto;text-align:center}
+#tossChoice.on{display:block}
+.tossHead{font-size:18px;font-weight:700;letter-spacing:.04em}
+.tossSub{margin:4px 0 14px;font-size:12px;color:var(--dim)}
+.tossSegs .seg{padding:14px 14px 12px;text-align:left}
+.tossSegs .seg .optName{font-size:16px}
+
+/* 縦が短い画面（1280×720、ノートPCのブラウザで多い 1440×790 など）では余白を詰めて、
+   なるべくスクロールせずに済ませる */
+@media (max-height:820px){
+  #start .card{padding-top:12px}
+  .startHead{margin-bottom:8px}
+  .panel{padding-top:10px;padding-bottom:10px}
+  .panelTabs{margin-bottom:8px}
+  #start h1{font-size:28px}
+  .panelHead{margin:8px 0 5px}
+  .startFoot{margin-top:10px;padding-top:9px;padding-bottom:9px}
+  .seg{padding:5px 8px 6px}
+  .seg .sw{height:12px}
+  .slot .face{width:34px;height:34px}
+  .charCard{padding-top:3px;padding-bottom:2px;gap:1px}
+  .charCard .face{width:30px;height:30px}
+  .menuRow{margin-bottom:6px}
+  .cdTop .face{width:46px;height:46px}
+  #radar{flex-basis:150px;width:150px;height:150px}
+  .rosterRow{line-height:17px}
+}
+/* 横幅が足りないときは、選手の欄を設定の下へ回す（帯は下に貼りついたまま） */
+@media (max-width:1080px){
+  .menuCols{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:620px){
+  #start .card{--gutter:14px;padding-top:14px}
+  .startHead{flex-direction:column;align-items:flex-start;gap:6px}
+  .segs{flex-wrap:wrap}
+  .specialSegs{grid-template-columns:minmax(0,1fr)}
+  .seg{flex:1 1 calc(50% - 3px)}
+  .panelHint{display:none}
+  #charGrid{grid-template-columns:repeat(3,minmax(0,1fr))}
+  /* 枠が狭くて名前と重なるので、「ダブルスのみ」の札は出さず薄くするだけにする */
+  #matchup.singles .slot.mate::after{display:none}
+  .cdBody{flex-direction:column;align-items:stretch}
+  #radar{align-self:center}
+  .rosterHint{display:none}
+  .startFoot{gap:10px;padding-top:10px;padding-bottom:10px}
+  .footHint{display:none}
+  #start .playBtn{flex:1;padding:12px 16px;text-align:center}
+  #lessonList{grid-template-columns:1fr}
+}
 
 /* ---------------------------------------------- 試合後のスタッツ画面（#matchStats）
    スタート画面(#start)と同じ「暗幕＋カード」の作りにして、試合が一区切りついたことを
@@ -480,10 +716,4 @@ canvas{display:block}
 @media (max-width:520px){
   #keys{font-size:10px;gap:10px}
   #bug .nm{min-width:84px}
-  /* 狭い画面ではラベルを上に折り返して、ボタンとつまみバーの幅を確保する */
-  .menuRow{flex-wrap:wrap;gap:4px}
-  .menuLabel{flex:1 0 100%}
-  .menuNote{margin-left:0}
-  .specialSegs .seg.spec{min-width:0;flex:1 1 45%}
-  .rosterHint{display:none}
 }

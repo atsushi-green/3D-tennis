@@ -60,6 +60,11 @@
    */
   const SPECIAL_PRESET_KEYS = ['KeyZ'];
   /**
+   * スタート画面でのみ有効。最初のサーブ（コイントス → サーブから → レシーブから）を
+   * 順に切り替える（T＝Toss。試合中も含めてほかに使っていないキー）。
+   */
+  const FIRST_SERVE_KEYS = ['KeyT'];
+  /**
    * トス（コイントス）に勝った人間だけが選ぶ。スタート画面の各種選択が終わった後の
    * 別画面（handlers.isAwaitingToss()）でだけ意味を持つので、Digit1/2 を使い回しても
    * 難易度選択（Digit1〜3）とは表示上・時間軸上で重ならない。
@@ -106,7 +111,7 @@
      *   onChargeRelease:Function, onFormationNet:Function, onFormationBack:Function,
      *   onStandNet:Function, onStandBack:Function,
      *   onSelectDifficulty:Function, onSelectSurface:Function, onSelectStyle:Function,
-     *   onToggleGuide:Function, onCycleSpecials:Function,
+     *   onToggleGuide:Function, onCycleSpecials:Function, onCycleFirstServe:Function,
      *   onSelectToss:Function, isAwaitingToss:Function,
      *   onSkipReplay:Function, isStarted:Function,
      *   isMatchStatsOpen:Function, onCloseMatchStats:Function,
@@ -147,6 +152,7 @@
           else if (STYLE_KEYS[e.code]) handlers.onSelectStyle(STYLE_KEYS[e.code]);
           else if (GUIDE_KEYS.indexOf(e.code) !== -1) handlers.onToggleGuide();
           else if (SPECIAL_PRESET_KEYS.indexOf(e.code) !== -1) handlers.onCycleSpecials();
+          else if (FIRST_SERVE_KEYS.indexOf(e.code) !== -1) handlers.onCycleFirstServe();
           else handlers.onStart();
           return;
         }
