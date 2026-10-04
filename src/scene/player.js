@@ -312,6 +312,7 @@
 
   const READY = compilePose(MOTION.READY, null);
   const IDLE = compilePose(MOTION.IDLE, null);
+  const CHEER = compilePose(MOTION.CHEER, IDLE);
 
   const CLIPS = (() => {
     const fh = compileKeys(MOTION.FOREHAND.keys, READY);
@@ -981,6 +982,17 @@
       return { key: clip.id, kind: 'swing' };
     }
 
+    if (ctx.cheer) {
+      // 試合に勝った：両手を突き上げ、そのまま拳を上下させる（打ち終わるまでは上の振り付けが先）
+      mem.cheerT += ctx.dt || 0;
+      out.set(CHEER);
+      const pump = MOTION.CHEER_PUMP * Math.sin(mem.cheerT * TWO_PI * MOTION.CHEER_PUMP_HZ);
+      out[C.HAND + 1] += pump;
+      out[C.OFF + 1] += pump;
+      return { key: 'cheer', kind: 'cheer' };
+    }
+    mem.cheerT = 0;
+
     if (ctx.serve) {
       // サーブ：構え → トス（両腕を下げてから、逆手を上げ、ラケットを担ぐ）→ 跳んで打点へ。
       // トス中の進み具合はボールの上向きの速さ（＝トスを上げてからの時間）で読む。
@@ -1047,6 +1059,7 @@
 
   function blendTime(from, to) {
     const B = MOTION.BLEND;
+    if (to === 'cheer') return B.TO_CHEER;
     if (to === 'swing') return B.TO_SWING;
     if (to === 'prep') return B.TO_PREP;
     if (from === 'swing' || (from === 'rest' && to === 'rest')) return B.FROM_SWING;
@@ -1066,9 +1079,10 @@
    *   - swingCharge {number} 振り始めた瞬間に固定される溜め量(0〜1)
    *   - swing / chargeStroke / chargeSpin（人間だけ）溜めを離してから当たるまでの状態
    *   - leap / special 跳躍の時計と必殺技
-   * @param {{dt:number, ball:object, phase:string, serve:'hold'|'toss'|null}} ctx
+   * @param {{dt:number, ball:object, phase:string, serve:'hold'|'toss'|null, cheer?:boolean}} ctx
    *   ball＝ボール（位置・速度・live・last・bounces）、phase＝試合の局面、
-   *   serve＝この選手がサーブを待っている（'hold'）／トス中（'toss'）か
+   *   serve＝この選手がサーブを待っている（'hold'）／トス中（'toss'）か、
+   *   cheer＝試合に勝った側か（両手を突き上げる。MOTION.CHEER）
    */
   scene3d.setSwingPose = function setSwingPose(player, state, ctx) {
     const ud = player.userData;
@@ -1336,6 +1350,7 @@
         lastAnim: 0,
         leapSwung: false,
         contact: null,
+        cheerT: 0, // 両手を突き上げてからの秒数（拳を上下させる時計）
       },
     };
     // 一度もポーズを当てないメッシュ（縮地の残像）でも、腕が付け根から垂れた形にしておく

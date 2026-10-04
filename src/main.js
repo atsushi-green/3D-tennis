@@ -65,7 +65,7 @@
       score: () => hud.renderScore(game.match, game.server, game.stats),
       wind: (x, z) => hud.setWind(x, z),
       serveSpeed: (kmh) => hud.setServeSpeed(kmh),
-      // 1セットが終わって振り返りを出す番になった（game.js が TIMING.MATCH_STATS 後に呼ぶ）。
+      // 1セットが終わって振り返りを出す番になった（game.js が締めのカットを終えたところで呼ぶ）。
       // ここでは受け取っておくだけで、実際に出すのはフレームループ（リプレイ再生中に
       // 割り込まないよう、再生が終わってから開く）。
       matchEnd: (summary) => { pendingSummary = summary; },
@@ -277,6 +277,7 @@
       world.skipReplay();
       game.skipChangeover();
       game.skipMatchPointCut();
+      game.skipFinaleCut();
     },
     isMatchStatsOpen: () => matchStatsOpen,
     onCloseMatchStats: () => closeMatchStats(),
@@ -360,13 +361,18 @@
         world.startReplay(game.lineCall && game.lineCall.decisive ? LINE_CALL.REPLAY_DELAY : 0);
       }
       hud.setReplay(world.isReplaying(), world.isCheckingMark());
+      // 試合が決まった瞬間から、リプレイ・締めのカットを通してスタッツ画面が出るまで、スタンドは
+      // 総立ちで沸き続ける（スタッツ画面の番になったら収める）。ざわめきより先に渡す：大歓声が
+      // 鳴っている間と、それが収まりきるまでは、audio.js がざわめきを戻さない。
+      const finale = game.finale;
+      sfx.ovation(finale && !finale.done ? finale.team : null);
       // 観客のざわめきはポイントの合間だけ。サーブの構えに入ると静まり、ラリー中は無音。
       // 1本目のフォールトからセカンドサーブまでの間も静かなまま（'fault' は含めない）
       // マッチポイントの演出の間も、沸いているスタンドを映しているのでざわめきは消さない
       sfx.murmur(!game.practice && (world.isReplaying() || matchStatsOpen || !!game.changeover
         || !!game.matchPointCut || game.phase === 'over'));
       hud.setShade(game.changeoverShade());
-      hud.setCinema(!!game.matchPointCut);
+      hud.setCinema(!!game.matchPointCut || !!(finale && finale.cut));
       hud.setPractice(game.practice);
       // いま Space を押していて技が出る状態なら、溜めバーも金色にする（＝離した瞬間に
       // 何が起きるかが、視線を動かさずにバーだけで分かる）。
@@ -381,7 +387,8 @@
       hud.setSwingGuide(game.swingGuide, game.you.x);
       syncStamina();
     } else {
-      sfx.murmur(false); // 試合を作り直してスタート画面／レッスン一覧へ戻った
+      sfx.ovation(null); // 試合を作り直してスタート画面／レッスン一覧へ戻った
+      sfx.murmur(false);
     }
     world.render();
   }

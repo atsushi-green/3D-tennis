@@ -2001,6 +2001,70 @@
         CHEER_AT: [0.05, 1.6, 3.1],
         SETTLE: 0.7,
       },
+      /**
+       * 試合が決まった瞬間からの、総立ちの大歓声（sfx.ovation）。main.js が毎フレーム「勝った側」
+       * （鳴らし続ける間）か null（収める）を渡す。決まった瞬間から、リプレイ・締めのカット
+       * （FINALE）を通して試合後のスタッツ画面が出るまで鳴り続ける。
+       * 材料はマッチポイントの演出（MATCH_POINT）と同じ帯域を曲げたノイズの山と「ワー」の声に、
+       * 鳴りやまない拍手と指笛を足したもの。拍手は1粒ずつ鳴らすには数が多すぎるので、
+       * APPLAUSE.SEC 秒ぶんを左右別々に一度だけ焼いてループさせる。「ワー」の波・指笛・
+       * 歓声の山のうねりは、呼ばれるたびに LOOKAHEAD 秒先まで予約する（ざわめき MURMUR と同じやり方）。
+       * スタッツ画面の番になったら（null が来たら）、歓声の山は SETTLE.ROAR 秒で引き、拍手は
+       * 時定数 SETTLE.APPLAUSE で尾を引いて収まる。収まり始めてから SETTLE.MURMUR_AFTER 秒は
+       * ざわめきを戻さない（拍手の最中に話し声が聞こえると、ざわざわしているだけに聞こえる）。
+       * 次の試合のサーブの構えに入ったら（ざわめきが静まるのと同じ合図で）、残りも HUSH 秒で消す。
+       * 音量は、決め球の歓声（sfx.point。いちばん大きいとき 0.42）と重なっても割れない範囲で、
+       * マッチポイントの演出より大きく。
+       */
+      OVATION: {
+        TEAM_VOL: { you: 1, cpu: 0.75 }, // CPU が勝っても拍手は送るが、自分が勝ったときほどではない
+        // 歓声の山（ループさせたノイズ）。決め球の歓声に続いて ATTACK 秒で立ち上がる
+        ROAR: { VOL: 0.24, HZ: 1250, Q: 0.5, ATTACK: 0.7 },
+        // 歓声の山のうねり（大勢の声が寄せては返す）。SWELL 秒ごとに音量を ±DEPTH の割合で揺らす
+        SWELL: [0.9, 1.8],
+        DEPTH: 0.28,
+        // 拍手（焼いておいたループ）。1秒あたり RATE 回（左右それぞれ）の手拍子を、遠近（AMP）・
+        // 長さ（DUR 秒）・明るさ（帯域 BAND_HZ：低い側〜高い側の範囲から1つずつ引く）をばらつかせて重ねる
+        APPLAUSE: {
+          VOL: 0.04, SEC: 4.7, RATE: 600, ATTACK: 0.35,
+          AMP: [0.3, 1], DUR: [0.005, 0.02], BAND_HZ: [[500, 1100], [2600, 5200]],
+        },
+        // 決まった瞬間の「ワー」。決め球の歓声（拍手の粒）が鳴り始めた直後に、大きく長く沸き上がる
+        ERUPT: {
+          DELAY: 0.12, VOL: 0.24, DUR: 2.8, ATTACK: 0.25, HOLD: 0.45, SPREAD: 0.3,
+          VOICES: 22, PITCH_MIN: 140, PITCH_MAX: 360, PITCH_PEAK: 1.22, PITCH_END: 0.9,
+          VOWEL: [760, 1250, 2650], FORMANT_GAIN: [1, 0.6, 0.2], FORMANT_Q: 5, BREATH: 0.5,
+        },
+        // 鳴り続ける間の「ワー」「オー」の波。CHEER_EVERY 秒ごとに、VOWELS の母音から1つ選んで重ねる
+        CHEER: {
+          VOL: 0.16, DUR: 2.2, ATTACK: 0.35, HOLD: 0.4, SPREAD: 0.5,
+          VOICES: 16, PITCH_MIN: 140, PITCH_MAX: 340, PITCH_PEAK: 1.12, PITCH_END: 0.92,
+          FORMANT_GAIN: [1, 0.6, 0.2], FORMANT_Q: 5, BREATH: 0.5,
+        },
+        VOWELS: [[760, 1250, 2650], [520, 880, 2500], [660, 1100, 2550]], // ア・オ・アとオの間
+        CHEER_EVERY: [1.3, 2.3],
+        /**
+         * 指笛。サイン波を音程の折れ線（SHAPES：[長さに対する位置, 倍率] の並び）どおりに動かし、
+         * 細かいビブラートと息の音（同じ高さのバンドパスノイズ）を足す。高く抜ける「ピーッ」と
+         * 上がって下がって上がる「ピュイー」の2通り。EVERY 秒ごとに左右のどこかで鳴る。
+         */
+        WHISTLE: {
+          EVERY: [0.35, 1.3], VOL: 0.03, HZ: [1800, 2900], DUR: [0.35, 0.9],
+          SHAPES: [
+            [[0, 0.82], [0.12, 1], [0.85, 1.04], [1, 0.92]],
+            [[0, 0.72], [0.3, 1.12], [0.55, 0.94], [1, 1.1]],
+          ],
+          VIBRATO_HZ: 6.5, VIBRATO: 0.012, ATTACK: 0.03, RELEASE: 0.08,
+          BREATH: 0.3, BREATH_Q: 8, PAN: 0.85,
+        },
+        LOOKAHEAD: 0.4,
+        // 収まり方。ROAR＝歓声の山が消えるまで(秒)、APPLAUSE＝拍手の減り方の時定数(秒)、
+        // END＝鳴らし終える（音源を止めて片付ける）まで(秒)、MURMUR_AFTER＝ざわめきを戻し始めるまで(秒)
+        SETTLE: {
+          ROAR: 2.5, APPLAUSE: 3, END: 13, MURMUR_AFTER: 4.5,
+        },
+        HUSH: 0.6,
+      },
     },
   };
 
@@ -2019,12 +2083,10 @@
     CPU_SERVE_READY: 0.9,
     CPU_SERVE_DELAY: SERVE.CHARGE_SWEET_T,
     NEXT_POINT: 1.5,
-    NEXT_MATCH: 2.6,
-    // セットが終わってから、試合後のスタッツ画面を出すまでの間。「ゲームセット」のコールを
-    // 一拍読ませてから出す。Game#after のタイマーで数えるので、最後のポイントのリプレイを
-    // 再生している間（update() が止まっている間）は進まない＝リプレイの後に出る。
-    // NEXT_MATCH より短くしておくこと（次のマッチが始まる前に画面を出して、そこで止める）。
-    MATCH_STATS: 1.1,
+    // 試合後のスタッツ画面を出してから、次のマッチが始まるまで。画面を開いている間は
+    // main.js が update() を止めるので、実際には「閉じてから」この秒数だけ置いて始まる。
+    // セットが決まってから画面を出すまでの間は FINALE（締めくくり）が持つ。
+    NEXT_MATCH: 1.5,
     NET_IN_CALL: 0.8, // 「ネットイン！」のコール表示が消えるまで
     // ダブルスの立ち位置の指示（Q/E＝パートナー、R/F＝自分）を受けたときのコール表示が消えるまで
     ORDER_CALL: 0.8,
@@ -2121,6 +2183,43 @@
         FORWARD: 0.35, // 顔の前（コート側）へ出す距離（体の中に埋もれないように）
       },
     },
+  };
+
+  /**
+   * 試合が決まった後の締めくくり（Game#beginFinale）。決まった瞬間からスタンドは総立ちで沸き
+   * （観客の盛り上がりは MATCH_POINT.CROWD と同じ動き、歓声は AUDIO.CROWD.OVATION）、勝った側の
+   * 選手は両手を突き上げる（MOTION.CHEER）。最後のポイントのリプレイの後、勝った側を正面から映して
+   * 総立ちのスタンドを背に引いていくカット（締めのカット）を挟んでから、試合後のスタッツ画面を出す。
+   * カットの間は試合を止める（Space で切り上げられる）。
+   * ゲーム（game.js）が使うのは DELAY と DURATION だけで、残りは表示側の値。
+   */
+  const FINALE = {
+    // 決まってから締めのカットに入るまで（秒）。Game#after のタイマーで数えるので、最後のポイントの
+    // リプレイを再生している間（update() が止まっている間）は進まない＝リプレイが終わって
+    // いつもの画面に戻り、両手を突き上げている勝者を一拍見せてから入る。
+    DELAY: 0.7,
+    DURATION: 5.5, // 締めのカットの長さ（秒）。Game#update() の時計で数える
+    /**
+     * カメラ（scene/world.js#placeFinaleCamera）。勝った側（主力）の正面＝ネット側に立ち、
+     * 胸から上が大きく映る近さ（FROM）から、少し回り込みながら引いて上がり（TO）、勝者の背後の
+     * スタンド一面が総立ちになっているところまで見せる。DIST＝勝者からの水平距離(m)、
+     * HEIGHT＝カメラの高さ、LOOK_Y＝勝者の真上の見る高さ、ANGLE＝正面から横へ回り込む角度(rad。
+     * ＋が勝者から見て右)。
+     */
+    CAMERA: {
+      FROM: {
+        DIST: 4.4, HEIGHT: 1.2, LOOK_Y: 2.1, ANGLE: -0.45,
+      },
+      TO: {
+        DIST: 9.5, HEIGHT: 3.2, LOOK_Y: 2.4, ANGLE: 0.25,
+      },
+      EASE: 0.7, // 回り方の緩急（0＝等速、1＝smoothstep）
+      FOV: 42,
+    },
+    // スタッツ画面の番になってから観客が座っていく速さ（hype/秒）。拍手が尾を引いて収まる
+    // （AUDIO.CROWD.OVATION.SETTLE）のに合わせて、マッチポイントの演出の後（MATCH_POINT.CROWD.FALL）
+    // よりゆっくり
+    CROWD_FALL: 0.15,
   };
 
   /**
@@ -2792,6 +2891,7 @@
       TO_PREP: 0.2,        // 構え→テイクバック（ユニットターン）
       TO_SWING: 0.05,      // 打った瞬間に別の振り付けへ切り替わるとき（打点を見失わないよう短く）
       FROM_SWING: 0.34,    // 振り終わり→構えへ戻る
+      TO_CHEER: 0.3,       // 試合が決まって両手を突き上げる（MOTION.CHEER）
     },
     // 当たる何秒前からフォワードスイングを始めるか。当たる瞬間までに φ を FWD_MAX まで進め、
     // 残り（打点まで）は当たった瞬間に一気に通す。anim は当たった瞬間からしか始まらない
@@ -2881,6 +2981,17 @@
       elbow: [0.3, -1, -0.5], off: [-0.30, -0.01, 0.05], offElbow: [-0.3, -1, -0.5],
       twist: 0, hips: 0, bend: 0, crouch: 0, lean: 0.02,
     },
+    /**
+     * 試合が決まった後の勝者（FINALE）：ラケットを握ったまま両手を頭の上へ突き上げ、少し胸を張る。
+     * 突き上げた両手を PUMP_HZ 回/秒で PUMP(m) だけ上下させる（ガッツポーズを繰り返す）。
+     */
+    CHEER: {
+      hand: [0.3, 1.1, 0.12], dir: [0.12, 1, 0.2], face: [0.2, 0.1, 1],
+      elbow: [1, -0.25, -0.45], off: [-0.3, 1.06, 0.12], offElbow: [-1, -0.25, -0.45],
+      twist: 0, hips: 0, bend: 0, crouch: 0, lean: -0.06,
+    },
+    CHEER_PUMP: 0.07,
+    CHEER_PUMP_HZ: 1.7,
 
     /**
      * フォアハンド。肩を入れてラケットを後ろに引き（逆手はボールの方へ伸ばす）、
@@ -3901,7 +4012,7 @@
 
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
-    BOUNDS, CPU, DOUBLES, RULES, TIMING, CHANGEOVER, MATCH_POINT, PRACTICE, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
+    BOUNDS, CPU, DOUBLES, RULES, TIMING, CHANGEOVER, MATCH_POINT, FINALE, PRACTICE, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT, GUIDE,
     SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, STAMINA, TOSS, OFFICIALS, LINE_CALL, BALL_MARK,
     STANDS, SPECTATORS, FLAG, MOTION,

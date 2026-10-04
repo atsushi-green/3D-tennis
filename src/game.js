@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    ATTRS, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, FX, HALF_L, HALF_W, LINE_CALL, MATCH_POINT,
+    ATTRS, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, FINALE, FX, HALF_L, HALF_W, LINE_CALL, MATCH_POINT,
     NET, PHYSICS, PLAYER, PRACTICE, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, SWING,
     TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND, shotSkill,
   } = RallyOne.config;
@@ -1003,6 +1003,17 @@
        */
       this.matchPointCut = null;
       this.matchPointCutDone = false;
+      /**
+       * 試合が決まってから次の試合が始まるまでの締めくくり（beginFinale()）の間だけ
+       * { team, cut, t, done, changeover } が入る（それ以外は null）。team＝勝った側、
+       * cut＝締めのカット（勝者を映して総立ちのスタンドを背に引いていく）を映している最中か、
+       * t＝カットが始まってからの秒数、done＝カットを映し終えて試合後のスタッツ画面の番に
+       * なったか、changeover＝次の試合の前にコートを入れ替わるか（scoring.changeoverAfter()）。
+       * 決まった瞬間から done になるまで、表示側はスタンドを総立ちで沸かせて大歓声を鳴らし続け
+       * （scene/world.js・main.js → sfx.ovation）、勝った側の選手は両手を突き上げる。
+       * カットの間は update() が試合を止める。
+       */
+      this.finale = null;
       /**
        * 練習モード（startPractice()）の進み具合。試合中は null。
        * { lesson, done, tries, rep, cleared, shot, fired, target }：lesson＝config.PRACTICE の
@@ -2073,6 +2084,71 @@
       this.matchPointCut = null;
       this.hooks.sound('matchPointEnd');
       this.announceServe();
+    }
+
+    /**
+     * 試合が決まった（endPoint() でセットが決まった）。ここからスタンドは総立ちで沸き、勝った側は
+     * 両手を突き上げる（表示側が finale を見る）。「ゲームセット」のコールと最後のポイントの
+     * リプレイを見せてから、FINALE.DELAY だけ置いて締めのカットに入る。ここは setTimeout ではなく
+     * Game#after のタイマーなので、update() が止まっている間（＝リプレイ再生中）は進まない
+     * ＝リプレイが終わってから数え始める。
+     * @param {'you'|'cpu'} winner
+     * @param {string|null} changeover 決まった直後のスコアで、次の試合の前にコートを入れ替わるか
+     */
+    beginFinale(winner, changeover) {
+      const finale = {
+        team: winner, cut: false, t: 0, done: false, changeover,
+      };
+      this.finale = finale;
+      this.after(FINALE.DELAY, () => {
+        finale.cut = true;
+        const { games } = this.match; // セットの終わりは match.reset() まで最終スコアのまま
+        const result = `${winner === 'you' ? 'あなたの勝ち' : 'CPU の勝ち'} ${games.you}-${games.cpu}`;
+        this.hooks.call('ゲームセット', `${result} ／ SPACE でスキップ`);
+      });
+    }
+
+    tickFinaleCut(dt) {
+      const finale = this.finale;
+      finale.t += dt;
+      if (finale.t >= FINALE.DURATION) this.endFinaleCut();
+    }
+
+    /** 締めのカットを切り上げる（Space）。 */
+    skipFinaleCut() {
+      if (this.finale && this.finale.cut) this.endFinaleCut();
+    }
+
+    /**
+     * 締めのカットを終えて、試合後のスタッツ画面の番にする（画面を出すのは表示側。main.js が
+     * hooks.matchEnd で受ける）。画面を開いている間は main.js が update() を止めるので、
+     * 閉じてから TIMING.NEXT_MATCH だけ置いて次のマッチが始まる。
+     */
+    endFinaleCut() {
+      const finale = this.finale;
+      finale.cut = false;
+      finale.done = true;
+      this.hooks.matchEnd(this.matchSummary(finale.team));
+      this.after(TIMING.NEXT_MATCH, () => this.startNextMatch(finale.changeover));
+    }
+
+    /** @param {string|null} changeover 前の試合が決まった直後のスコアでのチェンジエンズ */
+    startNextMatch(changeover) {
+      this.finale = null;
+      this.match.reset();
+      this.resetStats(); // 次のマッチは0から数え直す（スタッツ画面はもう出した後）
+      this.matchPointCutDone = false; // 次のマッチの最初のマッチポイントでも演出を出す
+      this.serverPartner = { you: 'you', cpu: 'cpu' }; // 次のセットは主力からサーブし直す
+      this.hooks.score();
+      // セット間の休憩。ゲーム数が奇数で終わったセットなら、その間にコートも入れ替わる。
+      // 偶数なら入れ替わらず（次のセットの第1ゲームの後に入れ替わる）、休憩ぶんの
+      // スタミナだけ戻して始める。
+      if (changeover) {
+        this.beginChangeover(changeover);
+      } else {
+        this.recoverStamina(CHANGEOVER.RECOVER_MULT.setBreak);
+        this.newPoint();
+      }
     }
 
     /** コートを入れ替わる。会場の向きは表示側が endsSwapped を見て回す。 */
@@ -3520,27 +3596,7 @@
       if (result.type === 'set') {
         this.hooks.call('ゲームセット', mine ? 'あなたの勝ち' : 'CPU の勝ち');
         this.hooks.score();
-        // 「ゲームセット」のコール（と最後のポイントのリプレイ）を見せてから、一拍おいて
-        // 振り返りのスタッツを出す。ここは setTimeout ではなく Game#after のタイマーなので
-        // update() が止まっている間（＝リプレイ再生中）は進まない＝リプレイが終わってから
-        // 数え始める。画面を出すのは表示側（main.js が hooks.matchEnd で受ける）。
-        this.after(TIMING.MATCH_STATS, () => this.hooks.matchEnd(this.matchSummary(winner)));
-        this.after(TIMING.NEXT_MATCH, () => {
-          this.match.reset();
-          this.resetStats(); // 次のマッチは0から数え直す（スタッツ画面はもう出した後）
-          this.matchPointCutDone = false; // 次のマッチの最初のマッチポイントでも演出を出す
-          this.serverPartner = { you: 'you', cpu: 'cpu' }; // 次のセットは主力からサーブし直す
-          this.hooks.score();
-          // セット間の休憩。ゲーム数が奇数で終わったセットなら、その間にコートも入れ替わる。
-          // 偶数なら入れ替わらず（次のセットの第1ゲームの後に入れ替わる）、休憩ぶんの
-          // スタミナだけ戻して始める。
-          if (changeover) {
-            this.beginChangeover(changeover);
-          } else {
-            this.recoverStamina(CHANGEOVER.RECOVER_MULT.setBreak);
-            this.newPoint();
-          }
-        });
+        this.beginFinale(winner, changeover);
         return;
       }
 
@@ -3751,6 +3807,11 @@
       if (this.matchPointCut) {
         this.tickChangeover(dt);
         this.tickMatchPointCut(dt);
+        return;
+      }
+      // 締めのカットの間も止める（選手は決まった後の位置のまま、勝った側は両手を突き上げて映る）
+      if (this.finale && this.finale.cut) {
+        this.tickFinaleCut(dt);
         return;
       }
       this.tickTimers(dt);

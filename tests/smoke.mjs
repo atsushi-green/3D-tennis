@@ -3065,8 +3065,9 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
 {
   const g = new R.Game({ input: fakeInput, hooks: noHooks });
   g.start(false, 'you');
+  // セットが決まった1点は、締めくくり（FINALE）とセット間の休憩を挟むぶん長く待つ
   const settle = () => {
-    for (let i = 0; i < 60 * 10 && (g.phase !== 'serve' || g.changeover); i++) g.update(1 / 60);
+    for (let i = 0; i < 60 * 20 && (g.phase !== 'serve' || g.changeover); i++) g.update(1 / 60);
   };
   const winPoint = (who) => { g.phase = 'rally'; g.endPoint(who, 'test'); settle(); };
   g.match.games = { you: 6, cpu: 6 };
@@ -3096,7 +3097,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   h.you.stamina = 0.2;
   h.phase = 'rally';
   h.endPoint('you', 'test');
-  for (let i = 0; i < 60 * 10 && (h.phase !== 'serve' || h.changeover); i++) h.update(1 / 60);
+  for (let i = 0; i < 60 * 20 && (h.phase !== 'serve' || h.changeover); i++) h.update(1 / 60);
   ok(!h.endsSwapped && h.match.games.you === 0, 'a 6-0 set (6 games) ends without a change of ends');
   const { CHANGEOVER, STAMINA } = R.config;
   const setBreak = STAMINA.RECOVER_PER_POINT * (1 + CHANGEOVER.RECOVER_MULT.setBreak);
@@ -3153,7 +3154,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   g.start();
   // タイマーは「その瞬間に待っている予定」の数。溜まり続けない（＝リークしない）ことを
   // 見たいので、最後の1フレームだけでなく走っている間の最大値を見る。セットが決まった
-  // 直後だけは MATCH_STATS と NEXT_MATCH の2本が同時に待つので、2本までは正常。
+  // 後は締めのカットまでの1本（FINALE.DELAY）、カットの後は次の試合までの1本（NEXT_MATCH）
+  // しか待たないが、ほかの演出のタイマーと重なることもあるので2本までは正常とみなす。
   let maxTimers = 0;
   for (let i = 0; i < 60 * 600; i++) {
     if (g.phase === 'serve' && g.server === 'you') tap(g);
@@ -4037,9 +4039,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   ok(events.length > 20, `doubles: calls fired: ${events.length}`);
   ok(Number.isFinite(g.ball.x) && Number.isFinite(g.ball.y), 'doubles: ball stays finite');
   ok(Number.isFinite(g.youMate.x) && Number.isFinite(g.cpuMate.x), 'doubles: mates stay finite');
-  // シングルス版と同じく、セットが決まった直後だけは MATCH_STATS と NEXT_MATCH の2本が
-  // 同時に待つのが正常。最後の1フレームがたまたまその瞬間に当たると2本になる（以前は
-  // 1本以下で見ていたため、試合の進み方しだいでまれに落ちていた）。
+  // シングルス版と同じく2本までは正常（以前は1本以下で見ていたため、最後の1フレームが
+  // たまたま演出のタイマーと重なる瞬間に当たると、試合の進み方しだいでまれに落ちていた）。
   ok(g.timers.length <= 2, `doubles: timers do not leak: ${g.timers.length}`);
 }
 
@@ -6830,10 +6831,11 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   for (let i = 0; i < 3; i++) winPoint(false);
   winPoint(true); // この1本でゲーム＝セットが決まる
   ok(g.match.games.you === 6, `precondition: the set is won, games=${g.match.games.you}`);
-  ok(ends.length === 0, 'the summary does not appear before TIMING.MATCH_STATS has passed');
-  // TIMING.MATCH_STATS ぶん進めると出る（リプレイ中は main.js が update() を止めるので、
-  // 実際の画面では再生が終わってから数え始める）
-  for (let i = 0; i < 60 * 2 && ends.length === 0; i++) g.update(1 / 60);
+  ok(ends.length === 0, 'the summary does not appear before the finale has played');
+  // 締めくくり（FINALE.DELAY の後に締めのカットを DURATION）を見せてから出る（リプレイ中は
+  // main.js が update() を止めるので、実際の画面では再生が終わってから数え始める）
+  const { FINALE } = R.config;
+  for (let i = 0; i < 60 * (FINALE.DELAY + FINALE.DURATION + 1) && ends.length === 0; i++) g.update(1 / 60);
   ok(ends.length === 1, `matchEnd fires once when the set ends: ${ends.length}`);
   ok(ends[0].winner === 'you' && ends[0].games.you === 6, 'the summary has the final score');
   ok(ends[0].you.winners === 4, `and the accumulated stats: ${ends[0].you.winners}`);
@@ -6842,6 +6844,88 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   ok(g.stats.you.winners === 0 && g.match.games.you === 0, 'the next match starts from zero');
   ok(ends.length === 1, 'and the summary is not shown twice');
   ok(g.matchPointCutDone === false, 'and the next match gets its own match point cut again');
+}
+
+// --- 試合が決まった後の締めくくり：総立ちのまま、一拍おいて締めのカット、それからスタッツ画面 ---
+{
+  const { FINALE, TIMING } = R.config;
+  const calls = [];
+  const ends = [];
+  const hooks = {
+    ...noHooks,
+    call: (big, sub) => calls.push(`${big}|${sub || ''}`),
+    matchEnd: (summary) => ends.push(summary),
+  };
+  /** 5-0 40-0（マッチポイントの演出はもう出した扱い）から、winner がこの1点を取って試合が決まる。 */
+  const decide = (winner) => {
+    const g = new R.Game({ input: fakeInput, hooks });
+    g.start(false, 'you');
+    const leader = winner;
+    const trailer = winner === 'you' ? 'cpu' : 'you';
+    g.match.games = { [leader]: 5, [trailer]: 0 };
+    g.match.points = { [leader]: 3, [trailer]: 0 };
+    g.matchPointCutDone = true;
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.rallyShots = 4;
+    calls.length = 0;
+    ends.length = 0;
+    g.endPoint(winner, 'ツーバウンド');
+    return g;
+  };
+  const step = (g, sec) => { for (let i = 0; i < Math.round(60 * sec); i++) g.update(1 / 60); };
+
+  const g = decide('you');
+  ok(!!g.finale && g.finale.team === 'you' && !g.finale.cut && !g.finale.done,
+    `the winning point starts the finale (the crowd rises at once), got ${JSON.stringify(g.finale)}`);
+  ok(calls[calls.length - 1] === 'ゲームセット|あなたの勝ち', `and calls game set, got ${calls[calls.length - 1]}`);
+  // Space を押しても（リプレイを飛ばした勢いで）まだ始まっていないカットを先に飛ばしたりしない
+  g.skipFinaleCut();
+  ok(!g.finale.cut && !g.finale.done && ends.length === 0, 'Space before the cut does not skip it ahead of time');
+  step(g, FINALE.DELAY - 0.1);
+  ok(!g.finale.cut, 'the closing cut waits FINALE.DELAY (counted after the replay)');
+  step(g, 0.2);
+  ok(g.finale.cut && Math.abs(g.finale.t) < 0.2, `then the closing cut begins, got ${JSON.stringify(g.finale)}`);
+  ok(calls[calls.length - 1].startsWith('ゲームセット|あなたの勝ち 6-0') && calls[calls.length - 1].includes('SPACE'),
+    `and the call shows the final score and how to skip, got ${calls[calls.length - 1]}`);
+  // カットの間は試合が止まる（選手は決まった後の位置のまま。入力があっても動かない）
+  const at = { x: g.you.x, z: g.you.z };
+  const t0 = g.finale.t;
+  const input = g.input;
+  g.input = { ...fakeInput, moveX: 1, moveZ: 1 };
+  step(g, 1);
+  g.input = input;
+  ok(g.you.x === at.x && g.you.z === at.z, 'the players hold still during the cut');
+  ok(Math.abs(g.finale.t - t0 - 1) < 1e-6 && g.timers.length === 0,
+    `the cut runs on the game clock with nothing else pending, t=${g.finale.t} timers=${g.timers.length}`);
+  ok(ends.length === 0, 'the summary waits for the cut to finish');
+  step(g, FINALE.DURATION);
+  ok(!g.finale.cut && g.finale.done, 'the cut ends by itself after FINALE.DURATION');
+  ok(ends.length === 1 && ends[0].winner === 'you', `and only then the summary comes up: ${ends.length}`);
+  ok(g.match.games.you === 6, 'the final score stays on the board while the summary is up');
+  step(g, TIMING.NEXT_MATCH + 0.2);
+  ok(g.finale === null && g.match.games.you === 0, 'the next match clears the finale and starts from zero');
+  ok(ends.length === 1, 'and the summary is not shown twice');
+
+  // CPU が勝っても同じ流れ。Space でカットを切り上げると、すぐスタッツ画面の番になる
+  const c = decide('cpu');
+  ok(!!c.finale && c.finale.team === 'cpu', 'a CPU win starts the finale too');
+  ok(calls[calls.length - 1] === 'ゲームセット|CPU の勝ち', `and calls it, got ${calls[calls.length - 1]}`);
+  step(c, FINALE.DELAY + 0.1);
+  ok(c.finale.cut, 'precondition: the closing cut is on');
+  c.skipFinaleCut();
+  ok(!c.finale.cut && c.finale.done && ends.length === 1 && ends[0].winner === 'cpu',
+    'Space ends the cut at once and brings up the summary');
+  c.skipFinaleCut();
+  ok(ends.length === 1, 'a second Space does not bring it up twice');
+
+  // ふつうのゲーム（試合が決まらない1点）では締めくくりは始まらない
+  const n = new R.Game({ input: fakeInput, hooks });
+  n.start(false, 'you');
+  n.match.points = { you: 3, cpu: 0 };
+  n.phase = 'rally';
+  n.endPoint('you', 'ツーバウンド');
+  ok(n.finale === null, 'winning an ordinary game does not start the finale');
 }
 
 // --- 試合後のスタッツ：1stサーブの本数と確率、最速サーブ（実際にサーブを打って数える） ---

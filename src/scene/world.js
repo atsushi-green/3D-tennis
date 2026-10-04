@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    CAMERA, FX, PLAYER, SPECIAL, THEME, REPLAY, HALF_L, LINE_CALL, BALL_MARK, SURFACE, MATCH_POINT,
+    CAMERA, FX, PLAYER, SPECIAL, THEME, REPLAY, HALF_L, LINE_CALL, BALL_MARK, SURFACE, MATCH_POINT, FINALE,
   } = RallyOne.config;
   const { lerp, clamp } = RallyOne.math;
   const scene3d = RallyOne.scene;
@@ -35,7 +35,7 @@
     const ballMarks = scene3d.createBallMarks();
     // 風向きの旗も会場の側（風は会場に吹いているので、回った後も会場に対して同じ向きになびく）
     const flags = scene3d.createFlags();
-    // 観客（マッチポイントの演出で沸く。updateCrowd() に盛り上がりの度合いを渡す）
+    // 観客（マッチポイントの演出・試合が決まった後に沸く。updateCrowd() に盛り上がりの度合いを渡す）
     const crowd = scene3d.createCrowd();
     venue.add(officials, ballMarks.group, crowd, flags, stage.sun);
     scene.add(court, scene3d.createNet(), venue);
@@ -124,6 +124,7 @@
     }
 
     // --- マッチポイントの演出（game.matchPointCut。カメラを観客席へ切り替えて回す） ---
+    // 試合が決まった後の締めのカット（game.finale.cut）も同じ切り替え・切り戻しを使う
     let cutShown = false; // 前のフレームで演出のカメラを映していたか（終わった瞬間に切り戻す）
     let crowdHype = 0;    // 観客の盛り上がり（0〜1。演出の間に上がり、終わると収まる）
 
@@ -145,14 +146,41 @@
     }
 
     /**
+     * 試合が決まった後の締めのカット（game.finale.cut。FINALE.CAMERA）。勝った側（主力）の正面＝
+     * ネット側から、少し回り込みながら引いて上がる。位置はカットの経過時間（ゲームの時計）と勝者の
+     * 位置（カットの間は試合が止まっていて動かない）だけで決まる＝切り替わった最初のコマから
+     * lerp なしでその位置にいる。
+     * @param {{t:number, team:'you'|'cpu'}} finale game.finale
+     */
+    function placeFinaleCamera(finale, state) {
+      const C = FINALE.CAMERA;
+      const p = state[finale.team];
+      const u = clamp(finale.t / FINALE.DURATION, 0, 1);
+      const e = lerp(u, u * u * (3 - 2 * u), C.EASE);
+      const at = (key) => lerp(C.FROM[key], C.TO[key], e);
+      // ネットへ向かう向き（勝者の正面）。z=0 ちょうどにいることはまずないが、そのときはチームで決める
+      const toNet = p.z === 0 ? (finale.team === 'you' ? 1 : -1) : -Math.sign(p.z);
+      const angle = at('ANGLE') * toNet; // 勝者から見た右（相手側を向いて右）が＋になるよう向きで符号を揃える
+      const dist = at('DIST');
+      setFov(C.FOV);
+      camera.position.set(
+        p.x - Math.sin(angle) * dist,
+        at('HEIGHT'),
+        p.z + toNet * Math.cos(angle) * dist,
+      );
+      camera.lookAt(p.x, at('LOOK_Y'), p.z);
+    }
+
+    /**
      * プレイヤー1人ぶんの位置・スイング・歩行ポーズと影をまとめて反映する。
      * @param {object} frame 生の game state かリプレイの1コマ（ball・phase を読む）
      * @param {'hold'|'toss'|null} serve この選手がサーブを待っている／トス中か
+     * @param {boolean} [cheer] 試合に勝った側か（両手を突き上げる。リプレイのコマでは渡さない）
      */
-    function syncPlayer(mesh, shadow, state, maxSpeed, dt, frame, serve) {
+    function syncPlayer(mesh, shadow, state, maxSpeed, dt, frame, serve, cheer) {
       mesh.position.set(state.x, 0, state.z);
       scene3d.setSwingPose(mesh, state, {
-        dt, ball: frame.ball, phase: frame.phase, serve,
+        dt, ball: frame.ball, phase: frame.phase, serve, cheer: !!cheer,
       });
       scene3d.setGaitPose(mesh, state.speed, maxSpeed, dt);
       // スマッシュ・サーブのジャンプ・飛びつきボレーの倒れ込み・ツイーナーの跳躍は歩行の後
@@ -185,15 +213,18 @@
      * 選手・ボールのメッシュへ反映する部分だけを、生の game state とリプレイの1コマの
      * 両方から呼べるよう切り出したもの（syncCamera・trail・smashHint は含まない：
      * それぞれ生の state とリプレイで振る舞いが違うため sync() 側で個別に扱う）。
+     * @param {'you'|'cpu'|null} [winner] 試合に勝った側（両手を突き上げる。生の state のときだけ）
      */
-    function applyFrame(state, dt, stages) {
-      syncPlayer(you, shadows.you, state.you, PLAYER.SPEED, dt, state, stages.you);
-      syncPlayer(cpu, shadows.cpu, state.cpu, PLAYER.CPU_CHASE, dt, state, stages.cpu);
+    function applyFrame(state, dt, stages, winner) {
+      syncPlayer(you, shadows.you, state.you, PLAYER.SPEED, dt, state, stages.you, winner === 'you');
+      syncPlayer(cpu, shadows.cpu, state.cpu, PLAYER.CPU_CHASE, dt, state, stages.cpu, winner === 'cpu');
 
       youMate.visible = cpuMate.visible = shadows.youMate.visible = shadows.cpuMate.visible = state.doubles;
       if (state.doubles) {
-        syncPlayer(youMate, shadows.youMate, state.youMate, PLAYER.CPU_CHASE, dt, state, stages.youMate);
-        syncPlayer(cpuMate, shadows.cpuMate, state.cpuMate, PLAYER.CPU_CHASE, dt, state, stages.cpuMate);
+        syncPlayer(youMate, shadows.youMate, state.youMate, PLAYER.CPU_CHASE, dt, state, stages.youMate,
+          winner === 'you');
+        syncPlayer(cpuMate, shadows.cpuMate, state.cpuMate, PLAYER.CPU_CHASE, dt, state, stages.cpuMate,
+          winner === 'cpu');
       }
 
       // 縮地の残像（跳ぶ前の位置に一瞬だけ残る分身）。リプレイでも同じように出したいので、
@@ -489,9 +520,13 @@
       // 座標へ戻して渡す＝チェンジエンズの瞬間に旗がくるりと向きを変えたりしない。
       const venueSide = state.endsSwapped ? -1 : 1;
       scene3d.updateFlags(flags, state.wind * venueSide, state.windZ * venueSide, dt);
+      // 観客はマッチポイントの演出の間と、試合が決まってからスタッツ画面が出るまで総立ちで沸く。
+      // スタッツ画面の番になったら（finale.done）、拍手が収まっていくのに合わせてゆっくり座る。
       const cut = state.matchPointCut;
+      const finale = state.finale;
       const H = MATCH_POINT.CROWD;
-      crowdHype = cut ? Math.min(1, crowdHype + dt * H.RISE) : Math.max(0, crowdHype - dt * H.FALL);
+      if (cut || (finale && !finale.done)) crowdHype = Math.min(1, crowdHype + dt * H.RISE);
+      else crowdHype = Math.max(0, crowdHype - dt * (finale ? FINALE.CROWD_FALL : H.FALL));
       scene3d.updateCrowd(crowd, crowdHype, dt);
       // 録画は再生中も止めない：裏では game.update() が実際の試合を進め続けているので、
       // ここで録り漏らすと再生の直後に次のポイントがすぐ終わったとき history が
@@ -537,13 +572,15 @@
         snapCamera(state.you);
       }
 
-      applyFrame(state, dt, serveStages(state));
+      applyFrame(state, dt, serveStages(state), finale && finale.team);
       ballMesh.visible = shadows.ball.visible = true;
       poseLineJudges(recClock);
       // 軌跡はラリーの決着がついた後（ポイント間の 'serve' 待ち・'over'）だけ見せる。
       // ラリー中に出しっぱなしだと本来の目的（アウトの結果を振り返る）を超えて
-      // 「次にどこへ来るか」の手がかりになってしまうため。
-      scene3d.updateTrail(trail, state.phase === 'rally' ? NO_TRAIL : state.trail);
+      // 「次にどこへ来るか」の手がかりになってしまうため。観客席や勝者を映す演出のカットでも
+      // 隠す（コートの外から映すと、前のポイントの軌跡が線になって空に浮いて見える）。
+      const cutting = cut || (finale && finale.cut);
+      scene3d.updateTrail(trail, state.phase === 'rally' || cutting ? NO_TRAIL : state.trail);
       // スマッシュの先回り地点。打てる球が来ていないフレームは state.smashHint が null になる。
       scene3d.placeSmashHint(smashHint, state.smashHint);
       // ガイド付きモードの「いま離したらここへ飛ぶ」。それ以外は state.swingGuide が null。
@@ -553,6 +590,9 @@
 
       if (cut) {
         placeMatchPointCamera(cut);
+        cutShown = true;
+      } else if (finale && finale.cut) {
+        placeFinaleCamera(finale, state);
         cutShown = true;
       } else if (cutShown) {
         cutShown = false;
