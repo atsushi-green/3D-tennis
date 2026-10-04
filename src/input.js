@@ -21,9 +21,21 @@
    */
   const SWING = { KeyB: 'flat', KeyV: 'top', KeyC: 'slice' };
   const SWING_CODES = Object.keys(SWING);
+  /**
+   * キックサーブ（必殺技）のキー。自分のサーブで B/V/C の代わりに押してトスを上げると、
+   * 離した1本がキックサーブになる（溜めて離す操作は B/V/C と同じ）。サーブ以外では何もしない。
+   * 以前は専用のキーが無く、技を選んでいると自分のサーブがすべてキックサーブになっていた。
+   */
+  const KICK = ['KeyK'];
   /** ダブルスのAIパートナーへの指示。Q＝ネットへ前へ、E＝ベースラインまで下がれ */
   const FORMATION_NET = ['KeyQ'];
   const FORMATION_BACK = ['KeyE'];
+  /**
+   * ダブルスのサーブ前に、自分（人間）の立ち位置を指示する。R＝前（ネット際）、F＝後ろ
+   * （ベースライン付近）。W/S（前後の移動）と同じく上の段が前・下の段が後ろ。
+   */
+  const STAND_NET = ['KeyR'];
+  const STAND_BACK = ['KeyF'];
   /**
    * スタート画面でのみ有効。CPU/AIの強さ（Easy/Normal/Hard/Extreme）を選ぶ。
    * Extreme だけ数字キーではなく X なのは、Digit1〜0 が既に難易度3段・サーフェス3種・
@@ -48,15 +60,20 @@
    */
   const SPECIAL_PRESET_KEYS = ['KeyZ'];
   /**
+   * スタート画面でのみ有効。最初のサーブ（コイントス → サーブから → レシーブから）を
+   * 順に切り替える（T＝Toss。試合中も含めてほかに使っていないキー）。
+   */
+  const FIRST_SERVE_KEYS = ['KeyT'];
+  /**
    * トス（コイントス）に勝った人間だけが選ぶ。スタート画面の各種選択が終わった後の
    * 別画面（handlers.isAwaitingToss()）でだけ意味を持つので、Digit1/2 を使い回しても
    * 難易度選択（Digit1〜3）とは表示上・時間軸上で重ならない。
    */
   const TOSS_KEYS = { Digit1: 'serve', Digit2: 'receive' };
   /**
-   * ポイント間のリプレイを飛ばすキー。以前は「どのキーでも飛ばす」だったが、それだと
-   * 次のポイントに備えて構えのキーに触れただけでリプレイが消えてしまうので、
-   * 試合中は他に用のない Space だけに限定する。
+   * ポイント間のリプレイ（とチェンジエンズの休憩）を飛ばすキー。以前は「どのキーでも
+   * 飛ばす」だったが、それだと次のポイントに備えて構えのキーに触れただけでリプレイが
+   * 消えてしまうので、試合中は他に用のない Space だけに限定する。
    */
   const SKIP_REPLAY = ['Space'];
   /**
@@ -64,26 +81,43 @@
    * （構えのキーに触れただけで振り返りが消えてしまわないよう、リプレイのスキップと同じ考え方）。
    */
   const CLOSE_MATCH_STATS = ['Space', 'Enter'];
+  /**
+   * 練習モード。スタート画面の P でレッスン一覧を開き、一覧の中は矢印で選んで Space/Enter で
+   * 始める（一覧は2列なので ←→ は隣、↑↓ は上下の行＝2つ先）。練習中は N で次のレッスン、
+   * Esc でレッスン一覧へ戻る（どちらも試合中は何もしない）。
+   */
+  const OPEN_PRACTICE = ['KeyP'];
+  const LESSON_MOVE = {
+    ArrowLeft: -1, ArrowRight: 1, ArrowUp: -2, ArrowDown: 2,
+  };
+  const LESSON_START = ['Space', 'Enter'];
+  const LESSON_BACK = ['Escape', 'Backspace'];
+  const NEXT_LESSON = ['KeyN'];
+  const BACK_TO_MENU = ['Escape'];
   /** ブラウザのスクロールを止めたいキー */
   const SWALLOW = MOVE_LEFT.concat(MOVE_RIGHT, MOVE_UP, MOVE_DOWN, SWING_CODES, SKIP_REPLAY);
 
   class Input {
     constructor() {
       this.held = new Set();
-      // 溜め始めに使った1つのキー（B/V/C いずれか、またはポインタなら 'Pointer'）。
+      // 溜め始めに使った1つのキー（B/V/C/K いずれか、またはポインタなら 'Pointer'）。
       // 溜めている間に他の2キーを押しても無視し、この打鍵が離されたときだけ離した扱いにする。
       this.chargeKey = null;
     }
 
     /**
      * @param {{onStart:Function, onStartSingles:Function, onStartDoubles:Function,
-     *   onChargeStart:Function,
+     *   onChargeStart:Function, onKickStart:Function,
      *   onChargeRelease:Function, onFormationNet:Function, onFormationBack:Function,
+     *   onStandNet:Function, onStandBack:Function,
      *   onSelectDifficulty:Function, onSelectSurface:Function, onSelectStyle:Function,
-     *   onToggleGuide:Function, onCycleSpecials:Function,
+     *   onToggleGuide:Function, onCycleSpecials:Function, onCycleFirstServe:Function,
      *   onSelectToss:Function, isAwaitingToss:Function,
      *   onSkipReplay:Function, isStarted:Function,
-     *   isMatchStatsOpen:Function, onCloseMatchStats:Function}} handlers
+     *   isMatchStatsOpen:Function, onCloseMatchStats:Function,
+     *   onOpenPractice:Function, isLessonMenuOpen:Function, onLessonCursor:(step:number)=>void,
+     *   onLessonStart:Function, onLessonBack:Function,
+     *   isPracticing:Function, onNextLesson:Function, onBackToMenu:Function}} handlers
      */
     attach(handlers) {
       addEventListener('keydown', (e) => {
@@ -95,6 +129,20 @@
             if (TOSS_KEYS[e.code]) handlers.onSelectToss(TOSS_KEYS[e.code]);
             return; // トスの結果待ちの間は、他の開始キーには反応しない
           }
+          // レッスン一覧を開いている間は、一覧の操作だけ（試合の開始キーには反応しない）
+          if (handlers.isLessonMenuOpen()) {
+            if (LESSON_MOVE[e.code]) handlers.onLessonCursor(LESSON_MOVE[e.code]);
+            else if (LESSON_START.indexOf(e.code) !== -1) handlers.onLessonStart();
+            else if (LESSON_BACK.indexOf(e.code) !== -1) handlers.onLessonBack();
+            return;
+          }
+          if (OPEN_PRACTICE.indexOf(e.code) !== -1) {
+            handlers.onOpenPractice();
+            return;
+          }
+          // Esc はスタート画面では何もしない。一覧から Esc で戻った直後にもう一度押しても
+          // （下の「どのキーでも開始」に落ちて）試合が始まってしまわないように。
+          if (LESSON_BACK.indexOf(e.code) !== -1) return;
           // S / D は「その形式を選んでそのまま開始」。Space など他のキーは
           // 「いま選ばれている形式で開始」なので、形式を指定したいときはこの2つを使う。
           if (e.code === 'KeyS') handlers.onStartSingles();
@@ -104,6 +152,7 @@
           else if (STYLE_KEYS[e.code]) handlers.onSelectStyle(STYLE_KEYS[e.code]);
           else if (GUIDE_KEYS.indexOf(e.code) !== -1) handlers.onToggleGuide();
           else if (SPECIAL_PRESET_KEYS.indexOf(e.code) !== -1) handlers.onCycleSpecials();
+          else if (FIRST_SERVE_KEYS.indexOf(e.code) !== -1) handlers.onCycleFirstServe();
           else handlers.onStart();
           return;
         }
@@ -112,16 +161,34 @@
           if (CLOSE_MATCH_STATS.indexOf(e.code) !== -1) handlers.onCloseMatchStats();
           return;
         }
+        if (handlers.isPracticing()) {
+          if (NEXT_LESSON.indexOf(e.code) !== -1) {
+            handlers.onNextLesson();
+            return;
+          }
+          if (BACK_TO_MENU.indexOf(e.code) !== -1) {
+            handlers.onBackToMenu();
+            return;
+          }
+        }
         // ポイント間のリプレイをスキップする合図。リプレイ中でなければ何もしない
         // （world.js#skipReplay() 参照）。Space は試合中この用途にしか使わない。
         if (SKIP_REPLAY.indexOf(e.code) !== -1) handlers.onSkipReplay();
         if (SWING[e.code] && !this.chargeKey) {
           this.chargeKey = e.code;
           handlers.onChargeStart(SWING[e.code]);
+        } else if (KICK.indexOf(e.code) !== -1) {
+          // サーブのトスを上げられたときだけ「溜めているキー」として握る（サーブ以外で
+          // 押しても B/V/C を塞がない）
+          if (!this.chargeKey && handlers.onKickStart()) this.chargeKey = e.code;
         } else if (FORMATION_NET.indexOf(e.code) !== -1) {
           handlers.onFormationNet();
         } else if (FORMATION_BACK.indexOf(e.code) !== -1) {
           handlers.onFormationBack();
+        } else if (STAND_NET.indexOf(e.code) !== -1) {
+          handlers.onStandNet();
+        } else if (STAND_BACK.indexOf(e.code) !== -1) {
+          handlers.onStandBack();
         }
       });
 
@@ -160,6 +227,15 @@
           handlers.onChargeRelease();
         }
       });
+    }
+
+    /**
+     * 握っている溜めキーを忘れる（練習モードでレッスンを替える／スタート画面へ戻るとき、
+     * main.js が Game を作り直す直前に呼ぶ）。前の Game で握ったキーの keyup が、
+     * スタート画面にいる間に来ると拾われず、次の Game で B/V/C が効かなくなるため。
+     */
+    resetCharge() {
+      this.chargeKey = null;
     }
 
     any(codes) {

@@ -172,9 +172,12 @@
    *   （＝ポーチできる態勢を保つ）。
    * @param {number} [smashNearZ] ロブを叩きにいく範囲のネット側の限界。そのまま
    *   smashApproach() に渡す（省略時はネット際まで詰めて叩く既定のまま）。
+   * @param {boolean} [sideStep] 球の通り道から横へずれて、体の横で打てる位置に立つか
+   *   （hitSide()）。既定 true。サーブリターンでは false：速いサーブに横へ動き出すと、
+   *   体の正面に来たサーブを返せなくなり、逆にコースいっぱいのサーブにも届いてしまう。
    * @returns {{x:number, z:number}}
    */
-  function chasePosition(ball, side = 1, player, smashNearZ) {
+  function chasePosition(ball, side = 1, player, smashNearZ, sideStep = true) {
     if (player && inReachOf(player, ball)) {
       return { x: player.x, z: player.z };
     }
@@ -198,11 +201,31 @@
     // 打点が後方限界（CHASE_Z_MAX）より奥＝そこで待つことは物理的にできない。leadFrom() と
     // 同じ理由で、深さを手前へ寄せたら横位置もその深さでの弾道の x に取り直す。
     const z = clamp(landing.z, zMin, zMax);
-    const x = z === landing.z ? landing.x : pathXAt(ball, z, landing.x);
+    const pathX = z === landing.z ? landing.x : pathXAt(ball, z, landing.x);
+    // 球の通り道の真上ではなく、球が体の横（打点）を通る位置に立つ。
+    const x = player && sideStep ? pathX - hitSide(pathX, player, side) * CPU.HIT_SIDE_X : pathX;
     return {
       x: clamp(x, -CPU.CHASE_X_LIMIT, CPU.CHASE_X_LIMIT),
       z,
     };
+  }
+
+  /**
+   * グラウンドストロークで、球を体のどちら側に通すか（world の x の向き。+1 なら球が
+   * 選手の +x 側を通る）。以前は球の通り道の真上に立っていたため、球がいつも体の
+   * 真正面に飛び込んできて、そこから打っていた（ユーザー報告「CPU はボールが自分の
+   * 身体の真正面にくるように移動して打っている」）。実際の選手と同じく、球が体の
+   * 横（CPU.HIT_SIDE_X 離れたところ）を通る位置に立つ。
+   * どちらの側かは、いまの位置から近いほう。ただしフォアハンド側を CPU.FOREHAND_BIAS
+   * ぶん優先する（時間があればフォアに回り込む）。
+   * @param {number} pathX その深さで球が通る x
+   * @param {1|-1} side 選手がいる陣地（1＝cpu 陣地 z>0）。フォアハンド側の world の x の
+   *   向きと一致する（cpu は +x、you 側の AI は −x。game.js の RACKET_SIDE と同じ）
+   */
+  function hitSide(pathX, player, side) {
+    const toForehand = Math.abs(pathX - side * CPU.HIT_SIDE_X - player.x);
+    const toBackhand = Math.abs(pathX + side * CPU.HIT_SIDE_X - player.x);
+    return toForehand <= toBackhand + CPU.FOREHAND_BIAS ? side : -side;
   }
 
   /**
@@ -216,14 +239,17 @@
    * 繰り返すだけで、結局一度もネットに立てなかった。
    * 頭を越されるロブ（通過点が高すぎる）やどこでも間に合わない球では null を返し、
    * 呼び出し側は通常の追い方（＝下がって1バウンドさせる）に戻る。
+   * 探すのはノーバウンドで返してよい深さ（CPU.NET_RUSH_VOLLEY_Z）まで。そこより後ろで
+   * 待っても振れない（game.js#aiCanReturnNow）。
    * @param {1|-1} side 詰めている選手がいる陣地（1＝cpu 陣地 z>0）
    * @returns {{x:number, z:number}|null}
    */
   function netRushPosition(ball, side, player) {
     if (ball.bounces > 0) return null;
     const near = side * CPU.NET_APPROACH_Z;
+    const far = side * Math.min(Math.abs(player.z), CPU.NET_RUSH_VOLLEY_Z);
     for (let i = 0; i <= CPU.NET_RUSH_STEPS; i++) {
-      const z = lerp(near, player.z, i / CPU.NET_RUSH_STEPS);
+      const z = lerp(near, far, i / CPU.NET_RUSH_STEPS);
       const at = predictAtZ(ball, z, CPU.NET_RUSH_LEAD_T);
       if (at && at.y < PLAYER.CPU_REACH_Y && at.y > PLAYER.CPU_REACH_Y_MIN) {
         const runT = Math.hypot(at.x - player.x, z - player.z) / PLAYER.CPU_CHASE;
@@ -253,18 +279,49 @@
    * @param {number} [outMult] 能力値「安定感」によるミス率の倍率（既定1＝中立）。
    * @returns {{x:number, y:number, z:number}} ワールド座標の目標地点
    */
-  function shotTarget(opponentX, dir = -1, stretch = 0, outMult = 1) {
+  function shotTarget(opponentX, dir = -1, stretch = 0, outMult = 1, attack = 0, opponentRunX = 0) {
     const aimXMin = lerp(CPU.AIM_X_MIN, CPU.STRETCH_AIM_X_MIN, stretch);
     const aimXMax = lerp(CPU.AIM_X_MAX, CPU.STRETCH_AIM_X_MAX, stretch);
-    const aimZMin = lerp(CPU.AIM_Z_MIN, CPU.STRETCH_AIM_Z_MIN, stretch);
-    const aimZMax = lerp(CPU.AIM_Z_MAX, CPU.STRETCH_AIM_Z_MAX, stretch);
+    // チャンスボールを叩く1本（attack）は、ベースライン寄りの深いコースへ（CPU.CHANCE_AIM_Z_*）。
+    // 深く狙うほどネットの近くを低く通せる＝速い球にできる。
+    const aimZMin = lerp(lerp(CPU.AIM_Z_MIN, CPU.STRETCH_AIM_Z_MIN, stretch), CPU.CHANCE_AIM_Z_MIN, attack);
+    const aimZMax = lerp(lerp(CPU.AIM_Z_MAX, CPU.STRETCH_AIM_Z_MAX, stretch), CPU.CHANCE_AIM_Z_MAX, attack);
     const outLong = lerp(CPU.OUT_LONG, CPU.STRETCH_OUT_LONG, stretch) * outMult;
     const outWide = lerp(CPU.OUT_WIDE, CPU.STRETCH_OUT_WIDE, stretch) * outMult;
 
-    const x = -signOr(opponentX, Math.random() - 0.5) * rand(aimXMin, aimXMax);
+    // 叩きにいく度合い（attack）は「強打のコースを選ぶ確率」として使う。2つのコースの
+    // 位置を混ぜると、反対側どうしなら真ん中＝相手の正面に寄ってしまうため。
+    const x = Math.random() < attack
+      ? chanceAimX(opponentX, opponentRunX)
+      : -signOr(opponentX, Math.random() - 0.5) * rand(aimXMin, aimXMax);
     const z = dir * rand(aimZMin, aimZMax);
 
     return scatterOut({ x, y: PHYSICS.BALL_R, z }, dir, outLong, outWide);
+  }
+
+  /**
+   * チャンスボールを叩く1本の横の狙い：**相手のいる位置から** CPU.CHANCE_MOVE_MIN〜MAX
+   * 離れた、空いている側（相手が片側に寄っていれば反対側、ほぼ真ん中なら左右どちらか）。
+   * コートの中の決まった位置ではなく相手の位置から測るので、どこに立っていても
+   * 「その距離を走らされる」強打になる。以前は真ん中寄り（中央から 0.3〜1.8m）に
+   * 固定していたため、相手が真ん中にいるとほぼ正面に来て、強打でも返しやすかった
+   * （ユーザー報告「ほとんどプレイヤー正面の真ん中に打ってくるので返すのに苦労しない」）。
+   * 相手が打った後に横へ戻っている最中なら、ときどき（CPU.CHANCE_WRONG_FOOT）戻ってきた
+   * 側＝背中へ打って逆をつく。サイドラインの内側に収めたせいで離れ方が CHANCE_MOVE_MIN に
+   * 届かないときは、反対側へ打つ。
+   * @param {number} opponentX 相手（逆をつく選手）の x
+   * @param {number} [opponentRunX] 相手が自分の1打を打ってから横に動いた量（runX）
+   */
+  function chanceAimX(opponentX, opponentRunX = 0) {
+    const wrongFoot = Math.abs(opponentRunX) >= CPU.CHANCE_WRONG_FOOT_RUN
+      && Math.random() < CPU.CHANCE_WRONG_FOOT;
+    let side = wrongFoot ? -Math.sign(opponentRunX)
+      : Math.abs(opponentX) < CPU.CHANCE_CENTER_X ? (Math.random() < 0.5 ? 1 : -1)
+        : -Math.sign(opponentX);
+    const away = rand(CPU.CHANCE_MOVE_MIN, CPU.CHANCE_MOVE_MAX);
+    const limit = CPU.CHANCE_AIM_X_LIMIT;
+    if (Math.abs(clamp(opponentX + side * away, -limit, limit) - opponentX) < CPU.CHANCE_MOVE_MIN) side = -side;
+    return clamp(opponentX + side * away, -limit, limit);
   }
 
   /**
@@ -442,21 +499,42 @@
    *   掛ける倍率。既定1。lob=false でも stretch が高いと弾道自体は山なりに近づく
    *   （「ロブではないのに山なりで打ち損なって見える」の原因）ので、lobScale とは別に
    *   game.js が DOUBLES.ARC_SCALE を渡して抑える。
+   * @param {number} [attack] チャンスボールを叩きにいく度合い(0〜1。game.js#chanceAttack)。
+   *   その分だけ飛翔時間を CPU.CHANCE_T（速い球）へ寄せ、ロブに逃げなくなる。既定0。
    * @returns {{target:{x:number,y:number,z:number}, flight:number, lob:boolean}}
    */
-  function cpuShot(opponent, dir, stretch, lobScale = 1, arcScale = 1, skill = NEUTRAL_SKILL) {
+  function cpuShot(opponent, dir, stretch, lobScale = 1, arcScale = 1, skill = NEUTRAL_SKILL, attack = 0) {
     // 相手が自陣のどのあたりにいるかはネットからの距離で見る（dir の符号に依存させない）
     if (Math.abs(opponent.z) <= CPU.NET_Z) return netPlayShot(opponent, dir, lobScale, skill);
     // ロブは威力ではなくタッチの球なので、能力値による速さの倍率は掛けない（掛けると
     // 「上手い人のロブほど山なりでなくなる」というおかしな効き方になる）。
-    if (Math.random() < (CPU.LOB_BASE + CPU.LOB_VS_STRETCH * stretch) * lobScale) {
+    if (Math.random() < (CPU.LOB_BASE + CPU.LOB_VS_STRETCH * stretch) * lobScale * (1 - attack)) {
       return lobShot(opponent, dir);
     }
     return {
-      target: shotTarget(opponent.x, dir, stretch, skill.out),
-      flight: lerp(CPU.SHOT_T, CPU.STRETCH_T, stretch * arcScale) * skill.power,
+      target: shotTarget(opponent.x, dir, stretch, skill.out, attack, opponent.runX),
+      flight: rallyFlight(stretch * arcScale, attack) * skill.power,
+      clearance: rallyClearance(attack),
       lob: false,
     };
+  }
+
+  /**
+   * つなぎのグラウンドストロークの飛翔時間（能力の倍率を掛ける前）。走らされた度合い
+   * （tight）で山なり（STRETCH_T）へ、チャンスボールを叩く度合い（attack）で速い球
+   * （CHANCE_T）へ寄せる。
+   */
+  function rallyFlight(tight, attack) {
+    return lerp(lerp(CPU.SHOT_T, CPU.STRETCH_T, tight), CPU.CHANCE_T, attack);
+  }
+
+  /**
+   * グラウンドストロークでネットの上に取る余裕。チャンスボールを叩く度合いの分だけ
+   * CPU.CHANCE_CLEARANCE へ詰める（低い打点からでも飛翔時間が伸びず、速い球のまま通る）。
+   * 叩きにいかないなら undefined＝solveShot() の既定（PHYSICS.NET_CLEARANCE）。
+   */
+  function rallyClearance(attack) {
+    return attack > 0 ? lerp(PHYSICS.NET_CLEARANCE, CPU.CHANCE_CLEARANCE, attack) : undefined;
   }
 
   /* ---------------------------------------------- ダブルス（雁行陣） */
@@ -703,8 +781,9 @@
    * @param {{x:number, z:number}} back 相手の後衛
    * @param {1|-1} dir 打ち込む方向
    * @param {number} stretch 0〜1。ぎりぎり追いついて打った度合い
+   * @param {number} [attack] チャンスボールを叩きにいく度合い(0〜1)。cpuShot() と同じ
    */
-  function doublesRallyShot(front, back, dir, stretch, lobScale = 1, arcScale = 1, skill = NEUTRAL_SKILL) {
+  function doublesRallyShot(front, back, dir, stretch, lobScale = 1, arcScale = 1, skill = NEUTRAL_SKILL, attack = 0) {
     const tight = clamp(stretch, 0, 1);
     // 前衛がストレートの線からどれだけ離れたか（0＝サイドを締めている／1＝中央まで寄った）。
     const gap = clamp(1 - Math.abs(front.x) / DOUBLES.PASS_GAP_X, 0, 1);
@@ -727,13 +806,15 @@
     }
     // 前衛の頭を越すロブ／苦しいときの逃げのロブ。シングルスと同じ枠のまま
     // （ダブルスで多すぎないよう game.js が lobScale を渡して抑える）。
-    if (Math.random() < (CPU.LOB_BASE + CPU.LOB_VS_STRETCH * tight) * lobScale) {
+    // チャンスボール（attack）はロブに逃げずに叩く（cpuShot() と同じ）。
+    if (Math.random() < (CPU.LOB_BASE + CPU.LOB_VS_STRETCH * tight) * lobScale * (1 - attack)) {
       return lobShot(back, dir);
     }
     // 基本形：前衛を避けてクロスへ深く。
     return {
-      target: shotTarget(front.x, dir, tight, skill.out),
-      flight: lerp(CPU.SHOT_T, CPU.STRETCH_T, tight * arcScale) * skill.power,
+      target: shotTarget(front.x, dir, tight, skill.out, attack, front.runX),
+      flight: rallyFlight(tight * arcScale, attack) * skill.power,
+      clearance: rallyClearance(attack),
       lob: false,
     };
   }
@@ -745,11 +826,13 @@
    * トップスピン／スライスを混ぜる。
    * @param {boolean} [second] セカンドサーブ。実際のテニスと同じく、ほとんど回転をかけて
    *   （しかも多くはトップスピン＝キック）確実に入れにいく比率へ差し替える。
+   * @param {number} [attack] チャンスボールを叩きにいく度合い(0〜1。cpuShot() と同じ)。
+   *   その分だけスライス（遅く滑る、つなぎの球）をやめてトップスピンにする。既定0。
    * @returns {'flat'|'top'|'slice'}
    */
-  function aiSpin(second) {
+  function aiSpin(second, attack = 0) {
     const flatChance = second ? SERVE.SECOND_FLAT_CHANCE : CPU.SPIN_FLAT_CHANCE;
-    const topShare = second ? SERVE.SECOND_TOP_SHARE : CPU.SPIN_TOP_SHARE;
+    const topShare = lerp(second ? SERVE.SECOND_TOP_SHARE : CPU.SPIN_TOP_SHARE, 1, attack);
     if (Math.random() < flatChance) return 'flat';
     return Math.random() < topShare ? 'top' : 'slice';
   }

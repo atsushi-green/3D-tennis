@@ -5,7 +5,7 @@
 (function (RallyOne) {
   'use strict';
 
-  const { GUIDE, SMASH_HINT } = RallyOne.config;
+  const { GUIDE, SMASH_HINT, PRACTICE } = RallyOne.config;
   const { clamp } = RallyOne.math;
   const scene3d = RallyOne.scene = RallyOne.scene || {};
 
@@ -167,5 +167,26 @@
     line.position.set(from.x + dx / 2, GROUND_Y, from.z + dz / 2);
     line.rotation.z = Math.atan2(dx, dz); // 寝かせた板の向き（x,z 平面での向き）
     line.scale.y = dist;
+  };
+  /**
+   * 練習モード（移動のレッスン）の目印。ここまで走れば成功、という輪をコートに置く。
+   * 輪の大きさは成功の判定（PRACTICE.MOVE_RADIUS）と同じ＝輪に入れば成功。
+   */
+  scene3d.createPracticeTarget = function createPracticeTarget() {
+    const material = new THREE.MeshBasicMaterial({
+      color: PRACTICE.TARGET_COLOR, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide,
+    });
+    const ring = groundRing(PRACTICE.MOVE_RADIUS * 0.8, PRACTICE.MOVE_RADIUS, material);
+    ring.visible = false;
+    return ring;
+  };
+
+  /**
+   * @param {THREE.Mesh} ring createPracticeTarget() が返したもの
+   * @param {{x:number,z:number}|null} target game.practice.target（無ければ隠す）
+   */
+  scene3d.placePracticeTarget = function placePracticeTarget(ring, target) {
+    ring.visible = !!target;
+    if (target) ring.position.set(target.x, ring.position.y, target.z);
   };
 })(window.RallyOne = window.RallyOne || {});

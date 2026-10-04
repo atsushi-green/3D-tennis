@@ -38,7 +38,8 @@
    * 1ステップ進める。p* に進める前の位置を残す（ネット通過判定に使う）。
    * 横方向の加速度は2種類あり、どちらも未設定なら0：
    * - `b.wind` 風。打った側は狙いに織り込まない（＝解いた通りの初速で飛ばした後、風に
-   *   さらされて実際の着地点だけがずれる）ので、ここでの加算だけで完結する。
+   *   さらされて実際の着地点だけがずれる）ので、ここでの加算だけで完結する。風の前後成分
+   *   （追い風／向かい風）は `b.windZ` として同じ扱いで vz に足す。
    * - `b.curve` 打球そのものの曲がり（必殺技バギーホイップの横回転）。こちらは
    *   「曲がった上で狙い通りに落ちる」必要があるので、solveShot() が初速を解く段階で
    *   同じ値を織り込む（＝曲がるぶんを見越して内側へ打ち出す）。バウンドで失われる
@@ -50,6 +51,7 @@
     b.pz = b.z;
     b.vy += spinGravity(b.spin) * dt;
     b.vx += ((b.wind || 0) + (b.curve || 0)) * dt;
+    b.vz += (b.windZ || 0) * dt;
     b.x += b.vx * dt;
     b.y += b.vy * dt;
     b.z += b.vz * dt;
@@ -155,6 +157,7 @@
       spin: b.spin, // スピンで実効重力が変わるので、予測にも同じ重力を使わないと着地点がずれる
       // 風で流されるぶんも予測に織り込まないと、CPU の追跡が実際の着地点とずれる
       wind: b.wind,
+      windZ: b.windZ,
       curve: b.curve, // 打球の曲がり（バギーホイップ）。同じ理由で予測にも織り込む
     };
     const dt = PHYSICS.STEP;
@@ -186,6 +189,7 @@
       vx: b.vx, vy: b.vy, vz: b.vz,
       spin: b.spin,
       wind: b.wind,
+      windZ: b.windZ,
       curve: b.curve, // 打球の曲がり（バギーホイップ）。予測にも織り込まないと着地点がずれる
     };
     const dt = PHYSICS.STEP;
@@ -217,6 +221,7 @@
       vx: b.vx, vy: b.vy, vz: b.vz,
       spin: b.spin,
       wind: b.wind,
+      windZ: b.windZ,
       curve: b.curve, // 打球の曲がり（バギーホイップ）。予測にも織り込まないと着地点がずれる
     };
     const dt = PHYSICS.STEP;
@@ -244,8 +249,14 @@
    * （スマッシュの先回り地点＝「打てる高さの帯を通り、かつ人間が立てる場所」のように、
    * 物理だけでは決まらない条件を game.js 側に書けるようにするため）。
    * バウンドも maxBounces 回まで跨いで追う（高く弾んだ球をスマッシュする場合があるため）。
-   * @param {object} b ボール（{x,y,z,vx,vy,vz,spin,wind}）
-   * @param {(sample:{x:number,y:number,z:number,t:number,bounces:number}) => boolean} accept
+   * サンプルには縦の速さ（vy）と、最後にバウンドしてからの経過時間（sinceBounce）も
+   * 載せる。「弾んで上がってくる途中か」を見る技（ライジング）が、打点の先読みの結果
+   * だけで判定できるようにするため。sinceBounce はまだ一度も弾んでいなければ null で、
+   * 予測を始めた時点で既に弾んでいる球は b.sinceBounce から数え始める（持っていない
+   * ＝いつ弾んだか分からない球も null）。
+   * @param {object} b ボール（{x,y,z,vx,vy,vz,spin,wind,bounces,sinceBounce}）
+   * @param {(sample:{x:number,y:number,z:number,t:number,bounces:number,
+   *   vy:number,sinceBounce:number|null}) => boolean} accept
    * @param {number} [maxT] 何秒先まで探すか（既定3秒）
    * @param {number} [maxBounces] この回数までのバウンドを跨いで追い続ける（既定1）
    * @returns {{enter:object, exit:object, mid:{x:number,y:number,z:number,t:number}}|null}
@@ -259,22 +270,27 @@
       vx: b.vx, vy: b.vy, vz: b.vz,
       spin: b.spin,
       wind: b.wind,
+      windZ: b.windZ,
       curve: b.curve, // 打球の曲がり（バギーホイップ）。予測にも織り込まないと着地点がずれる
     };
     const dt = PHYSICS.STEP;
     let bounces = b.bounces || 0;
+    // game.js の stepBall()/bounce() と同じ数え方（進めてから足し、弾んだステップで0に戻す）
+    let since = bounces > 0 && Number.isFinite(b.sinceBounce) ? b.sinceBounce : null;
     let enter = null;
     let exit = null;
     for (let t = 0; t < limit; t += dt) {
       integrate(s, dt);
+      if (since !== null) since += dt;
       if (hitsNet(s)) break;
       if (s.y <= BALL_R && s.vy < 0) {
         if (bounces - (b.bounces || 0) >= allowed) break; // これ以上は追わない
         reflectBounce(s);
         bounces++;
+        since = 0;
       }
       const sample = {
-        x: s.x, y: s.y, z: s.z, t: t + dt, bounces,
+        x: s.x, y: s.y, z: s.z, t: t + dt, bounces, vy: s.vy, sinceBounce: since,
       };
       if (accept(sample)) {
         if (!enter) enter = sample;
@@ -318,6 +334,7 @@
       vx: b.vx, vy: b.vy, vz: b.vz,
       spin: b.spin,
       wind: b.wind,
+      windZ: b.windZ,
       curve: b.curve, // 打球の曲がり（バギーホイップ）。予測にも織り込まないと着地点がずれる
     };
     const dt = PHYSICS.STEP;
@@ -354,7 +371,7 @@
    *   呼び出し側は返り値と一緒に `ball.curve = curve` も設定すること（integrate() 参照）。
    */
   function solveShot(from, target, baseT, clearance, spin, curve) {
-    const margin = clearance === undefined ? 0.30 : clearance;
+    const margin = clearance === undefined ? PHYSICS.NET_CLEARANCE : clearance;
     const c = curve || 0;
     const g = spinGravity(spin);
     const velocityFor = (t) => ({

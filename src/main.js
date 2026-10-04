@@ -4,9 +4,11 @@
 
   const {
     PHYSICS, applyCpuLevel, applyCpuStyle, applySurface, TOSS,
-    setRating, resetRatings, randomizeRatings,
-    SPECIAL_MOVES, SPECIAL_PRESET,
+    setRating, getRating, resetRatings, randomizeRatings, applyCharacter,
+    SKILLS, ROSTER, CHARACTER_DEFAULT,
+    SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE, LINE_CALL,
   } = RallyOne.config;
+  const { clamp } = RallyOne.math;
   const { sfx, unlock } = RallyOne.audio;
 
   const input = new RallyOne.Input();
@@ -24,6 +26,14 @@
   /** スタート画面で選んだガイド付きモード。true ＝ 打つ方向のガイドを出す（既定は なし）。 */
   let guide = false;
   /**
+   * スタート画面で選んだ最初のサーブ。'toss'＝コイントス（勝った側が選ぶ。既定＝従来どおり）、
+   * 'serve'／'receive'＝トスをせず、自分のサーブ／相手のサーブで始める。
+   * 決めるのは最初の試合の第1ゲームだけで、その後は普段どおりサーブが交代していく。
+   */
+  let firstServe = 'toss';
+  /** T キーで切り替える順番（画面のカードの並びと同じ） */
+  const FIRST_SERVE_ORDER = ['toss', 'serve', 'receive'];
+  /**
    * スタート画面で選んだ必殺技（config.SPECIAL_MOVES の key の配列）。
    * 既定は空＝必殺技なし＝これまでと完全に同じゲーム。複数選べる。
    */
@@ -35,6 +45,18 @@
     all: SPECIAL_MOVES.map((m) => m.key),
   };
   const sameSpecials = (a, b) => a.length === b.length && a.every((k) => b.indexOf(k) !== -1);
+  /**
+   * スタート画面の「選手」で、4つの枠（config.ROSTER）それぞれに選んでいる選手
+   * （config.CHARACTERS の key、または 'custom'＝つまみで自由に決めた能力値）。
+   * 既定は全員 CHARACTER_DEFAULT（全項目3＝これまでとまったく同じ強さ）。
+   */
+  const picks = Object.fromEntries(ROSTER.map((r) => [r.key, CHARACTER_DEFAULT]));
+  /**
+   * 枠ごとの「カスタム」の能力値。カスタムから別の選手を選んで、また「カスタム」に戻したとき、
+   * 作りかけの値から続けられるように覚えておく。
+   */
+  const customRatings = {};
+  const ratingsOf = (who) => Object.fromEntries(SKILLS.map((s) => [s.key, getRating(who, s.key)]));
   /** トス（コイントス）に人間が勝ち、サーブ/レシーブの選択を待っている間だけ true。 */
   let awaitingToss = false;
   /** トスを始めた時点で選ばれていたダブルスの有無（トスの選択後にそのまま渡す）。 */
@@ -43,22 +65,34 @@
   let pendingSummary = null;
   /** 試合後のスタッツ画面を開いている間だけ true。この間は試合の進行を止める。 */
   let matchStatsOpen = false;
+  /** 練習モードのレッスン一覧を開いている間だけ true（スタート画面の上で、#menuBody と差し替え）。 */
+  let lessonMenuOpen = false;
+  /** レッスン一覧で選んでいる行（config.PRACTICE.LESSONS の添字）。 */
+  let lessonCursor = 0;
+  /** このページを開いてからクリアしたレッスンの key（一覧に ✓ を付ける）。 */
+  const clearedLessons = new Set();
 
-  const game = new RallyOne.Game({
+  /**
+   * Game を作る。練習モードでレッスンを替える／スタート画面へ戻るときは作り直す
+   * （Game#start / startPractice は1つの Game で1回だけ）。hooks は下の `game` を
+   * その都度読むので、作り直した後も新しい Game を指す。
+   */
+  const createGame = () => new RallyOne.Game({
     input,
     hooks: {
       sound: (name, ...args) => sfx[name](...args),
       call: (big, sub, shot) => hud.showCall(big, sub, shot),
       clearCall: () => hud.hideCall(),
       score: () => hud.renderScore(game.match, game.server, game.stats),
-      wind: (accel) => hud.setWind(accel),
+      wind: (x, z) => hud.setWind(x, z),
       serveSpeed: (kmh) => hud.setServeSpeed(kmh),
-      // 1セットが終わって振り返りを出す番になった（game.js が TIMING.MATCH_STATS 後に呼ぶ）。
+      // 1セットが終わって振り返りを出す番になった（game.js が締めのカットを終えたところで呼ぶ）。
       // ここでは受け取っておくだけで、実際に出すのはフレームループ（リプレイ再生中に
       // 割り込まないよう、再生が終わってから開く）。
       matchEnd: (summary) => { pendingSummary = summary; },
     },
   });
+  let game = createGame();
 
   /** applyCpuLevel/Style/Surface を適用してから実際に試合を始める（トスの結果が決まった後）。 */
   function beginMatch(wantDoubles, initialServer) {
@@ -66,18 +100,89 @@
     applyCpuStyle(cpuStyle); // 必ず applyCpuLevel() の後（config.js のコメント参照）
     applySurface(surface);
     hud.hideStartScreen();
+    hud.setMatchLevel(cpuLevel);
     game.setGuide(guide);
     game.setSpecials(specials);
     game.start(wantDoubles, initialServer);
+  }
+
+  /* ------------------------------------------------------------ 練習モード */
+
+  function openLessons() {
+    lessonMenuOpen = true;
+    hud.showLessons(lessonCursor, clearedLessons);
+  }
+
+  function closeLessons() {
+    lessonMenuOpen = false;
+    hud.hideLessons();
+  }
+
+  /** @param {number} step 一覧は2列：←→ が ∓1、↑↓ が ∓2（input.js） */
+  function moveLessonCursor(step) {
+    lessonCursor = clamp(lessonCursor + step, 0, PRACTICE.LESSONS.length - 1);
+    hud.renderLessons(lessonCursor, clearedLessons);
+  }
+
+  /**
+   * いまの Game を捨てて、まっさらな Game に差し替える。クリアしたレッスンは覚えておく。
+   * 前の Game で握っていた溜めキー・再生中のリプレイも持ち越さない。
+   */
+  function replaceGame() {
+    if (game.practice && game.practice.cleared) clearedLessons.add(game.practice.lesson.key);
+    input.resetCharge();
+    game = createGame();
+    RallyOne.game = game;
+    world.skipReplay();
+    prevPhase = game.phase;
+    pendingSummary = null;
+    matchStatsOpen = false;
+  }
+
+  /** @param {number} index config.PRACTICE.LESSONS の添字 */
+  function beginPractice(index) {
+    unlock(); // AudioContext はユーザー操作の中でしか起こせない
+    if (game.started) replaceGame();
+    lessonCursor = index;
+    closeLessons();
+    // 難易度（レシーブの練習の CPU のサーブ）とサーフェス（球の弾み方）はスタート画面の選択どおり
+    applyCpuLevel(cpuLevel);
+    applyCpuStyle(cpuStyle);
+    applySurface(surface);
+    hud.hideStartScreen();
+    game.setGuide(guide);
+    game.startPractice(PRACTICE.LESSONS[index].key);
+  }
+
+  /** 練習中の Esc：スタート画面のレッスン一覧へ戻る（クリアしていたら次のレッスンを選んでおく）。 */
+  function backToLessons() {
+    const at = PRACTICE.LESSONS.indexOf(game.practice.lesson);
+    if (game.practice.cleared) lessonCursor = Math.min(at + 1, PRACTICE.LESSONS.length - 1);
+    replaceGame();
+    hud.showStartScreen();
+    world.sync(game, 0); // 背後のコートも立ち位置・会場の向きを初期へ戻す
+    openLessons();
+  }
+
+  /** 練習中の N：次のレッスンへ（最後のレッスンの次は一覧へ戻る）。 */
+  function nextLesson() {
+    const next = PRACTICE.LESSONS.indexOf(game.practice.lesson) + 1;
+    if (next >= PRACTICE.LESSONS.length) backToLessons();
+    else beginPractice(next);
   }
 
   /**
    * 試合開始時のトス（コイントス）。実際の試合と同じく、勝った側がサーブ／レシーブを選ぶ。
    * 人間が勝ったらスタート画面で選ばせ（onSelectToss を待つ）、CPUが勝ったら
    * TOSS.CPU_SERVE_CHANCE の確率で自動的に選んで、選んだ側の結果でそのまま試合を始める。
+   * スタート画面の「最初のサーブ」でサーブ／レシーブを選んであれば、トスはせずにそのまま始める。
    */
   function beginToss(wantDoubles) {
     unlock(); // AudioContext はユーザー操作の中でしか起こせない
+    if (firstServe !== 'toss') {
+      beginMatch(wantDoubles, firstServe === 'serve' ? 'you' : 'cpu');
+      return;
+    }
     doublesPending = wantDoubles;
     if (Math.random() < 0.5) {
       awaitingToss = true;
@@ -107,6 +212,15 @@
     onSelectStyle: (name) => {
       cpuStyle = name;
       hud.setStyle(name);
+    },
+    onSelectFirstServe: (choice) => {
+      firstServe = choice;
+      hud.setFirstServe(choice);
+    },
+    // T キー：コイントス → サーブから → レシーブから → コイントス
+    onCycleFirstServe: () => {
+      const at = FIRST_SERVE_ORDER.indexOf(firstServe);
+      menu.onSelectFirstServe(FIRST_SERVE_ORDER[(at + 1) % FIRST_SERVE_ORDER.length]);
     },
     // ガイド付きモードは試合中でも切り替わって困らない（表示専用）ので、選んだ時点で
     // そのまま game へ渡す。次の試合にもそのまま引き継がれる。
@@ -143,19 +257,57 @@
     },
   };
 
-  // スタート画面の「選手設定」パネル。値を持つのは config で、hud は表示とマウス操作の
-  // 受け付けだけ、実際の適用（setRating 等）はここで行う＝難易度・サーフェスの選択と同じ流れ。
+  // スタート画面の「選手」パネル。能力値を持つのは config、誰を選んでいるか（picks）はここで、
+  // hud は表示とマウス操作の受け付けだけ。実際の適用（applyCharacter/setRating 等）はここで
+  // 行う＝難易度・サーフェスの選択と同じ流れ。
   hud.buildRoster({
-    onChange: (who, key, value) => setRating(who, key, value),
-    onReset: () => resetRatings(),
-    onRandom: () => randomizeRatings(),
+    onPick: (who, key) => {
+      // カスタムは、前に作りかけた値があればそれを戻す。初めてなら何も書き換えない
+      // ＝いま選んでいた選手の値がそのまま出発点になる。
+      if (key !== 'custom') applyCharacter(who, key);
+      else if (customRatings[who]) {
+        SKILLS.forEach((s) => setRating(who, s.key, customRatings[who][s.key]));
+      }
+      picks[who] = key;
+      hud.setPicks(picks);
+    },
+    // つまみを動かしたら、その枠は「カスタム」になる（選んでいた選手をもとにした微調整）
+    onChange: (who, key, value) => {
+      setRating(who, key, value);
+      picks[who] = 'custom';
+      customRatings[who] = ratingsOf(who);
+      hud.setPicks(picks);
+    },
+    // 既定（全項目3）は CHARACTER_DEFAULT の能力値そのもの（tests/smoke.mjs で確かめている）
+    onReset: () => {
+      resetRatings();
+      ROSTER.forEach((r) => {
+        picks[r.key] = CHARACTER_DEFAULT;
+        delete customRatings[r.key];
+      });
+      hud.setPicks(picks);
+    },
+    onRandom: () => {
+      randomizeRatings();
+      ROSTER.forEach((r) => {
+        picks[r.key] = 'custom';
+        customRatings[r.key] = ratingsOf(r.key);
+      });
+      hud.setPicks(picks);
+    },
   });
+  hud.setPicks(picks);
   hud.buildMenu(menu);
   hud.buildSpecials({ onToggle: menu.onToggleSpecial, onPreset: menu.onSpecialPreset });
   hud.setSpecials(specials);
   // 試合後のスタッツ画面の「次の試合へ」。キーボード（Space/Enter）側は input.js が
   // 同じ closeMatchStats() を呼ぶ＝マウスとキーで挙動がずれない。
   hud.buildMatchStats({ onClose: () => closeMatchStats() });
+  hud.buildLessons({
+    onOpen: () => openLessons(),
+    onSelect: (index) => beginPractice(index),
+    onBack: () => closeLessons(),
+  });
 
   input.attach({
     isStarted: () => game.started,
@@ -173,19 +325,39 @@
     },
     onSelectToss: menu.onSelectToss,
     onChargeStart: (spin) => game.chargeStart(spin),
+    // キックサーブはトップスピンのトスとして上げる（serve() が球種もキック用に決める）
+    onKickStart: () => game.chargeStart('top', true),
     onChargeRelease: () => game.chargeRelease(),
     onFormationNet: () => game.setYouMateFormation('net'),
     onFormationBack: () => game.setYouMateFormation('back'),
+    onStandNet: () => game.setYouFormation('net'),
+    onStandBack: () => game.setYouFormation('back'),
     onSelectDifficulty: menu.onSelectDifficulty,
     onSelectSurface: menu.onSelectSurface,
     onSelectStyle: menu.onSelectStyle,
     onToggleGuide: () => menu.onToggleGuide(),
     onCycleSpecials: () => menu.onCycleSpecials(),
+    onCycleFirstServe: () => menu.onCycleFirstServe(),
     // リプレイのスキップは Space だけ（以前はどのキーでも飛んでしまい、ラリー用の
-    // キーに触れただけで意図せずスキップされていた）。
-    onSkipReplay: () => world.skipReplay(),
+    // キーに触れただけで意図せずスキップされていた）。チェンジエンズの休憩も同じ Space で
+    // 切り上げる。リプレイ中は game.update() が止まっていて休憩はまだ始まっていないので、
+    // 1回の押下で両方が飛ぶことはない。
+    onSkipReplay: () => {
+      world.skipReplay();
+      game.skipChangeover();
+      game.skipMatchPointCut();
+      game.skipFinaleCut();
+    },
     isMatchStatsOpen: () => matchStatsOpen,
     onCloseMatchStats: () => closeMatchStats(),
+    onOpenPractice: () => openLessons(),
+    isLessonMenuOpen: () => lessonMenuOpen,
+    onLessonCursor: (step) => moveLessonCursor(step),
+    onLessonStart: () => beginPractice(lessonCursor),
+    onLessonBack: () => closeLessons(),
+    isPracticing: () => !!game.practice,
+    onNextLesson: () => nextLesson(),
+    onBackToMenu: () => backToLessons(),
   });
 
   /**
@@ -251,18 +423,41 @@
       // 速い球ほど1フレームぶんの移動が大きく、着地の直前で終わって見える。sync() で
       // そのコマを録ってから切り出す。
       world.sync(game, dt);
-      if (pointJustEnded) world.startReplay();
-      hud.setReplay(world.isReplaying());
+      // 練習モードはリプレイを挟まない（1本ごとに止まると反復練習のテンポが崩れる）
+      // 線審のコール（アウト／ダブルフォルト）で決まったポイントは、通常の画面でコールを
+      // 見せてからリプレイへ移る（実際の中継と同じ順番。LINE_CALL.REPLAY_DELAY 参照）。
+      if (pointJustEnded && !game.practice) {
+        world.startReplay(game.lineCall && game.lineCall.decisive ? LINE_CALL.REPLAY_DELAY : 0);
+      }
+      hud.setReplay(world.isReplaying(), world.isCheckingMark());
+      // 試合が決まった瞬間から、リプレイ・締めのカットを通してスタッツ画面が出るまで、スタンドは
+      // 総立ちで沸き続ける（スタッツ画面の番になったら収める）。ざわめきより先に渡す：大歓声が
+      // 鳴っている間と、それが収まりきるまでは、audio.js がざわめきを戻さない。
+      const finale = game.finale;
+      sfx.ovation(finale && !finale.done ? finale.team : null);
+      // 観客のざわめきはポイントの合間だけ。サーブの構えに入ると静まり、ラリー中は無音。
+      // 1本目のフォールトからセカンドサーブまでの間も静かなまま（'fault' は含めない）
+      // マッチポイントの演出の間も、沸いているスタンドを映しているのでざわめきは消さない
+      sfx.murmur(!game.practice && (world.isReplaying() || matchStatsOpen || !!game.changeover
+        || !!game.matchPointCut || game.phase === 'over'));
+      hud.setShade(game.changeoverShade());
+      hud.setCinema(!!game.matchPointCut || !!(finale && finale.cut));
+      hud.setPractice(game.practice);
       // いま Space を押していて技が出る状態なら、溜めバーも金色にする（＝離した瞬間に
       // 何が起きるかが、視線を動かさずにバーだけで分かる）。
       const armed = game.specialArmed;
-      hud.setCharge(game.chargeMeter(), game.isServeCharging(), !!(armed && armed.move));
+      hud.setCharge(
+        game.chargeMeter(), game.isServeCharging(), !!(armed && armed.move), game.isServeOvercharged(),
+      );
       hud.setSpecialTip(armed);
       hud.setSpecialUses(game.specials, game.specialUses);
       hud.setStakes(game.stakes);
       hud.setSmashTip(game.smashHint);
       hud.setSwingGuide(game.swingGuide, game.you.x);
       syncStamina();
+    } else {
+      sfx.ovation(null); // 試合を作り直してスタート画面／レッスン一覧へ戻った
+      sfx.murmur(false);
     }
     world.render();
   }

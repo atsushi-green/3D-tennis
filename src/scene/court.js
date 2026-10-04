@@ -3,15 +3,15 @@
   'use strict';
 
   const {
-    COURT, HALF_L, HALF_W, THEME, SURFACE_COLORS, STANDS,
+    COURT, HALF_L, HALF_W, THEME, SURFACE_COLORS, COURT_PLANE, STANDS,
   } = RallyOne.config;
   const scene3d = RallyOne.scene = RallyOne.scene || {};
 
-  /** テクスチャが覆うワールド範囲（±RX, ±RZ）。コート平面のサイズと対応させること。 */
-  const RX = 8;
-  const RZ = 18;
-  const PLANE_W = 16;
-  const PLANE_L = 36;
+  /** テクスチャが覆うワールド範囲（±RX, ±RZ）。コート平面のサイズはここから決まる。 */
+  const RX = COURT_PLANE.HALF_X;
+  const RZ = COURT_PLANE.HALF_Z;
+  const PLANE_W = RX * 2;
+  const PLANE_L = RZ * 2;
 
   /** @param {'hard'|'clay'|'grass'} [surfaceName] 省略時はハード（現状の配色）。 */
   function colorsFor(surfaceName) {
@@ -20,8 +20,9 @@
 
   function courtTexture(surfaceName) {
     const { surface: surfaceColor, apron: apronColor } = colorsFor(surfaceName);
-    const W = 1024;
     const H = 2048;
+    // 横幅は可動域（PLAYER.X_LIMIT）に追従して変わるので、横も縦と同じ解像度(px/m)になる幅にする
+    const W = Math.round(H * RX / RZ);
     const cv = document.createElement('canvas');
     cv.width = W;
     cv.height = H;

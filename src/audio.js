@@ -12,7 +12,7 @@
 (function (RallyOne) {
   'use strict';
 
-  const { AUDIO, SURFACE } = RallyOne.config;
+  const { AUDIO, SURFACE, LINE_CALL } = RallyOne.config;
   const { rand, clamp, lerp } = RallyOne.math;
 
   let ctx = null;
@@ -69,8 +69,10 @@
 
   /**
    * フィルタを通したノイズを1発鳴らす（ノイズ層／ブラシ層／擦過音／拍手の1粒）。
-   * @param {{vol:number, hz:number, dur:number, q?:number, type?:string, at?:number}} o
+   * @param {{vol:number, hz:number, dur:number, q?:number, type?:string, at?:number,
+   *   dest?:AudioNode}} o
    *   at ＝ 今から何秒後に鳴らすか（拍手を時間差でばらまくのに使う。既定は即時）
+   *   dest ＝ つなぐ先（既定はスピーカー。まとめて音量を絞りたい音はつまみを渡す）
    */
   function noiseVoice(ac, o) {
     const vol = jVol(o.vol);
@@ -85,7 +87,7 @@
     filter.frequency.value = jHz(o.hz);
     filter.Q.value = o.q === undefined ? 1 : o.q;
     const t0 = ac.currentTime + at;
-    src.connect(filter).connect(envelope(ac, vol, dur, undefined, at)).connect(ac.destination);
+    src.connect(filter).connect(envelope(ac, vol, dur, undefined, at)).connect(o.dest || ac.destination);
     src.start(t0, Math.random() * Math.max(0, buffer.duration - dur));
     src.stop(t0 + dur);
   }
@@ -159,7 +161,7 @@
    * @param {number} rallyShots このポイントで何本打たれたか（サーブも1本）
    * @param {'ace'|'winner'|'error'|'doubleFault'} outcome 決まり方
    * @param {'you'|'cpu'} winner 取った側
-   * @param {'set'|'break'|'game'|'saved'|null} [stake] その1点に何がかかっていたか
+   * @param {'match'|'break'|'game'|'saved'|null} [stake] その1点に何がかかっていたか
    *   （scoring.pointStakes()）。決めた側から見た意味で、'saved' は「かけられていた側が
    *   凌いだ」。null（ふつうの1点）なら倍率1＝従来とまったく同じ音になる。
    */
@@ -193,6 +195,9 @@
       src.start(t0, Math.random() * Math.max(0, buffer.duration - dur));
       src.stop(t0 + dur);
 
+      // ダブルフォルトには、拍手より先にため息が漏れる
+      if (outcome === 'doubleFault') crowdVoices(C.SIGH);
+
       // 拍手。粒ごとに開始時刻をずらすことで、揃った1発ではなくパチパチとばらける。
       const P = C.CLAP;
       const claps = Math.round(lerp(P.MIN, P.MAX, excitement)
@@ -206,6 +211,552 @@
           dur: P.DUR,
           at: P.DELAY + Math.random() * P.WINDOW,
         });
+      }
+    } catch (e) {
+      /* 音が出ないだけなのでゲームは続行 */
+    }
+  }
+
+  /**
+   * 線審の掛け声（AUDIO.LINE_CALL のコメント参照）。のこぎり波（声帯）を3本のフォルマント
+   * フィルタに並列に通し、フォルマントの周波数を VOWELS の折れ線どおりに動かして母音を作る。
+   * 語頭の f（WORDS.*.FRIC 秒）と語尾の t はハイパスのノイズで足す。着地から LINE_CALL.DELAY
+   * 遅れて（腕の合図と同時に）鳴る。
+   * @param {'out'|'fault'} word
+   */
+  function lineCallVoice(word) {
+    const ac = context();
+    if (!ac) return;
+    const V = AUDIO.LINE_CALL;
+    const spec = V.WORDS[word];
+    if (!spec) return;
+    try {
+      const fric = spec.FRIC || 0;
+      const vowelDur = spec.VOWELS[spec.VOWELS.length - 1][0];
+      const t0 = ac.currentTime + LINE_CALL.DELAY;
+      const tv = t0 + fric;              // 母音の始まり
+      const tEnd = tv + vowelDur;        // 母音を切って t の破裂へ
+      const vol = jVol(V.VOL);
+      const pitch = jHz(V.PITCH_HZ);
+
+      if (fric > 0) {
+        noiseVoice(ac, {
+          type: 'highpass', vol: V.FRIC_VOL, hz: V.FRIC_HZ, q: 0.7, dur: fric + 0.02, at: LINE_CALL.DELAY,
+        });
+      }
+
+      const src = ac.createOscillator();
+      src.type = 'sawtooth';
+      src.frequency.setValueAtTime(pitch, tv);
+      src.frequency.linearRampToValueAtTime(pitch * (V.PITCH_END_HZ / V.PITCH_HZ), tEnd);
+      const amp = ac.createGain();
+      amp.gain.setValueAtTime(SILENCE, tv);
+      amp.gain.linearRampToValueAtTime(vol, tv + V.ATTACK);
+      amp.gain.setValueAtTime(vol, tEnd - V.RELEASE);
+      amp.gain.linearRampToValueAtTime(SILENCE, tEnd);
+      amp.connect(ac.destination);
+      // フォルマント3本を並列に。周波数は VOWELS の折れ線、強さは FORMANT_GAIN
+      V.FORMANT_GAIN.forEach((g, i) => {
+        const bp = ac.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.Q.value = V.FORMANT_Q;
+        spec.VOWELS.forEach(([t, ...f], k) => {
+          if (k === 0) bp.frequency.setValueAtTime(f[i], tv + t);
+          else bp.frequency.linearRampToValueAtTime(f[i], tv + t);
+        });
+        const level = ac.createGain();
+        level.gain.value = g;
+        src.connect(bp).connect(level).connect(amp);
+      });
+      src.start(tv);
+      src.stop(tEnd + 0.01);
+
+      noiseVoice(ac, {
+        type: 'highpass', vol: V.BURST_VOL, hz: V.BURST_HZ, q: 0.7, dur: V.BURST_DUR,
+        at: tEnd - ac.currentTime,
+      });
+    } catch (e) {
+      /* 音が出ないだけなのでゲームは続行 */
+    }
+  }
+
+  /**
+   * 観客の声（「おぉ…」・ため息・マッチポイントの「ワー」）。AUDIO.CROWD.OOH / SIGH /
+   * MATCH_POINT.CHEER のコメント参照。
+   * @param {object} V AUDIO.CROWD.OOH か SIGH か MATCH_POINT.CHEER
+   * @param {AudioNode} [dest] つなぐ先（既定はスピーカー）
+   */
+  function crowdVoices(V, dest) {
+    const ac = context();
+    if (!ac) return;
+    try {
+      const t0 = ac.currentTime + V.DELAY;
+      const dur = jDur(V.DUR);
+      // 立ち上がって HOLD の割合まで保ち、そこから消える（指数で落とすと出た直後に萎んで聞こえる）
+      const vol = jVol(V.VOL);
+      const out = ac.createGain();
+      out.gain.setValueAtTime(SILENCE, t0);
+      out.gain.linearRampToValueAtTime(vol, t0 + V.ATTACK);
+      out.gain.setValueAtTime(vol, t0 + dur * V.HOLD);
+      out.gain.linearRampToValueAtTime(SILENCE, t0 + dur);
+      out.connect(dest || ac.destination);
+      // 声の束 → フォルマント3本（並列）→ エンベロープ。人数で割って束の音量を揃える
+      const bus = ac.createGain();
+      bus.gain.value = 1 / Math.sqrt(V.VOICES);
+      V.VOWEL.forEach((hz, i) => {
+        const bp = ac.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.value = hz;
+        bp.Q.value = V.FORMANT_Q;
+        const level = ac.createGain();
+        level.gain.value = V.FORMANT_GAIN[i];
+        bus.connect(bp).connect(level).connect(out);
+      });
+      for (let i = 0; i < V.VOICES; i++) {
+        const osc = ac.createOscillator();
+        osc.type = 'sawtooth';
+        const pitch = rand(V.PITCH_MIN, V.PITCH_MAX);
+        const start = t0 + rand(0, V.SPREAD);
+        osc.frequency.setValueAtTime(pitch, start);
+        osc.frequency.linearRampToValueAtTime(pitch * V.PITCH_PEAK, start + dur * 0.3);
+        osc.frequency.linearRampToValueAtTime(pitch * V.PITCH_END, t0 + dur);
+        osc.connect(bus);
+        osc.start(start);
+        osc.stop(t0 + dur + 0.02);
+      }
+      if (V.BREATH > 0) {
+        const buffer = noiseBuffer(ac);
+        const breath = ac.createBufferSource();
+        breath.buffer = buffer;
+        const level = ac.createGain();
+        level.gain.value = V.BREATH;
+        breath.connect(level).connect(bus);
+        breath.start(t0, Math.random() * Math.max(0, buffer.duration - dur));
+        breath.stop(t0 + dur);
+      }
+    } catch (e) {
+      /* 音が出ないだけなのでゲームは続行 */
+    }
+  }
+
+  /**
+   * 試合で初めてのマッチポイントの演出の間、スタンドが沸き続ける音（AUDIO.CROWD.MATCH_POINT）。
+   * 長く伸ばした歓声（ループさせたノイズの山）・鳴りやまない拍手・「ワー」という声の波を、
+   * 1本のつまみ（master）にまとめて鳴らす。演出が終わったら（Space で切り上げても）
+   * settleRoar() がそのつまみを絞り、サーブの構えに合わせて静まらせる。
+   */
+  let roar = null;
+
+  /** @param {'you'|'cpu'} team あと1点で勝つ側 */
+  function matchPointRoar(team) {
+    const ac = context();
+    if (!ac) return;
+    settleRoar();
+    try {
+      const M = AUDIO.CROWD.MATCH_POINT;
+      const master = ac.createGain();
+      master.gain.value = M.TEAM_VOL[team] === undefined ? 1 : M.TEAM_VOL[team];
+      master.connect(ac.destination);
+      const t0 = ac.currentTime;
+      const dur = jDur(M.DUR);
+      const vol = jVol(M.VOL);
+
+      const src = ac.createBufferSource();
+      src.buffer = noiseBuffer(ac);
+      // 材料（AUDIO.NOISE_BUFFER_SEC）より長く鳴らすので繰り返す（ノイズなので継ぎ目は聞こえない）
+      src.loop = true;
+      const filter = ac.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.value = jHz(M.HZ);
+      filter.Q.value = M.Q;
+      // 指数で落とす envelope() だと出た直後から萎んで聞こえるので、立ち上がって保ってから消す
+      const env = ac.createGain();
+      env.gain.setValueAtTime(SILENCE, t0);
+      env.gain.linearRampToValueAtTime(vol, t0 + M.ATTACK);
+      env.gain.setValueAtTime(vol, t0 + dur * M.HOLD);
+      env.gain.linearRampToValueAtTime(SILENCE, t0 + dur);
+      src.connect(filter).connect(env).connect(master);
+      src.start(t0, Math.random() * src.buffer.duration);
+      src.stop(t0 + dur);
+
+      const P = M.CLAP;
+      for (let i = 0; i < P.COUNT; i++) {
+        noiseVoice(ac, {
+          type: 'highpass', vol: P.VOL, hz: P.HZ, q: 0.7, dur: P.DUR,
+          at: P.DELAY + Math.random() * P.WINDOW, dest: master,
+        });
+      }
+      M.CHEER_AT.forEach((at) => crowdVoices({ ...M.CHEER, DELAY: at }, master));
+      roar = { master, end: t0 + dur };
+    } catch (e) {
+      /* 音が出ないだけなのでゲームは続行 */
+    }
+  }
+
+  /** 演出が終わった（切り上げた）ら、鳴っている分を AUDIO.CROWD.MATCH_POINT.SETTLE 秒で静める。 */
+  function settleRoar() {
+    const r = roar;
+    roar = null;
+    const ac = r && context();
+    if (!ac || ac.currentTime >= r.end) return;
+    try {
+      const now = ac.currentTime;
+      const gain = r.master.gain;
+      gain.cancelScheduledValues(now);
+      gain.setValueAtTime(gain.value, now);
+      gain.linearRampToValueAtTime(0, now + AUDIO.CROWD.MATCH_POINT.SETTLE);
+    } catch (e) {
+      /* 音が出ないだけなのでゲームは続行 */
+    }
+  }
+
+  /**
+   * 試合が決まった瞬間からの総立ちの大歓声（AUDIO.CROWD.OVATION のコメント参照）。
+   * 歓声の山（ループさせたノイズ）と拍手（焼いておいたループ）は鳴らしっぱなしにして、
+   * 「ワー」の波・指笛・歓声の山のうねりだけを tickOvation() のたびに LOOKAHEAD 秒先まで予約する。
+   * 全部を1本のつまみ（master）にまとめ、収めるとき（settleOvation）・消すとき（hushOvation）は
+   * 歓声の山と拍手をそれぞれのつまみで絞る。
+   */
+  let ovation = null;
+  let applauseCache = null;
+
+  /**
+   * 拍手のループ（左右別々に APPLAUSE.SEC 秒ぶん）。手拍子1回＝ごく短いノイズの破裂を、遠近・長さ・
+   * 明るさをばらつかせて RATE 回/秒ずつ重ねる。明るさは1次のローパス2段の差（＝バンドパス）で付け、
+   * ループの継ぎ目をまたぐ手拍子は頭へ回り込ませる（継ぎ目でプツッと切れないように）。
+   * 最後に実効値でそろえるので、音量は APPLAUSE.VOL だけで決まる。
+   */
+  function applauseBuffer(ac) {
+    if (applauseCache && applauseCache.sampleRate === ac.sampleRate) return applauseCache;
+    const A = AUDIO.CROWD.OVATION.APPLAUSE;
+    const sr = ac.sampleRate;
+    const length = Math.max(1, Math.floor(sr * A.SEC));
+    const buffer = ac.createBuffer(2, length, sr);
+    const [low, high] = A.BAND_HZ;
+    const coef = (hz) => 1 - Math.exp(-2 * Math.PI * hz / sr); // 1次のローパスの係数
+    for (let ch = 0; ch < 2; ch++) {
+      const data = buffer.getChannelData(ch);
+      const claps = Math.round(A.RATE * A.SEC);
+      for (let k = 0; k < claps; k++) {
+        const start = Math.floor(Math.random() * length);
+        const n = Math.max(2, Math.floor(sr * rand(A.DUR[0], A.DUR[1])));
+        const attack = Math.max(1, Math.floor(n * 0.08));
+        const amp = rand(A.AMP[0], A.AMP[1]);
+        const aHigh = coef(rand(high[0], high[1]));
+        const aLow = coef(rand(low[0], low[1]));
+        let y1 = 0;
+        let y2 = 0;
+        for (let i = 0; i < n; i++) {
+          const x = Math.random() * 2 - 1;
+          y1 += (x - y1) * aHigh;
+          y2 += (y1 - y2) * aLow;
+          const env = i < attack ? i / attack : Math.exp(-4 * (i - attack) / (n - attack));
+          data[(start + i) % length] += (y1 - y2) * amp * env;
+        }
+      }
+      let sum = 0;
+      for (let i = 0; i < length; i++) sum += data[i] * data[i];
+      const rms = Math.sqrt(sum / length) || 1;
+      for (let i = 0; i < length; i++) data[i] /= rms;
+    }
+    applauseCache = buffer;
+    return buffer;
+  }
+
+  /** 指笛を1回（AUDIO.CROWD.OVATION.WHISTLE）。at＝今から何秒後か。 */
+  function whistle(ac, at, dest) {
+    const W = AUDIO.CROWD.OVATION.WHISTLE;
+    const t0 = ac.currentTime + at;
+    const dur = rand(W.DUR[0], W.DUR[1]);
+    const hz = rand(W.HZ[0], W.HZ[1]);
+    const shape = W.SHAPES[Math.floor(Math.random() * W.SHAPES.length)];
+    const vol = jVol(W.VOL);
+
+    const amp = ac.createGain();
+    amp.gain.setValueAtTime(SILENCE, t0);
+    amp.gain.linearRampToValueAtTime(vol, t0 + W.ATTACK);
+    amp.gain.setValueAtTime(vol, t0 + dur - W.RELEASE);
+    amp.gain.linearRampToValueAtTime(SILENCE, t0 + dur);
+    if (ac.createStereoPanner) {
+      const pan = ac.createStereoPanner();
+      pan.pan.value = rand(-W.PAN, W.PAN);
+      amp.connect(pan).connect(dest);
+    } else {
+      amp.connect(dest);
+    }
+
+    const osc = ac.createOscillator();
+    osc.type = 'sine';
+    shape.forEach(([u, mult], k) => {
+      if (k === 0) osc.frequency.setValueAtTime(hz * mult, t0);
+      else osc.frequency.linearRampToValueAtTime(hz * mult, t0 + dur * u);
+    });
+    const vibrato = ac.createOscillator();
+    vibrato.frequency.value = W.VIBRATO_HZ;
+    const depth = ac.createGain();
+    depth.gain.value = hz * W.VIBRATO;
+    vibrato.connect(depth).connect(osc.frequency);
+    osc.connect(amp);
+    osc.start(t0);
+    vibrato.start(t0);
+    osc.stop(t0 + dur + 0.02);
+    vibrato.stop(t0 + dur + 0.02);
+
+    // 息の音：同じ高さに絞ったノイズ
+    const breath = ac.createBufferSource();
+    breath.buffer = noiseBuffer(ac);
+    const bp = ac.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = hz;
+    bp.Q.value = W.BREATH_Q;
+    const level = ac.createGain();
+    level.gain.value = W.BREATH;
+    breath.connect(bp).connect(level).connect(amp);
+    breath.start(t0, Math.random() * Math.max(0, breath.buffer.duration - dur));
+    breath.stop(t0 + dur + 0.02);
+  }
+
+  /** @param {'you'|'cpu'} team 勝った側 */
+  function startOvation(ac, team) {
+    const O = AUDIO.CROWD.OVATION;
+    const t0 = ac.currentTime;
+    const master = ac.createGain();
+    master.gain.value = O.TEAM_VOL[team] === undefined ? 1 : O.TEAM_VOL[team];
+    master.connect(ac.destination);
+
+    // 歓声の山：立ち上がって保つ（収めるときに roarGain を絞る）。うねりは swell のつまみに予約する
+    const roar = ac.createBufferSource();
+    roar.buffer = noiseBuffer(ac);
+    roar.loop = true; // 材料（AUDIO.NOISE_BUFFER_SEC）より長く鳴らす（ノイズなので継ぎ目は聞こえない）
+    const filter = ac.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = jHz(O.ROAR.HZ);
+    filter.Q.value = O.ROAR.Q;
+    const roarGain = ac.createGain();
+    roarGain.gain.setValueAtTime(SILENCE, t0);
+    roarGain.gain.linearRampToValueAtTime(jVol(O.ROAR.VOL), t0 + O.ROAR.ATTACK);
+    const swell = ac.createGain();
+    swell.gain.setValueAtTime(1, t0 + O.ROAR.ATTACK); // うねりの予約（pumpOvation）はここから続ける
+    roar.connect(filter).connect(roarGain).connect(swell).connect(master);
+    roar.start(t0, Math.random() * roar.buffer.duration);
+
+    // 拍手：焼いたループを途中から鳴らす
+    const applause = ac.createBufferSource();
+    applause.buffer = applauseBuffer(ac);
+    applause.loop = true;
+    const applauseGain = ac.createGain();
+    applauseGain.gain.setValueAtTime(SILENCE, t0);
+    applauseGain.gain.linearRampToValueAtTime(O.APPLAUSE.VOL, t0 + O.APPLAUSE.ATTACK);
+    applause.connect(applauseGain).connect(master);
+    applause.start(t0, Math.random() * applause.buffer.duration);
+
+    crowdVoices(O.ERUPT, master);
+    ovation = {
+      master, roarGain, swell, applauseGain, sources: [roar, applause],
+      nextCheer: t0 + O.ERUPT.DELAY + rand(O.CHEER_EVERY[0], O.CHEER_EVERY[1]),
+      nextWhistle: t0 + O.ERUPT.DELAY + rand(O.WHISTLE.EVERY[0], O.WHISTLE.EVERY[1]),
+      nextSwell: t0 + O.ROAR.ATTACK,
+      settleAt: 0, // 収め始めた時刻（鳴らし続けている間は 0）
+      endAt: Infinity,
+    };
+  }
+
+  /** 鳴らし続けている間、「ワー」の波・指笛・歓声の山のうねりを LOOKAHEAD 秒先まで予約する。 */
+  function pumpOvation(ac) {
+    const O = AUDIO.CROWD.OVATION;
+    const o = ovation;
+    const now = ac.currentTime;
+    const until = now + O.LOOKAHEAD;
+    while (o.nextCheer < until) {
+      const vowel = O.VOWELS[Math.floor(Math.random() * O.VOWELS.length)];
+      crowdVoices({ ...O.CHEER, VOWEL: vowel, DELAY: Math.max(0, o.nextCheer - now) }, o.master);
+      o.nextCheer += rand(O.CHEER_EVERY[0], O.CHEER_EVERY[1]);
+    }
+    while (o.nextWhistle < until) {
+      whistle(ac, Math.max(0, o.nextWhistle - now), o.master);
+      o.nextWhistle += rand(O.WHISTLE.EVERY[0], O.WHISTLE.EVERY[1]);
+    }
+    while (o.nextSwell < until) {
+      const span = rand(O.SWELL[0], O.SWELL[1]);
+      o.swell.gain.linearRampToValueAtTime(1 + rand(-O.DEPTH, O.DEPTH), o.nextSwell + span);
+      o.nextSwell += span;
+    }
+  }
+
+  /** スタッツ画面の番になった：歓声の山は引き、拍手は尾を引いて収まる（予約もここで止まる）。 */
+  function settleOvation(ac) {
+    const S = AUDIO.CROWD.OVATION.SETTLE;
+    const o = ovation;
+    const now = ac.currentTime;
+    o.settleAt = now;
+    o.endAt = now + S.END;
+    const g = o.roarGain.gain;
+    g.cancelScheduledValues(now);
+    g.setValueAtTime(g.value, now);
+    g.linearRampToValueAtTime(SILENCE, now + S.ROAR);
+    const a = o.applauseGain.gain;
+    a.cancelScheduledValues(now);
+    a.setValueAtTime(a.value, now);
+    a.setTargetAtTime(0, now, S.APPLAUSE);
+    o.sources.forEach((src) => src.stop(o.endAt));
+  }
+
+  /** 収まりきる前に次の試合のサーブの構えに入った：残りを HUSH 秒で消す。 */
+  function hushOvation(ac) {
+    const o = ovation;
+    const now = ac.currentTime;
+    const end = now + AUDIO.CROWD.OVATION.HUSH;
+    if (end >= o.endAt) return;
+    const g = o.master.gain;
+    g.cancelScheduledValues(now);
+    g.setValueAtTime(g.value, now);
+    g.linearRampToValueAtTime(0, end);
+    o.endAt = end;
+    o.sources.forEach((src) => src.stop(end));
+  }
+
+  /**
+   * 毎フレーム main.js から呼ぶ。
+   * @param {'you'|'cpu'|null} team 鳴らし続ける間は勝った側、収めるときは null
+   */
+  function tickOvation(team) {
+    if (!ovation && !team) return;
+    const ac = context();
+    if (!ac) return;
+    try {
+      if (ovation && ac.currentTime >= ovation.endAt) {
+        ovation.master.disconnect();
+        ovation = null;
+      }
+      if (team) {
+        if (ovation && ovation.settleAt) hushOvation(ac); // 収まりきる前に次の試合も決まった（ふつうは起きない）
+        if (!ovation || ovation.settleAt) startOvation(ac, team);
+        pumpOvation(ac);
+      } else if (ovation && !ovation.settleAt) {
+        settleOvation(ac);
+      }
+    } catch (e) {
+      /* 音が出ないだけなのでゲームは続行 */
+    }
+  }
+
+  /** 大歓声が鳴っている（または収まりきっていない）間は、ざわめきを戻さない。 */
+  function ovationDrownsMurmur(now) {
+    return !!ovation && (!ovation.settleAt
+      || now < ovation.settleAt + AUDIO.CROWD.OVATION.SETTLE.MURMUR_AFTER);
+  }
+
+  /**
+   * ポイントの合間のざわめき（AUDIO.CROWD.MURMUR のコメント参照）。話し手の声の通り道
+   * （のこぎり波 → F1・F2 → 音量 → 左右）を一度だけ組み、あとは呼ばれるたびに各話し手の音節を
+   * LOOKAHEAD 秒先まで予約し、全体の音量の目標を切り替える。
+   */
+  let babble = null;
+
+  function buildBabble(ac) {
+    const M = AUDIO.CROWD.MURMUR;
+    const master = ac.createGain();
+    master.gain.value = 0;
+    const lowpass = ac.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    lowpass.frequency.value = M.LOWPASS_HZ;
+    lowpass.Q.value = 0.5;
+    master.connect(lowpass).connect(ac.destination);
+    // 会場の響き：帰還ディレイを並べて薄く足す
+    M.ECHO_DELAYS.forEach((sec) => {
+      const delay = ac.createDelay(1);
+      delay.delayTime.value = sec;
+      const feedback = ac.createGain();
+      feedback.gain.value = M.ECHO_FEEDBACK;
+      const wet = ac.createGain();
+      wet.gain.value = M.ECHO_WET;
+      lowpass.connect(delay);
+      delay.connect(feedback).connect(delay);
+      delay.connect(wet).connect(ac.destination);
+    });
+
+    const bandpass = (hz) => {
+      const bp = ac.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = hz;
+      bp.Q.value = M.FORMANT_Q;
+      return bp;
+    };
+    const talkers = [];
+    for (let i = 0; i < M.TALKERS; i++) {
+      const female = Math.random() < M.FEMALE_RATIO;
+      const range = female ? M.PITCH_F : M.PITCH_M;
+      const osc = ac.createOscillator();
+      osc.type = 'sawtooth';
+      const pitch = rand(range[0], range[1]);
+      osc.frequency.value = pitch;
+      const f1 = bandpass(M.VOWELS[0][0]);
+      const f2 = bandpass(M.VOWELS[0][1]);
+      const f2Level = ac.createGain();
+      f2Level.gain.value = M.F2_GAIN;
+      const amp = ac.createGain();
+      amp.gain.value = 0;
+      osc.connect(f1).connect(amp);
+      osc.connect(f2).connect(f2Level).connect(amp);
+      if (ac.createStereoPanner) {
+        const pan = ac.createStereoPanner();
+        pan.pan.value = rand(-M.PAN, M.PAN);
+        amp.connect(pan).connect(master);
+      } else {
+        amp.connect(master);
+      }
+      osc.start();
+      talkers.push({
+        osc, f1, f2, amp, pitch, formant: female ? M.FORMANT_SCALE_F : 1, nextT: 0,
+      });
+    }
+    return { master, talkers, on: false, offAt: 0 };
+  }
+
+  /** 1人の話し手の音節を until まで予約する（母音・声の高さ・強さを音節ごとに選び直す）。 */
+  function scheduleTalker(t, now, until) {
+    const M = AUDIO.CROWD.MURMUR;
+    if (t.nextT < now) t.nextT = now + rand(0, M.SYLLABLE[1]); // 久しぶりに話し出す＝ばらけて始める
+    while (t.nextT < until) {
+      const at = t.nextT;
+      if (Math.random() < M.PAUSE_CHANCE) {
+        t.amp.gain.setTargetAtTime(0, at, 0.05); // 息継ぎ
+        t.nextT = at + rand(M.PAUSE[0], M.PAUSE[1]);
+        continue;
+      }
+      const dur = rand(M.SYLLABLE[0], M.SYLLABLE[1]);
+      const vowel = M.VOWELS[Math.floor(Math.random() * M.VOWELS.length)];
+      const peak = rand(M.LOUDNESS[0], M.LOUDNESS[1]);
+      t.osc.frequency.setTargetAtTime(t.pitch * rand(1 - M.INTONATION, 1 + M.INTONATION), at, dur * 0.4);
+      t.f1.frequency.setTargetAtTime(vowel[0] * t.formant, at, M.GLIDE_TC);
+      t.f2.frequency.setTargetAtTime(vowel[1] * t.formant, at, M.GLIDE_TC);
+      // 音節の頭で立ち上がり、後半で次の子音へ向けてすぼまる
+      t.amp.gain.setTargetAtTime(peak, at, 0.025);
+      t.amp.gain.setTargetAtTime(peak * 0.03, at + dur * 0.55, dur * 0.18);
+      t.nextT = at + dur;
+    }
+  }
+
+  function murmur(wanted) {
+    if (!babble && !wanted && !ovation) return;
+    const ac = context();
+    if (!ac) return;
+    const M = AUDIO.CROWD.MURMUR;
+    try {
+      const now = ac.currentTime;
+      // 静まる合図（サーブの構え）は、収まりかけの大歓声にも効く
+      if (!wanted && ovation && ovation.settleAt) hushOvation(ac);
+      const on = wanted && !ovationDrownsMurmur(now);
+      if (!babble && !on) return;
+      if (!babble) babble = buildBabble(ac);
+      if (babble.on !== on) {
+        babble.on = on;
+        if (!on) babble.offAt = now;
+        babble.master.gain.setTargetAtTime(on ? M.VOL : 0, now, on ? M.RISE_TC : M.HUSH_TC);
+      }
+      // 静まりきるまでは話し続け、その後は予約をやめる（音量は 0 なので聞こえない）
+      if (on || now - babble.offAt < M.HUSH_TC * 6) {
+        babble.talkers.forEach((t) => scheduleTalker(t, now, now + M.LOOKAHEAD));
       }
     } catch (e) {
       /* 音が出ないだけなのでゲームは続行 */
@@ -293,6 +844,24 @@
         }
       }
     },
+    /** 線審の「アウト！」「フォルト！」（ライン際に入った球の「セーフ」は無言の合図だけ）。 */
+    lineCall: (kind) => lineCallVoice(kind),
+    /**
+     * 線審が判定した球（コールのたび）。線からの距離が AUDIO.CROWD.OOH.MARGIN 以内なら、
+     * イン・アウトを問わず観客が「おぉ…」と声を漏らす。
+     * @param {number} inside 線までの内側への距離(m、負なら外)
+     */
+    nearLine: (inside) => {
+      if (Math.abs(inside) <= AUDIO.CROWD.OOH.MARGIN) crowdVoices(AUDIO.CROWD.OOH);
+    },
+    /** ポイントの合間のざわめき。on＝合間（決着後・リプレイ・休憩）、off＝構えてからラリー中。 */
+    murmur: (on) => murmur(on),
+    /**
+     * 試合が決まった瞬間からの総立ちの大歓声（AUDIO.CROWD.OVATION）。毎フレーム呼ぶ。
+     * 鳴らし続ける間は勝った側を、スタッツ画面の番になったら null を渡す（拍手が尾を引いて収まる）。
+     * @param {'you'|'cpu'|null} team
+     */
+    ovation: (team) => tickOvation(team),
     /** ネットコードに当たる鈍い音（低く長め＝テープ/ガットの damped な振動）。 */
     netIn: () => layered(AUDIO.NET_IN),
     /** 必殺技の発動。音程が上がっていくので、直後に鳴る打球音と混ざっても聞き分けられる。 */
@@ -304,6 +873,9 @@
      * のコメント参照）。今は歓声と拍手の大きさ・明るさだけで勝敗が分かる。
      */
     point: (winner, outcome, rallyShots, stake) => crowd(rallyShots, outcome, winner, stake),
+    /** 試合で初めてのマッチポイントの演出が始まった（スタンドが沸き続ける）／終わった（静まる）。 */
+    matchPoint: (team) => matchPointRoar(team),
+    matchPointEnd: () => settleRoar(),
   };
 
   RallyOne.audio = { unlock, sfx };
