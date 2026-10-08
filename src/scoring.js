@@ -24,7 +24,11 @@
     return mine >= target && mine - theirs >= RULES.MARGIN;
   }
 
-  /** 1セットマッチのスコア。awardPoint() の戻り値で「何が起きたか」を伝える。 */
+  /**
+   * 試合のスコア（RULES.SETS_TO_WIN セット先取。既定は1セットマッチ）。awardPoint() の戻り値で
+   * 「何が起きたか」を伝える。セットが決まっても games は最終スコアのまま残し（締めのカット・
+   * チェンジエンズの判定が読む）、次のセットへ進めるのは呼び出し側の nextSet()。
+   */
   class Match {
     constructor() {
       this.reset();
@@ -35,6 +39,24 @@
       this.games = { you: 0, cpu: 0 };
       this.tiebreak = false;
       this.tiebreakPoints = { you: 0, cpu: 0 };
+      this.sets = { you: 0, cpu: 0 };
+      /** 決まったセットのゲーム数（古い順。例 [{you:6, cpu:4}, {you:3, cpu:6}]） */
+      this.setScores = [];
+    }
+
+    /** 試合を続けて次のセットへ（ゲーム数を 0-0 に戻す。取ったセット数は残す）。 */
+    nextSet() {
+      this.points = { you: 0, cpu: 0 };
+      this.games = { you: 0, cpu: 0 };
+      this.tiebreak = false;
+      this.tiebreakPoints = { you: 0, cpu: 0 };
+    }
+
+    /** winner がセットを取った。試合まで決まったかを返す。 */
+    winSet(winner) {
+      this.sets[winner]++;
+      this.setScores.push({ you: this.games.you, cpu: this.games.cpu });
+      return this.sets[winner] >= RULES.SETS_TO_WIN;
     }
 
     /**
@@ -55,9 +77,10 @@
      * 以降は通常のゲームの代わりにタイブレーク（7点先取・2点差、RULES.MARGIN共用）を行い、
      * 取った方がそのままセットを取る。
      * @param {'you'|'cpu'} winner
-     * @returns {{type:'point'|'game'|'set', winner:'you'|'cpu', tiebreak?:boolean}}
+     * @returns {{type:'point'|'game'|'set', winner:'you'|'cpu', tiebreak?:boolean, matchOver?:boolean}}
      *   tiebreak:true は「このポイントがタイブレーク中だった」（type:'point'）か
      *   「このゲームでタイブレークに入った」（type:'game'）ことを示す。
+     *   matchOver は type:'set' のときだけ：そのセットで試合まで決まったか（1セットマッチなら必ず true）。
      */
     awardPoint(winner) {
       const loser = winner === 'you' ? 'cpu' : 'you';
@@ -71,7 +94,7 @@
         this.tiebreak = false;
         this.points.you = this.points.cpu = 0;
         this.tiebreakPoints.you = this.tiebreakPoints.cpu = 0;
-        return { type: 'set', winner }; // タイブレークを取った側が必ずセットも取る
+        return { type: 'set', winner, matchOver: this.winSet(winner) }; // タイブレークを取った側が必ずセットも取る
       }
 
       this.points[winner]++;
@@ -88,7 +111,7 @@
         return { type: 'game', winner, tiebreak: true };
       }
       if (won(this.games[winner], this.games[loser], RULES.SET_GAMES)) {
-        return { type: 'set', winner };
+        return { type: 'set', winner, matchOver: this.winSet(winner) };
       }
       return { type: 'game', winner };
     }
@@ -108,6 +131,8 @@
         games: { ...this.games },
         tiebreak: this.tiebreak,
         tiebreakPoints: { ...this.tiebreakPoints },
+        sets: { ...this.sets },
+        setScores: this.setScores.slice(),
       };
       const result = this.awardPoint(winner);
       Object.assign(this, before);
@@ -121,6 +146,7 @@
    */
   const STAKE_LABELS = {
     match: 'マッチポイント',
+    set: 'セットポイント',
     break: 'ブレークポイント',
     game: 'ゲームポイント',
   };
@@ -147,7 +173,8 @@
     for (const team of [server, receiver]) {
       const result = match.peek(team);
       if (result.type === 'point') continue;
-      const kind = result.type === 'set' ? 'match' : (team === server ? 'game' : 'break');
+      const kind = result.type === 'set' ? (result.matchOver ? 'match' : 'set')
+        : (team === server ? 'game' : 'break');
       return {
         team,
         kind,

@@ -3,7 +3,7 @@
   'use strict';
 
   const {
-    PHYSICS, applyCpuLevel, applyCpuStyle, applySurface, TOSS,
+    PHYSICS, applyCpuLevel, applyCpuStyle, applySurface, applyMatchFormat, MATCH_FORMATS, TOSS,
     setRating, getRating, resetRatings, randomizeRatings, applyCharacter,
     SKILLS, ROSTER, CHARACTERS, CHARACTER_DEFAULT,
     SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE, LINE_CALL, REPLAY,
@@ -34,6 +34,11 @@
   /** スタート画面で選んだ時間帯（'day'｜'night'）と天候（true＝にわか雨が降りうる）。既定は晴れたデー。 */
   let session = 'day';
   let rainOn = false;
+  /** スタート画面で選んだ試合の長さ（1セットのゲーム数と、何セットマッチか）。config.MATCH_FORMATS */
+  let formatGames = MATCH_FORMATS.DEFAULT.games;
+  let formatSets = MATCH_FORMATS.DEFAULT.sets;
+  /** list の中で current の次（最後の次は先頭）の key */
+  const nextKey = (list, current) => list[(list.findIndex((f) => f.key === current) + 1) % list.length].key;
   /** T キーで切り替える順番（画面のカードの並びと同じ） */
   const FIRST_SERVE_ORDER = ['toss', 'serve', 'receive'];
   /**
@@ -109,6 +114,7 @@
     applyCpuLevel(cpuLevel);
     applyCpuStyle(cpuStyle); // 必ず applyCpuLevel() の後（config.js のコメント参照）
     applySurface(surface);
+    applyMatchFormat(formatGames, formatSets);
     hud.hideStartScreen();
     hud.setMatchLevel(cpuLevel);
     hud.setPlayerNames(picks, wantDoubles);
@@ -232,6 +238,16 @@
       cpuStyle = name;
       hud.setStyle(name);
     },
+    onSelectGames: (games) => {
+      formatGames = games;
+      hud.setMatchFormat(formatGames, formatSets);
+    },
+    onSelectSets: (sets) => {
+      formatSets = sets;
+      hud.setMatchFormat(formatGames, formatSets);
+    },
+    onCycleGames: () => menu.onSelectGames(nextKey(MATCH_FORMATS.GAMES, formatGames)),
+    onCycleSets: () => menu.onSelectSets(nextKey(MATCH_FORMATS.SETS, formatSets)),
     onSelectSession: (name) => {
       session = name;
       hud.setSession(name);
@@ -335,6 +351,7 @@
   });
   hud.setPicks(picks);
   hud.buildMenu(menu);
+  hud.setMatchFormat(formatGames, formatSets);
   hud.buildSpecials({ onToggle: menu.onToggleSpecial, onPreset: menu.onSpecialPreset });
   hud.setSpecials(specials);
   // 試合後のスタッツ画面の「次の試合へ」。キーボード（Space/Enter）側は input.js が
@@ -377,6 +394,8 @@
     onCycleFirstServe: () => menu.onCycleFirstServe(),
     onToggleSession: () => menu.onToggleSession(),
     onToggleRain: () => menu.onToggleRain(),
+    onCycleGames: () => menu.onCycleGames(),
+    onCycleSets: () => menu.onCycleSets(),
     // リプレイのスキップは Space だけ（以前はどのキーでも飛んでしまい、ラリー用の
     // キーに触れただけで意図せずスキップされていた）。チェンジエンズの休憩も同じ Space で
     // 切り上げる。リプレイ中は game.update() が止まっていて休憩はまだ始まっていないので、

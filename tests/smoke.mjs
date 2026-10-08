@@ -7091,6 +7091,74 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   R.physics.setWetness(0);
 }
 
+// --- 試合形式：ゲーム数とセット数を選べる（既定のルールは6ゲーム・1セットのまま） ---
+{
+  const { RULES, MATCH_FORMATS, applyMatchFormat } = R.config;
+  const { Match, pointStakes } = R.scoring;
+  ok(RULES.SET_GAMES === 6 && RULES.SETS_TO_WIN === 1, 'the bare rules are a 6-game one-set match');
+  ok(MATCH_FORMATS.DEFAULT.games === 3 && MATCH_FORMATS.DEFAULT.sets === 1,
+    'the start screen defaults to a 3-game one-set match');
+  const game = (m, who) => { let r; for (let i = 0; i < 4; i++) r = m.awardPoint(who); return r; };
+  try {
+    applyMatchFormat(3, 3); // 3ゲーム先取の3セットマッチ（2セット先取）
+    ok(RULES.SET_GAMES === 3 && RULES.SETS_TO_WIN === 2, `3 games, best of 3: ${RULES.SET_GAMES}/${RULES.SETS_TO_WIN}`);
+    const m = new Match();
+    game(m, 'you'); game(m, 'you');
+    m.points = { you: 3, cpu: 0 };
+    let st = pointStakes(m, 'you');
+    ok(st && st.kind === 'set' && st.label === 'セットポイント', `a point for the first set is a set point: ${JSON.stringify(st)}`);
+    let r = m.awardPoint('you');
+    ok(r.type === 'set' && r.matchOver === false && m.sets.you === 1, `the first set does not end the match: ${JSON.stringify(r)}`);
+    ok(m.games.you === 3 && m.setScores.length === 1, 'the set score stays until nextSet()');
+    m.nextSet();
+    ok(m.games.you === 0 && m.games.cpu === 0 && m.sets.you === 1, 'nextSet() starts the games again and keeps the sets');
+    // 3-3 でタイブレーク
+    for (let i = 0; i < 3; i++) { game(m, 'you'); game(m, 'cpu'); }
+    ok(m.tiebreak, `3-3 goes to a tiebreak: ${m.games.you}-${m.games.cpu}`);
+    m.tiebreakPoints = { you: 6, cpu: 0 };
+    st = pointStakes(m, 'cpu');
+    ok(st && st.kind === 'match', `a point that wins the second set wins the match: ${JSON.stringify(st)}`);
+    r = m.awardPoint('you');
+    ok(r.type === 'set' && r.matchOver === true && m.setScores.map((s) => `${s.you}-${s.cpu}`).join(' ') === '3-0 4-3',
+      `the second set ends it: ${JSON.stringify(r)} ${JSON.stringify(m.setScores)}`);
+    applyMatchFormat(4, 5);
+    ok(RULES.SET_GAMES === 4 && RULES.SETS_TO_WIN === 3, 'best of 5 needs 3 sets');
+
+    // 試合の進行：セットを取っても試合は続き、セットのコールの後に次のセットが 0-0 から始まる
+    applyMatchFormat(3, 3);
+    const calls = [];
+    const ends = [];
+    const g = new R.Game({
+      input: fakeInput,
+      hooks: { ...noHooks, call: (big, sub) => calls.push(`${big}|${sub || ''}`), matchEnd: (x) => ends.push(x) },
+    });
+    g.start(false, 'cpu');
+    g.match.games = { you: 2, cpu: 0 };
+    g.match.points = { you: 3, cpu: 0 };
+    g.matchPointCutDone = true;
+    g.phase = 'rally'; g.serveInFlight = false; g.rallyShots = 3; g.stakes = null;
+    g.endPoint('you', 'ツーバウンド');
+    ok(!g.finale && calls[calls.length - 1].startsWith('セット — YOU|第1セット 3-0'), `a set call, not game set: ${calls.slice(-1)}`);
+    for (let i = 0; i < 60 * 12 && g.match.games.you !== 0; i++) g.update(1 / 60);
+    ok(g.match.games.you === 0 && g.match.sets.you === 1 && !g.finale, 'the next set starts from 0-0');
+    for (let i = 0; i < 60 * 20 && g.changeover; i++) g.update(1 / 60);
+    g.match.games = { you: 2, cpu: 1 };
+    g.match.points = { you: 3, cpu: 0 };
+    g.matchPointCutDone = true;
+    g.phase = 'rally'; g.serveInFlight = false; g.rallyShots = 3; g.stakes = null;
+    g.endPoint('you', 'ツーバウンド');
+    ok(!!g.finale, 'the second set ends the match');
+    const { FINALE } = R.config;
+    for (let i = 0; i < 60 * (FINALE.DELAY + FINALE.DURATION + 1) && ends.length === 0; i++) g.update(1 / 60);
+    ok(calls.some((c) => c.startsWith('ゲームセット|あなたの勝ち 3-0 3-1')), `the game set call lists every set: ${calls.filter((c) => c.startsWith('ゲームセット')).slice(-1)}`);
+    ok(ends.length === 1 && ends[0].sets.length === 2 && ends[0].sets[1].cpu === 1, `the summary has the set scores: ${JSON.stringify(ends[0] && ends[0].sets)}`);
+    for (let i = 0; i < 60 * 4 && g.match.sets.you > 0; i++) g.update(1 / 60);
+    ok(g.match.sets.you === 0 && g.match.setScores.length === 0, 'the next match starts with no sets');
+  } finally {
+    applyMatchFormat(6, 1);
+  }
+}
+
 // --- 試合後のスタッツ：セットが終わると matchEnd が1回だけ呼ばれ、次のマッチで0に戻る ---
 {
   const ends = [];

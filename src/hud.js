@@ -6,7 +6,7 @@
   const {
     GUIDE, SERVE, WIND, STAMINA, SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, getRating,
     CHARACTERS, CHARACTER_BUDGET, CHARACTER_DEFAULT, THEME, SURFACE_COLORS,
-    SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE,
+    SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE, MATCH_FORMATS,
   } = RallyOne.config;
   /** 練習モードのレッスン一覧の見出し（config.PRACTICE.LESSONS の group ごと） */
   const LESSON_GROUPS = { basic: '基本', special: '必殺技' };
@@ -231,6 +231,8 @@
       this.el = {
         names: { you: $('n1'), cpu: $('n2') },
         games: { you: $('g1'), cpu: $('g2') },
+        setCells: { you: $('s1'), cpu: $('s2') },
+        formatInfo: $('formatInfo'),
         points: { you: $('p1'), cpu: $('p2') },
         aces: { you: $('ace1'), cpu: $('ace2') },
         doubleFaults: { you: $('df1'), cpu: $('df2') },
@@ -332,6 +334,28 @@
       const bind = (opts, fn) => opts.forEach((el) => {
         el.addEventListener('click', () => fn(el.dataset.level));
       });
+      // 試合の長さのカード（config.MATCH_FORMATS から作る。L＝ゲーム数、M＝セット数で順に切り替わる）
+      const formatCards = (rowId, list, kbd, onSelect) => {
+        const cards = list.map((f) => {
+          const el = document.createElement('div');
+          el.className = 'seg';
+          el.dataset.level = String(f.key);
+          const key = document.createElement('kbd');
+          key.textContent = kbd;
+          const name = document.createElement('b');
+          name.className = 'optName';
+          name.textContent = f.label;
+          const hint = document.createElement('em');
+          hint.textContent = f.hint;
+          el.append(key, name, hint);
+          el.addEventListener('click', () => onSelect(f.key));
+          return el;
+        });
+        $(rowId).querySelector('.segs').replaceChildren(...cards);
+        return cards;
+      };
+      this.el.gamesOpts = formatCards('gamesRow', MATCH_FORMATS.GAMES, 'L', handlers.onSelectGames);
+      this.el.setsOpts = formatCards('setsRow', MATCH_FORMATS.SETS, 'M', handlers.onSelectSets);
       bind(this.el.modeOpts, (level) => handlers.onSelectMode(level === 'doubles'));
       bind(this.el.diffOpts, handlers.onSelectDifficulty);
       bind(this.el.surfaceOpts, handlers.onSelectSurface);
@@ -860,6 +884,17 @@
       this.el.surfaceOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === level));
     }
 
+    /**
+     * スタート画面の試合の長さの表示と、試合中の右上の「3 set match · first to 6」。
+     * @param {number} games MATCH_FORMATS.GAMES の key
+     * @param {number} sets MATCH_FORMATS.SETS の key
+     */
+    setMatchFormat(games, sets) {
+      (this.el.gamesOpts || []).forEach((el) => el.classList.toggle('on', el.dataset.level === String(games)));
+      (this.el.setsOpts || []).forEach((el) => el.classList.toggle('on', el.dataset.level === String(sets)));
+      this.el.formatInfo.textContent = `${sets} set match · first to ${games}`;
+    }
+
     /** スタート画面の時間帯（'day'｜'night'）の表示。 */
     setSession(level) {
       this.el.sessionOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === level));
@@ -952,6 +987,20 @@
       }
       this.el.games.you.textContent = games.you;
       this.el.games.cpu.textContent = games.cpu;
+      // 決まったセットのゲーム数（取った側を明るく）。中身が変わったときだけ組み直す
+      const setsKey = match.setScores.map((s) => `${s.you}-${s.cpu}`).join(',');
+      if (setsKey !== this.setsKey) {
+        this.setsKey = setsKey;
+        ['you', 'cpu'].forEach((side) => {
+          const other = side === 'you' ? 'cpu' : 'you';
+          this.el.setCells[side].replaceChildren(...match.setScores.map((s) => {
+            const b = document.createElement('b');
+            b.textContent = s[side];
+            if (s[side] > s[other]) b.className = 'won';
+            return b;
+          }));
+        });
+      }
       this.el.names.you.className = 'nm' + (server === 'you' ? ' srv' : '');
       this.el.names.cpu.className = 'nm' + (server === 'cpu' ? ' srv' : '');
       this.el.aces.you.textContent = stats.you.aces;
@@ -1286,7 +1335,15 @@
         : { you: 'YOU', cpu: 'CPU' };
       this.el.msTitle.textContent = mine ? 'あなたの勝ち' : 'CPU の勝ち';
       this.el.msTitle.classList.toggle('win', mine);
-      this.el.msScore.textContent = `${label.you} ${summary.games.you} — ${summary.games.cpu} ${label.cpu}`;
+      // 複数セットの試合はセットカウントと各セットのゲーム数、1セットマッチはゲーム数
+      const sets = summary.sets || [];
+      if (sets.length > 1) {
+        const won = (side) => sets.filter((s) => s[side] > s[side === 'you' ? 'cpu' : 'you']).length;
+        const detail = sets.map((s) => `${s.you}-${s.cpu}`).join(' ');
+        this.el.msScore.textContent = `${label.you} ${won('you')} — ${won('cpu')} ${label.cpu}（${detail}）`;
+      } else {
+        this.el.msScore.textContent = `${label.you} ${summary.games.you} — ${summary.games.cpu} ${label.cpu}`;
+      }
 
       const rows = [row('head', '', { text: label.you }, { text: label.cpu })];
       STAT_ROWS.forEach((spec) => {
@@ -1344,6 +1401,7 @@
       const names = this.teamNames || {};
       const who = names[p.winner] || (p.winner === 'you' ? 'YOU' : 'CPU');
       const title = p.stake === 'match' ? 'マッチポイント'
+        : p.stake === 'set' ? 'セットポイント'
         : p.stake === 'saved' ? 'ピンチを凌ぐ'
           : p.specials.length ? `必殺技 ${p.specials.join('・')}`
             : p.outcome === 'ace' ? `エース ${Math.round(p.serveKmh)}km/h`

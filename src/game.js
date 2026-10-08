@@ -2155,8 +2155,9 @@
       this.finale = finale;
       this.after(FINALE.DELAY, () => {
         finale.cut = true;
-        const { games } = this.match; // セットの終わりは match.reset() まで最終スコアのまま
-        const result = `${winner === 'you' ? 'あなたの勝ち' : 'CPU の勝ち'} ${games.you}-${games.cpu}`;
+        // 各セットのゲーム数を古い順に（1セットマッチならその1セットの最終スコアだけ）
+        const sets = this.match.setScores.map((s) => `${s.you}-${s.cpu}`).join(' ');
+        const result = `${winner === 'you' ? 'あなたの勝ち' : 'CPU の勝ち'} ${sets}`;
         this.hooks.call('ゲームセット', `${result} ／ SPACE でスキップ`);
       });
     }
@@ -2185,6 +2186,32 @@
       this.after(TIMING.NEXT_MATCH, () => this.startNextMatch(finale.changeover));
     }
 
+    /**
+     * 複数セットの試合で、セットが決まった後に次のセットを始める（ゲーム数を 0-0 に戻す。
+     * 取ったセット数・スタッツ・ハイライトの記録はそのまま続く）。
+     * @param {string|null} changeover そのセットが決まった直後のスコアでのチェンジエンズ
+     */
+    startNextSet(changeover) {
+      this.match.nextSet();
+      this.hooks.score();
+      if (this.rainDue()) this.beginRainDelay(changeover);
+      else this.resumeAfterSet(changeover);
+    }
+
+    /**
+     * セット間の休憩。ゲーム数が奇数で終わったセットなら、その間にコートも入れ替わる。
+     * 偶数なら入れ替わらず（次のセットの第1ゲームの後に入れ替わる）、休憩ぶんの
+     * スタミナだけ戻して始める。
+     */
+    resumeAfterSet(changeover) {
+      if (changeover) {
+        this.beginChangeover(changeover);
+      } else {
+        this.recoverStamina(CHANGEOVER.RECOVER_MULT.setBreak);
+        this.newPoint();
+      }
+    }
+
     /** @param {string|null} changeover 前の試合が決まった直後のスコアでのチェンジエンズ */
     startNextMatch(changeover) {
       this.finale = null;
@@ -2197,15 +2224,7 @@
       this.matchPointCutDone = false; // 次のマッチの最初のマッチポイントでも演出を出す
       this.serverPartner = { you: 'you', cpu: 'cpu' }; // 次のセットは主力からサーブし直す
       this.hooks.score();
-      // セット間の休憩。ゲーム数が奇数で終わったセットなら、その間にコートも入れ替わる。
-      // 偶数なら入れ替わらず（次のセットの第1ゲームの後に入れ替わる）、休憩ぶんの
-      // スタミナだけ戻して始める。
-      if (changeover) {
-        this.beginChangeover(changeover);
-      } else {
-        this.recoverStamina(CHANGEOVER.RECOVER_MULT.setBreak);
-        this.newPoint();
-      }
+      this.resumeAfterSet(changeover);
     }
 
     /** コートを入れ替わる。会場の向きは表示側が endsSwapped を見て回す。 */
@@ -3724,6 +3743,8 @@
         winner,
         doubles: this.doubles,
         games: { you: this.match.games.you, cpu: this.match.games.cpu },
+        // 各セットのゲーム数（古い順）。1セットマッチなら games と同じ1つだけ
+        sets: this.match.setScores.map((s) => ({ ...s })),
         points,
         longestRally,
         // 1ポイントあたりの平均本数（サーブを1本目に数える）。0ポイントで割らない。
@@ -3833,10 +3854,20 @@
         this.matchPointCutDone = false; // マッチポイントの演出はゲームごとに1回（次のゲームでまた出す）
       }
 
-      if (result.type === 'set') {
+      if (result.type === 'set' && result.matchOver) {
         this.hooks.call('ゲームセット', mine ? 'あなたの勝ち' : 'CPU の勝ち');
         this.hooks.score();
         this.beginFinale(winner, changeover);
+        return;
+      }
+      if (result.type === 'set') {
+        // まだ試合は続く（複数セットの試合）。決まったセットのスコアを読む一拍の後、次のセットへ
+        const { games, sets } = this.match;
+        const n = sets.you + sets.cpu;
+        this.hooks.call(`セット — ${mine ? 'YOU' : 'CPU'}`,
+          `第${n}セット ${games.you}-${games.cpu} ／ セットカウント ${sets.you}-${sets.cpu}`);
+        this.hooks.score();
+        this.after(TIMING.NEXT_POINT, () => this.startNextSet(changeover));
         return;
       }
 

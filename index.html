@@ -49,9 +49,10 @@
   </div>
   <div id="scorewrap">
     <div id="bug">
-      <div class="nm" id="n1">YOU</div><div class="gm" id="g1">0</div><div class="pt" id="p1">0</div>
+      <!-- .st は決まったセットのゲーム数（複数セットの試合で、1セット目が決まってから出る） -->
+      <div class="nm" id="n1">YOU</div><div class="st" id="s1"></div><div class="gm" id="g1">0</div><div class="pt" id="p1">0</div>
       <div class="row2">
-        <div class="nm" id="n2">CPU</div><div class="gm" id="g2">0</div><div class="pt" id="p2">0</div>
+        <div class="nm" id="n2">CPU</div><div class="st" id="s2"></div><div class="gm" id="g2">0</div><div class="pt" id="p2">0</div>
       </div>
     </div>
     <!-- 次の1点に何がかかっているか（ブレーク／ゲーム／マッチポイント）。かかっていない
@@ -74,7 +75,7 @@
       <div class="staminaRow" id="staminaRowCpuMate"><div class="staminaLabel" id="staminaLabelCpuMate">CPU2</div><div class="staminaBar"><div class="staminaFill" id="staminaFillCpuMate"></div></div></div>
     </div>
   </div>
-  <div id="head">1 set match · <span id="setinfo">first to 6</span>
+  <div id="head"><span id="formatInfo">1 set match · first to 6</span>
     <!-- 対戦しているCPU/AIの強さ（スタート画面の「CPUの強さ」）。試合を始めるときに
          hud.setMatchLevel() が入れる。練習モード中は #head ごと隠れる。 -->
     <div id="matchLevel"></div>
@@ -148,6 +149,15 @@
               <div class="seg on" data-level="singles"><kbd>S</kbd><b class="optName">シングルス</b><em>1 vs 1 — あなた vs CPU</em></div>
               <div class="seg" data-level="doubles"><kbd>D</kbd><b class="optName">ダブルス</b><em>2 vs 2 — あなた＋AIパートナー vs CPU2人</em></div>
             </div>
+          </div>
+          <!-- 試合の長さ。カードは hud.js が config.MATCH_FORMATS から組み立てる（L・M キーで順に切り替わる） -->
+          <div class="menuRow" id="gamesRow">
+            <div class="menuLabel">ゲーム数</div>
+            <div class="segs"></div>
+          </div>
+          <div class="menuRow" id="setsRow">
+            <div class="menuLabel">セット数</div>
+            <div class="segs"></div>
           </div>
           <!-- 最初のゲームのサーバー。コイントスなら勝った側が選ぶ（人間が勝てば #tossChoice で選ぶ）。
                サーブ／レシーブを選んでおけばトスはせず、そのまま始まる。T キーで順に切り替わる。 -->

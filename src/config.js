@@ -1668,13 +1668,44 @@
   /** スコアのルール（1セットマッチ） */
   const RULES = {
     GAME_POINTS: 4, // 40 の次でゲーム
+    // 1セットのゲーム数（SET_GAMES-all でタイブレーク）と、試合を取るのに要るセット数。
+    // ここは素の値（tests/smoke.mjs はこの6ゲーム・1セットで検証する）。スタート画面の
+    // 「試合形式」は applyMatchFormat() でこの2つだけを書き換える（MATCH_FORMATS）。
     SET_GAMES: 6,
+    SETS_TO_WIN: 1,
     MARGIN: 2,      // ゲーム／セットとも2差が必要
     TIEBREAK_POINTS: 7, // 6-6 のタイブレークは7点先取（MARGIN=2は共用）
     // タイブレーク中はこのポイント数ごとにコートを入れ替わる（ITF ルール10）。通常のゲームの
     // 入れ替わり（奇数ゲームの後）は規則そのものなので値は持たない（scoring.changeoverAfter）。
     TIEBREAK_CHANGE_EVERY: 6,
   };
+
+  /**
+   * スタート画面で選べる試合の長さ。GAMES＝1セットのゲーム数（その数-allでタイブレーク）、
+   * SETS＝何セットマッチか（SETS_TO_WIN はその過半数）。DEFAULT はスタート画面で最初に選ばれている形式で、
+   * 1回の起動で遊び切れる短さ（3ゲーム先取の1セットマッチ）にしてある。
+   */
+  const MATCH_FORMATS = {
+    GAMES: [
+      { key: 3, label: '3ゲーム先取', hint: '短い試合。3-3 でタイブレーク' },
+      { key: 4, label: '4ゲーム先取', hint: 'ほどよい長さ。4-4 でタイブレーク' },
+      { key: 6, label: '6ゲーム先取', hint: '通常のセット。6-6 でタイブレーク' },
+    ],
+    SETS: [
+      { key: 1, label: '1セットマッチ', hint: '1セットで決着' },
+      { key: 3, label: '3セットマッチ', hint: '2セット先取' },
+      { key: 5, label: '5セットマッチ', hint: '3セット先取（グランドスラムの男子）' },
+    ],
+    DEFAULT: { games: 3, sets: 1 },
+  };
+
+  /** @param {number} games MATCH_FORMATS.GAMES の key  @param {number} sets MATCH_FORMATS.SETS の key */
+  function applyMatchFormat(games, sets) {
+    const g = MATCH_FORMATS.GAMES.find((f) => f.key === games) || MATCH_FORMATS.GAMES[0];
+    const s = MATCH_FORMATS.SETS.find((f) => f.key === sets) || MATCH_FORMATS.SETS[0];
+    RULES.SET_GAMES = g.key;
+    RULES.SETS_TO_WIN = Math.floor(s.key / 2) + 1;
+  }
 
   /**
    * 効果音の合成パラメータ（実装は `audio.js`）。単純な正弦波1本ではなく、
@@ -1901,10 +1932,10 @@
        * という感じが出るため。
        */
       STAKE_VOL_MULT: {
-        match: 1.30, break: 1.15, game: 1.06, saved: 1.12,
+        match: 1.30, set: 1.20, break: 1.15, game: 1.06, saved: 1.12,
       },
       STAKE_DUR_MULT: {
-        match: 1.45, break: 1.20, game: 1.05, saved: 1.15,
+        match: 1.45, set: 1.30, break: 1.20, game: 1.05, saved: 1.15,
       },
       FILTER_BASE_HZ: 650,    // ざわめき寄りの低め
       FILTER_EXCITED_HZ: 1900, // 歓声寄りの高め（盛り上がるほどこちらに近づく）
@@ -3513,7 +3544,7 @@
       FAST_SERVE: 3,
       WINNER: 2,           // 相手のミスではなく決め球で取った
       SPECIAL: 8,          // そのポイントで必殺技が出た（何本出ても1回ぶん）
-      STAKE: { match: 12, break: 5, game: 1, saved: 6 },
+      STAKE: { match: 12, set: 8, break: 5, game: 1, saved: 6 },
     },
     SPEED: REPLAY.SPEED,
     HOLD_SEC: 0.9,  // 1本ごとに最後のコマで静止する長さ（次の1本との区切り）
@@ -4347,7 +4378,7 @@
 
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
-    BOUNDS, CPU, DOUBLES, RULES, TIMING, CHANGEOVER, MATCH_POINT, FINALE, PRACTICE, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
+    BOUNDS, CPU, DOUBLES, RULES, MATCH_FORMATS, applyMatchFormat, TIMING, CHANGEOVER, MATCH_POINT, FINALE, PRACTICE, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT, GUIDE,
     SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, HIGHLIGHT, EMOTION, RAIN, SESSIONS, NIGHT, STAMINA, TOSS, OFFICIALS, LINE_CALL, BALL_MARK,
     STANDS, SPECTATORS, FLAG, MOTION,
