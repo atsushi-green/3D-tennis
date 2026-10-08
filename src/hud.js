@@ -244,6 +244,12 @@
         staminaFillCpuMate: $('staminaFillCpuMate'),
         staminaRowYouMate: $('staminaRowYouMate'),
         staminaRowCpuMate: $('staminaRowCpuMate'),
+        staminaLabels: {
+          you: $('staminaLabelYou'),
+          cpu: $('staminaLabelCpu'),
+          youMate: $('staminaLabelYouMate'),
+          cpuMate: $('staminaLabelCpuMate'),
+        },
         shade: $('shade'),
         hud: $('hud'),
         lsKicker: $('lsKicker'),
@@ -767,6 +773,43 @@
     setStaminaFill(el, fraction) {
       el.style.width = `${Math.max(0, Math.min(1, fraction)) * 100}%`;
       el.classList.toggle('low', fraction < STAMINA.LOW_THRESHOLD);
+    }
+
+    /**
+     * 試合中の表示（スコアボードの名前欄・スタミナの行）に、スタート画面で選んだ選手の名前を出す
+     * （試合を始めるときに main.js が呼ぶ）。スコアボードは「YOU」「CPU」の小札を残したうえで
+     * 名前を並べる（選手名だけだと、どちらが自分の側か一目で分からないため）。ダブルスは2人を
+     * 「名 / 名」で並べ、長くなりすぎないよう名前の「・」より前（ファーストネーム）だけにする。
+     * カスタムの選手には名前が無いので、枠の呼び名（YOU／パートナー など）をそのまま使う。
+     * @param {{[who:string]: string}} picks 枠ごとの config.CHARACTERS の key、または 'custom'
+     * @param {boolean} doubles
+     */
+    setPlayerNames(picks, doubles) {
+      const nameOf = (who) => {
+        const picked = pickOf(picks[who]);
+        return picked === CUSTOM ? null : picked.name;
+      };
+      const short = (name) => name.split('・')[0];
+      ROSTER.forEach((r) => {
+        this.el.staminaLabels[r.key].textContent = nameOf(r.key) || r.label;
+      });
+      ['you', 'cpu'].forEach((side) => {
+        const members = doubles ? [side, `${side}Mate`] : [side];
+        const names = members.map(nameOf);
+        const cell = this.el.names[side];
+        const sideLabel = ROSTER.find((r) => r.key === side).label;
+        if (names.every((n) => n == null)) {
+          cell.textContent = sideLabel; // 全員カスタム＝これまでどおり YOU／CPU だけ
+          return;
+        }
+        const tag = document.createElement('span');
+        tag.className = 'side';
+        tag.textContent = sideLabel;
+        const text = doubles
+          ? names.map((n, i) => (n ? short(n) : ROSTER.find((r) => r.key === members[i]).label)).join(' / ')
+          : names[0];
+        cell.replaceChildren(tag, text);
+      });
     }
 
     /** スタート画面の試合形式（シングルス／ダブルス）表示を切り替える。 */

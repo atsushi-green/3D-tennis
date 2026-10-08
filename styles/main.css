@@ -60,6 +60,10 @@ canvas{display:block}
 #bug .pt{text-align:center;background:rgba(216,242,74,.12);font-weight:700}
 #bug .row2{display:contents}
 #bug .row2 div{border-top:1px solid rgba(232,238,245,.12)}
+#bug .nm .side{
+  display:inline-block;margin-right:7px;padding:0 4px;border-radius:2px;
+  font-size:10px;letter-spacing:.06em;color:var(--dim);border:1px solid rgba(232,238,245,.25)
+}
 #bug .srv::after{content:"●";color:var(--ball);font-size:9px;margin-left:6px;vertical-align:2px}
 
 /* エース／ダブルフォルトの通算（you–cpu）。スコアボードの邪魔をしない控えめな表示 */
@@ -155,9 +159,10 @@ canvas{display:block}
 #stamina{
   margin-top:6px;padding:5px 10px;
   background:rgba(9,20,34,.6);border-radius:2px;
-  display:flex;flex-direction:column;gap:4px;
+  /* 名前の長さが選手ごとに違っても、バーの左端が揃うように列で組む */
+  display:grid;grid-template-columns:auto 1fr;align-items:center;gap:4px 8px;
 }
-.staminaRow{display:flex;align-items:center;gap:8px}
+.staminaRow{display:contents}
 .staminaLabel{font-size:11px;letter-spacing:.04em;color:var(--dim);white-space:nowrap;min-width:52px}
 .staminaBar{flex:1;height:5px;border-radius:3px;overflow:hidden;
   background:rgba(232,238,245,.12);

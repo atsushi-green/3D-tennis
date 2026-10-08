@@ -101,6 +101,7 @@
     applySurface(surface);
     hud.hideStartScreen();
     hud.setMatchLevel(cpuLevel);
+    hud.setPlayerNames(picks, wantDoubles);
     game.setGuide(guide);
     game.setSpecials(specials);
     game.start(wantDoubles, initialServer);
