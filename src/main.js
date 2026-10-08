@@ -3,10 +3,10 @@
   'use strict';
 
   const {
-    PHYSICS, applyCpuLevel, applyCpuStyle, applySurface, TOSS,
+    PHYSICS, applyCpuLevel, applyCpuStyle, applySurface, applyMatchFormat, MATCH_FORMATS, TOSS,
     setRating, getRating, resetRatings, randomizeRatings, applyCharacter,
-    SKILLS, ROSTER, CHARACTER_DEFAULT,
-    SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE, LINE_CALL,
+    SKILLS, ROSTER, CHARACTERS, CHARACTER_DEFAULT,
+    SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE, LINE_CALL, REPLAY,
   } = RallyOne.config;
   const { clamp } = RallyOne.math;
   const { sfx, unlock } = RallyOne.audio;
@@ -31,6 +31,14 @@
    * 決めるのは最初の試合の第1ゲームだけで、その後は普段どおりサーブが交代していく。
    */
   let firstServe = 'toss';
+  /** スタート画面で選んだ時間帯（'day'｜'night'）と天候（true＝にわか雨が降りうる）。既定は晴れたデー。 */
+  let session = 'day';
+  let rainOn = false;
+  /** スタート画面で選んだ試合の長さ（1セットのゲーム数と、何セットマッチか）。config.MATCH_FORMATS */
+  let formatGames = MATCH_FORMATS.DEFAULT.games;
+  let formatSets = MATCH_FORMATS.DEFAULT.sets;
+  /** list の中で current の次（最後の次は先頭）の key */
+  const nextKey = (list, current) => list[(list.findIndex((f) => f.key === current) + 1) % list.length].key;
   /** T キーで切り替える順番（画面のカードの並びと同じ） */
   const FIRST_SERVE_ORDER = ['toss', 'serve', 'receive'];
   /**
@@ -65,6 +73,13 @@
   let pendingSummary = null;
   /** 試合後のスタッツ画面を開いている間だけ true。この間は試合の進行を止める。 */
   let matchStatsOpen = false;
+  /**
+   * ネットに掛かって決まったポイントで、球がネットから落ちきるのを待っている間。
+   * replaceGame() からも触るので、それより前（ここ）で宣言しておく（REPLAY.NET_DELAY 参照）。
+   */
+  let netReplayPending = false;
+  /** netReplayPending の間、そのポイントの id（ハイライト用の録画の鍵。game.lastPoint.id）。 */
+  let netClipId = null;
   /** 練習モードのレッスン一覧を開いている間だけ true（スタート画面の上で、#menuBody と差し替え）。 */
   let lessonMenuOpen = false;
   /** レッスン一覧で選んでいる行（config.PRACTICE.LESSONS の添字）。 */
@@ -99,10 +114,18 @@
     applyCpuLevel(cpuLevel);
     applyCpuStyle(cpuStyle); // 必ず applyCpuLevel() の後（config.js のコメント参照）
     applySurface(surface);
+    applyMatchFormat(formatGames, formatSets);
     hud.hideStartScreen();
     hud.setMatchLevel(cpuLevel);
+    hud.setPlayerNames(picks, wantDoubles);
     game.setGuide(guide);
     game.setSpecials(specials);
+    game.setRain(rainOn);
+    // 選んだ選手の気性（ポイントの後の感情表現の出やすさ）。カスタムは型がないので 'normal'
+    game.setTempers(Object.fromEntries(ROSTER.map((r) => {
+      const character = CHARACTERS.find((c) => c.key === picks[r.key]);
+      return [r.key, character ? character.temper : 'normal'];
+    })));
     game.start(wantDoubles, initialServer);
   }
 
@@ -134,6 +157,8 @@
     game = createGame();
     RallyOne.game = game;
     world.skipReplay();
+    world.resetClips();
+    netReplayPending = false;
     prevPhase = game.phase;
     pendingSummary = null;
     matchStatsOpen = false;
@@ -213,6 +238,27 @@
       cpuStyle = name;
       hud.setStyle(name);
     },
+    onSelectGames: (games) => {
+      formatGames = games;
+      hud.setMatchFormat(formatGames, formatSets);
+    },
+    onSelectSets: (sets) => {
+      formatSets = sets;
+      hud.setMatchFormat(formatGames, formatSets);
+    },
+    onCycleGames: () => menu.onSelectGames(nextKey(MATCH_FORMATS.GAMES, formatGames)),
+    onCycleSets: () => menu.onSelectSets(nextKey(MATCH_FORMATS.SETS, formatSets)),
+    onSelectSession: (name) => {
+      session = name;
+      hud.setSession(name);
+      world.setSession(name); // スタート画面の背後の会場もそのまま夜にする
+    },
+    onToggleSession: () => menu.onSelectSession(session === 'day' ? 'night' : 'day'),
+    onSelectRain: (on) => {
+      rainOn = on;
+      hud.setRainOption(on);
+    },
+    onToggleRain: () => menu.onSelectRain(!rainOn),
     onSelectFirstServe: (choice) => {
       firstServe = choice;
       hud.setFirstServe(choice);
@@ -270,6 +316,12 @@
       }
       picks[who] = key;
       hud.setPicks(picks);
+      // 相手の主力を選んだら、その選手の型に合わせて CPU のプレースタイルも切り替える
+      // （例：サーブ&ボレーヤー → サーブ&ボレー）。カスタムは型がないので今の選択のまま。
+      if (who === 'cpu') {
+        const character = CHARACTERS.find((c) => c.key === key);
+        if (character) menu.onSelectStyle(character.cpuStyle);
+      }
     },
     // つまみを動かしたら、その枠は「カスタム」になる（選んでいた選手をもとにした微調整）
     onChange: (who, key, value) => {
@@ -286,6 +338,7 @@
         delete customRatings[r.key];
       });
       hud.setPicks(picks);
+      menu.onSelectStyle(CHARACTERS.find((c) => c.key === CHARACTER_DEFAULT).cpuStyle);
     },
     onRandom: () => {
       randomizeRatings();
@@ -298,6 +351,7 @@
   });
   hud.setPicks(picks);
   hud.buildMenu(menu);
+  hud.setMatchFormat(formatGames, formatSets);
   hud.buildSpecials({ onToggle: menu.onToggleSpecial, onPreset: menu.onSpecialPreset });
   hud.setSpecials(specials);
   // 試合後のスタッツ画面の「次の試合へ」。キーボード（Space/Enter）側は input.js が
@@ -338,15 +392,23 @@
     onToggleGuide: () => menu.onToggleGuide(),
     onCycleSpecials: () => menu.onCycleSpecials(),
     onCycleFirstServe: () => menu.onCycleFirstServe(),
+    onToggleSession: () => menu.onToggleSession(),
+    onToggleRain: () => menu.onToggleRain(),
+    onCycleGames: () => menu.onCycleGames(),
+    onCycleSets: () => menu.onCycleSets(),
     // リプレイのスキップは Space だけ（以前はどのキーでも飛んでしまい、ラリー用の
     // キーに触れただけで意図せずスキップされていた）。チェンジエンズの休憩も同じ Space で
     // 切り上げる。リプレイ中は game.update() が止まっていて休憩はまだ始まっていないので、
     // 1回の押下で両方が飛ぶことはない。
     onSkipReplay: () => {
       world.skipReplay();
+      // ネットから落ちきる前に飛ばされても、ハイライトの候補としては録っておく
+      if (netReplayPending) world.captureClip(netClipId);
+      netReplayPending = false;
       game.skipChangeover();
       game.skipMatchPointCut();
       game.skipFinaleCut();
+      game.skipRainDelay();
     },
     isMatchStatsOpen: () => matchStatsOpen,
     onCloseMatchStats: () => closeMatchStats(),
@@ -398,10 +460,18 @@
     if (game.started) {
       // リプレイが終わっていて、まだ出していないスタッツがあれば、ここで開く
       // （最後のポイントの再生に割り込まないよう、必ず再生が終わってから）。
+      // その前に、試合の見どころのハイライトを1度だけ流す（流せる録画が無ければすぐ開く）。
       if (pendingSummary && !world.isReplaying()) {
-        hud.showMatchStats(pendingSummary);
-        pendingSummary = null;
-        matchStatsOpen = true;
+        const summary = pendingSummary;
+        if (!summary.highlightsPlayed) {
+          summary.highlightsPlayed = true;
+          if (world.playHighlights(summary.highlights)) hud.hideCall();
+        }
+        if (!world.isReplaying()) {
+          hud.showMatchStats(summary);
+          pendingSummary = null;
+          matchStatsOpen = true;
+        }
       }
       // リプレイ中とスタッツ画面を開いている間は、試合の進行そのものを止める（＝「見て
       // いるぶんだけ待つ」）。止めないと裏で次のポイントが進んでしまい、再生が途中で
@@ -426,10 +496,28 @@
       // 練習モードはリプレイを挟まない（1本ごとに止まると反復練習のテンポが崩れる）
       // 線審のコール（アウト／ダブルフォルト）で決まったポイントは、通常の画面でコールを
       // 見せてからリプレイへ移る（実際の中継と同じ順番。LINE_CALL.REPLAY_DELAY 参照）。
+      // ネットに掛かったポイントは、球が落ちて着地するまで通常の画面で見せ、着地した瞬間を
+      // 再生の終わりにしてから REPLAY.NET_DELAY 置いて再生する（REPLAY.NET_DELAY 参照）。
+      // 決着の瞬間にはまだ game.ball.netFall が立っている（落下中）ことで見分ける。
+      // 再生する1点はハイライトの候補として録画を残す（id で game.pointLog と突き合わせる）。
+      // 候補から外れた録画はここで捨てる。
       if (pointJustEnded && !game.practice) {
-        world.startReplay(game.lineCall && game.lineCall.decisive ? LINE_CALL.REPLAY_DELAY : 0);
+        const clipId = game.lastPoint && game.lastPoint.id;
+        world.pruneClips(game.highlightKeep());
+        if (game.ball.netFall) {
+          netReplayPending = true;
+          netClipId = clipId;
+        } else {
+          world.startReplay(game.lineCall && game.lineCall.decisive ? LINE_CALL.REPLAY_DELAY : 0, clipId);
+        }
+      }
+      // 着地した（保険として、次のポイントの支度に移った）ところで再生を予約する
+      if (netReplayPending && (!game.ball.netFall || game.phase !== 'over')) {
+        netReplayPending = false;
+        world.startReplay(REPLAY.NET_DELAY, netClipId);
       }
       hud.setReplay(world.isReplaying(), world.isCheckingMark());
+      hud.setHighlight(world.highlightInfo());
       // 試合が決まった瞬間から、リプレイ・締めのカットを通してスタッツ画面が出るまで、スタンドは
       // 総立ちで沸き続ける（スタッツ画面の番になったら収める）。ざわめきより先に渡す：大歓声が
       // 鳴っている間と、それが収まりきるまでは、audio.js がざわめきを戻さない。
@@ -440,6 +528,8 @@
       // マッチポイントの演出の間も、沸いているスタンドを映しているのでざわめきは消さない
       sfx.murmur(!game.practice && (world.isReplaying() || matchStatsOpen || !!game.changeover
         || !!game.matchPointCut || game.phase === 'over'));
+      hud.setWeather(game.rain, game.wet);
+      sfx.rain(world.rainLevel());
       hud.setShade(game.changeoverShade());
       hud.setCinema(!!game.matchPointCut || !!(finale && finale.cut));
       hud.setPractice(game.practice);
@@ -452,12 +542,14 @@
       hud.setSpecialTip(armed);
       hud.setSpecialUses(game.specials, game.specialUses);
       hud.setStakes(game.stakes);
+      hud.setFormation(game.formationOrders());
       hud.setSmashTip(game.smashHint);
       hud.setSwingGuide(game.swingGuide, game.you.x);
       syncStamina();
     } else {
       sfx.ovation(null); // 試合を作り直してスタート画面／レッスン一覧へ戻った
       sfx.murmur(false);
+      sfx.rain(0);
     }
     world.render();
   }

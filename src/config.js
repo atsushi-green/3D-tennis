@@ -209,13 +209,23 @@
     // 代わりに TAP_Z（下記）を浅くすることで初速そのものも下げ、TAP と CHARGE の
     // 初速比（旧: 約2.1倍）を約2.3倍まで広げた。
     CHARGE_T: 0.34, // 最大まで溜めた強打：低く鋭く速い
-    LOB_T: 1.45,
+    // ロブ（Shift）も溜めで打ち分ける。溜めなし＝LOB_T の高く深い守りのロブ、
+    // フル溜め＝LOB_ATTACK_T の低く速い攻めのロブ（ネットに詰めた相手の頭上を、下がる
+    // 間を与えずに抜く）。以前は溜めに関わらず 1.45秒・頂点4m 前後の1種類だけで、
+    // コートの中ほど（着地の 3〜4m 手前）で打てる高さまで下りてくるため、ネット際でも
+    // ベースラインでも CPU にほぼ全部スマッシュされていた。
+    // どちらも**フラット基準**の値。スピンで実効重力が変わっても頂点の高さが揃うよう、
+    // game.js#playerShot が √(重力の倍率) で飛翔時間を補正する（スライスで打つと
+    // 重力が軽いぶん頂点が 3.2m まで下がる平たい球になっていた）。
+    LOB_T: 2.1,
+    LOB_ATTACK_T: 1.35,
     // 狙う深さ（ネットからの距離）も溜めに連動させる。溜めるほど深く突き刺さり、
     // 溜めなしは浅く落ちる。速さだけでなく「どこに落ちるか」も変わるので違いが分かりやすい。
     TAP_Z: 4.8,          // 溜めなしの着地（浅い＝相手が前に詰めやすい）
     CHARGE_Z: 10.3,      // フル溜めの着地（深い＝ベースライン際に突き刺さる）
     DRIVE_Z_SPREAD: 1.1, // 毎回少しばらつかせる
     LOB_Z: 10.2,
+    LOB_ATTACK_Z: 9.6,   // 攻めのロブは低く速いぶん、少し手前に落としてアウトを避ける
     SMASH_T: 0.30,  // スマッシュの飛翔時間。CHARGE_T よりさらに短く＝速く、平たく突き刺さる
     SMASH_Z: 10.4,  // スマッシュの着地（フル溜めの通常打よりさらに深く、決めにいく深さ）
     AIM_X: 2.7,          // ←→ で狙う左右の位置
@@ -276,6 +286,9 @@
     IN_VZ_MULT: 0.3,      // ネットイン：向きはそのまま、コードで大きく失速するだけ
     IN_VX_MULT: 0.3,
     IN_VY_MULT: 0.3,
+    // ネットに掛かってポイント（フォールト）が決まった後も、1バウンドするまでは球を落とし続けて
+    // 軌跡に描く（game.js の netFall）。地面へ着くまでの時間の上限（計算が破綻したときの保険）。
+    FALL_MAX_SEC: 2.0,
   };
 
   /**
@@ -1411,6 +1424,28 @@
     // hit() の判定側（SMASH_MIN_Y）にすぐ届く高さまで下げて揃える。
     SMASH_LOB_PEAK: 2.3,
     SMASH_CHASE_MARGIN: 0.8, // 打点までの残り時間のこの割合で走り着けるときだけ叩きにいく
+    // --- 頭上を越されたロブ（下がりながらのスマッシュ）---
+    // 以前は「落下点まで間に合うか」だけを見て、前でも後ろでも同じ速さで走れる前提で
+    // 先回りし、着けば待てた時間（SMASH_SETTLE_T）で苦しさが消えてフルパワーになっていた。
+    // 実測：人間のロブはネット際・ベースラインどこにいる CPU にもほぼ 100% 叩かれ、
+    // 平均 180km/h（ユーザー報告「ロブを上げるとほとんどスマッシュを決められる」）。
+    // 後ろ向きに下がる足は前へ出る足より遅い、という当たり前を先回りの見積もりに入れる
+    // （ai.smashApproach の runT。実際の移動速度は変えない＝判断だけ慎重にする）。
+    SMASH_BACK_SPEED: 0.6,
+    // 打点までこれ以上(m)下がらないと叩けないロブは、スマッシュをあきらめて
+    // 1バウンドさせてから返す（ai.smashApproach と game.js#aiCanReturnNow）。
+    SMASH_RETREAT_MAX: 5.0,
+    // 下がった距離がこれだけあると「完全に追い込まれた」スマッシュ（stretch=1）。
+    // 落下点で待てていた時間（SMASH_SETTLE_T）でも打ち消さない：下がりきって振り向いた
+    // 体勢は、待てていても前へ出て叩くときのようには踏み込めない。
+    SMASH_RETREAT_STRETCH_DIST: 3.0,
+    // サービスラインより奥で打つスマッシュは、相手コートまで遠く角度もつかないので
+    // 決め球になりにくい。打点の深さが DEEP_Z_MIN→DEEP_Z_MAX で苦しさを最大 DEEP_STRETCH まで足す。
+    SMASH_DEEP_Z_MIN: COURT.SERVICE,
+    SMASH_DEEP_Z_MAX: 9.4,
+    SMASH_DEEP_STRETCH: 0.8,
+    // 追い込まれた（stretch=1）スマッシュのミス率は、通常のスマッシュのこの倍率まで上がる。
+    SMASH_STRETCH_OUT_MULT: 2.0,
     SMASH_AIM_X_MIN: 1.6,    // 相手の逆をつく横位置の幅
     SMASH_AIM_X_MAX: 3.5,
     SMASH_AIM_Z_MIN: 7.4,    // 狙う深さ（決めにいくので深い）
@@ -1665,13 +1700,44 @@
   /** スコアのルール（1セットマッチ） */
   const RULES = {
     GAME_POINTS: 4, // 40 の次でゲーム
+    // 1セットのゲーム数（SET_GAMES-all でタイブレーク）と、試合を取るのに要るセット数。
+    // ここは素の値（tests/smoke.mjs はこの6ゲーム・1セットで検証する）。スタート画面の
+    // 「試合形式」は applyMatchFormat() でこの2つだけを書き換える（MATCH_FORMATS）。
     SET_GAMES: 6,
+    SETS_TO_WIN: 1,
     MARGIN: 2,      // ゲーム／セットとも2差が必要
     TIEBREAK_POINTS: 7, // 6-6 のタイブレークは7点先取（MARGIN=2は共用）
     // タイブレーク中はこのポイント数ごとにコートを入れ替わる（ITF ルール10）。通常のゲームの
     // 入れ替わり（奇数ゲームの後）は規則そのものなので値は持たない（scoring.changeoverAfter）。
     TIEBREAK_CHANGE_EVERY: 6,
   };
+
+  /**
+   * スタート画面で選べる試合の長さ。GAMES＝1セットのゲーム数（その数-allでタイブレーク）、
+   * SETS＝何セットマッチか（SETS_TO_WIN はその過半数）。DEFAULT はスタート画面で最初に選ばれている形式で、
+   * 1回の起動で遊び切れる短さ（3ゲーム先取の1セットマッチ）にしてある。
+   */
+  const MATCH_FORMATS = {
+    GAMES: [
+      { key: 3, label: '3ゲーム先取', hint: '短い試合。3-3 でタイブレーク' },
+      { key: 4, label: '4ゲーム先取', hint: 'ほどよい長さ。4-4 でタイブレーク' },
+      { key: 6, label: '6ゲーム先取', hint: '通常のセット。6-6 でタイブレーク' },
+    ],
+    SETS: [
+      { key: 1, label: '1セットマッチ', hint: '1セットで決着' },
+      { key: 3, label: '3セットマッチ', hint: '2セット先取' },
+      { key: 5, label: '5セットマッチ', hint: '3セット先取（グランドスラムの男子）' },
+    ],
+    DEFAULT: { games: 3, sets: 1 },
+  };
+
+  /** @param {number} games MATCH_FORMATS.GAMES の key  @param {number} sets MATCH_FORMATS.SETS の key */
+  function applyMatchFormat(games, sets) {
+    const g = MATCH_FORMATS.GAMES.find((f) => f.key === games) || MATCH_FORMATS.GAMES[0];
+    const s = MATCH_FORMATS.SETS.find((f) => f.key === sets) || MATCH_FORMATS.SETS[0];
+    RULES.SET_GAMES = g.key;
+    RULES.SETS_TO_WIN = Math.floor(s.key / 2) + 1;
+  }
 
   /**
    * 効果音の合成パラメータ（実装は `audio.js`）。単純な正弦波1本ではなく、
@@ -1812,6 +1878,16 @@
      * 必殺技の発動音。他の音が「打った」瞬間の打撃音なのに対し、これだけは音程が
      * 上がっていく（BODY_DROP > 1）合図の音にして、打球音と混ざっても聞き分けられるようにする。
      */
+    /**
+     * 選手がラケットを地面に叩きつけた（EMOTION）。フレームが割れる「バキッ」（高いノイズ）と、
+     * 地面を打つ鈍い「ドン」（低い胴鳴り）、ガットとフレームのびびり（ブラシ層）。
+     */
+    RACKET_SMASH: {
+      NOISE_VOL: 0.22, NOISE_HZ: 1900, NOISE_Q: 0.8, NOISE_DUR: 0.09,
+      BODY_VOL: 0.26, BODY_HZ: 120, BODY_DROP: 0.45, BODY_DUR: 0.22,
+      BRUSH_VOL: 0.07, BRUSH_HZ: 3600, BRUSH_DUR: 0.28,
+    },
+
     SPECIAL: {
       NOISE_VOL: 0.06, NOISE_HZ: 2600, NOISE_Q: 2.2, NOISE_DUR: 0.09,
       BODY_VOL: 0.20, BODY_HZ: 420, BODY_DROP: 2.6, BODY_DUR: 0.30,
@@ -1888,10 +1964,10 @@
        * という感じが出るため。
        */
       STAKE_VOL_MULT: {
-        match: 1.30, break: 1.15, game: 1.06, saved: 1.12,
+        match: 1.30, set: 1.20, break: 1.15, game: 1.06, saved: 1.12,
       },
       STAKE_DUR_MULT: {
-        match: 1.45, break: 1.20, game: 1.05, saved: 1.15,
+        match: 1.45, set: 1.30, break: 1.20, game: 1.05, saved: 1.15,
       },
       FILTER_BASE_HZ: 650,    // ざわめき寄りの低め
       FILTER_EXCITED_HZ: 1900, // 歓声寄りの高め（盛り上がるほどこちらに近づく）
@@ -1979,7 +2055,7 @@
         VOWEL: [600, 1000, 2450], FORMANT_GAIN: [1, 0.55, 0.15], FORMANT_Q: 5, BREATH: 0.6,
       },
       /**
-       * 試合で初めてのマッチポイントの演出（MATCH_POINT）の間、スタンドが沸き続ける音
+       * 各ゲームで初めてのマッチポイントの演出（MATCH_POINT）の間、スタンドが沸き続ける音
        * （sfx.matchPoint）。ポイントの歓声と同じ材料（帯域を曲げたノイズの山＋拍手の粒）を
        * 演出の長さぶん伸ばし、「ワー」という声の波を何度か重ねる。演出が終わったら
        * （Space で切り上げても）SETTLE 秒で静める（sfx.matchPointEnd）＝サーブの構えに合わせて
@@ -2126,10 +2202,10 @@
   };
 
   /**
-   * 試合で初めてのマッチポイントの演出（Game#beginMatchPointCut）。構えに入ったところで
+   * 各ゲームで初めてのマッチポイントの演出（Game#beginMatchPointCut）。構えに入ったところで
    * カメラを観客席へ切り替え、コートの外周を回りながら沸き立つスタンドを映してから、
    * いつもの画面へ切り戻す。演出の間は試合を止める（サーブは演出が終わってから。Space で
-   * 切り上げられる）。2回目以降のマッチポイントでは出さない（毎回だとくどい）。
+   * 切り上げられる）。同じゲームの2回目以降のマッチポイント（デュースを挟んだ再到達）では出さない（毎回だとくどい）。
    * ゲーム（game.js）が使うのは DURATION だけで、残りは表示側の値。
    */
   const MATCH_POINT = {
@@ -2992,6 +3068,42 @@
     },
     CHEER_PUMP: 0.07,
     CHEER_PUMP_HZ: 1.7,
+    /**
+     * ポイントの後の感情表現（EMOTION）の形。座標は他のポーズと同じ（腰の高さが原点、+x＝ラケット側）。
+     * - FIST_UP/FIST_DOWN  ガッツポーズ：ラケットは下げたまま、逆手の拳を肩の前へ振り上げ
+     *   （UP）、腰へ引き下ろす（DOWN）。EMOTION.FIST の回数・速さで往復する
+     * - SLUMP  うなだれる：ラケットをぶら下げ、背を丸めて下を向く（HEAD_DOWN＝首の前傾 rad）
+     * - SMASH_UP/SMASH_DOWN  ラケットを叩きつける：両手で頭の上へ振りかぶり（UP）、体ごと
+     *   前へ倒して足元の前の地面へ振り下ろす（DOWN）。その後は SLUMP に移る
+     */
+    MOOD: {
+      FIST_UP: {
+        hand: [0.30, -0.04, 0.08], dir: [0.1, -0.5, 0.86], face: [1, 0, 0],
+        elbow: [0.3, -1, -0.5], off: [-0.16, 0.62, 0.30], offElbow: [-1, -0.6, -0.2],
+        twist: 0.12, bend: -0.04, crouch: 0.12, lean: 0.04,
+      },
+      FIST_DOWN: {
+        hand: [0.30, -0.04, 0.08], dir: [0.1, -0.5, 0.86], face: [1, 0, 0],
+        elbow: [0.3, -1, -0.5], off: [-0.22, 0.12, 0.26], offElbow: [-0.6, -0.4, -1],
+        twist: 0.22, bend: 0.06, crouch: 0.42, lean: 0.24,
+      },
+      SLUMP: {
+        hand: [0.27, -0.14, 0.04], dir: [0.05, -1, 0.12], face: [1, 0, 0],
+        elbow: [0.2, -1, -0.3], off: [-0.27, -0.08, 0.03], offElbow: [-0.2, -1, -0.3],
+        twist: 0, bend: 0, crouch: 0.08, lean: 0.34,
+      },
+      HEAD_DOWN: 0.5,
+      SMASH_UP: {
+        hand: [0.10, 0.88, -0.02], dir: [0, 0.55, -0.83], face: [0, 0, -1],
+        elbow: [1, 0.3, -0.3], off: 'grip', offElbow: [-1, 0.3, -0.3],
+        twist: 0, bend: 0, crouch: 0.1, lean: -0.12,
+      },
+      SMASH_DOWN: {
+        hand: [0.08, -0.30, 0.46], dir: [0, -0.62, 0.78], face: [0, 0.8, 0.6],
+        elbow: [1, -0.2, 0.2], off: 'grip', offElbow: [-1, -0.2, 0.2],
+        twist: 0, bend: 0, crouch: 0.55, lean: 0.55,
+      },
+    },
 
     /**
      * フォアハンド。肩を入れてラケットを後ろに引き（逆手はボールの方へ伸ばす）、
@@ -3414,6 +3526,60 @@
     CAM_LOOK_Y: 1.0,    // 見上げる先の高さ（ネットの高さ相当）
     CAM_LERP: 3.5,      // カメラがボールの深さへ追従する速さ
     HOLD_SEC: 0.35,     // 再生終了後、最後のコマを横視点のまま静止させておく長さ
+    // ネットに掛かって決まったポイントは、すぐにはリプレイへ切り替えず、通常の画面で球が
+    // ネットから落ちて着地するまで（game.js の netFall）を見せ、さらにこの秒数だけ置いてから
+    // 再生する（再生には落ちる様子も含める）。ネットに当たった瞬間に切り替えると、何が
+    // 起きたのか（ネットした）が分かりにくかったため。落ちきるまで（最長でもネットの高さ
+    // から約0.5秒）＋これが TIMING.NEXT_POINT より短くなるようにすること。
+    NET_DELAY: 0.6,
+  };
+
+  /**
+   * 試合後のハイライト。1セットが決まって締めのカットを終えたら、スタッツ画面の前に、
+   * 試合中の見どころのポイントのリプレイを古い順につないで流す（scene/world.js#playHighlights）。
+   * どの1点が見どころかは game.js が決着の瞬間に点数を付けて覚えておき（Game#pointLog）、
+   * 点数の高い順に MAX_CLIPS 本を選ぶ（Game#highlightPicks）。試合を決めた1点は必ず入れる。
+   * - SCORE  1点の点数の内訳。PER_SHOT×ラリーの本数＋各項目の上乗せ。STAKE のキーは
+   *   取った側から見たかかっていた1点（'saved'＝かけられていた側が凌いだ。audio.js の stakeKey と同じ）
+   * - MIN_SCORE  これ未満の1点は候補にしない（試合を決めた1点は例外）
+   */
+  /**
+   * ポイントの後の選手の感情表現（game.js#setMoods が決め、scene/player.js が形にする）。
+   * 誰がどうするかは選手の気性（CHARACTERS の temper。カスタムは 'normal'）と、その1点の決まり方で決まる。
+   * - 取った側：見どころのある1点（エース・ウィナー・何かがかかっていた1点・LONG_RALLY 本以上のラリー）なら
+   *   FIST の確率でガッツポーズ（かかっていた1点は FIST_BIG）
+   * - 落とした側：自分のミス（アウト・ネット・ダブルフォルト）か、かかっていた1点を落としたなら SLUMP の確率で
+   *   うなだれる。自分のサーブのゲームをブレークされたサーバーは、SMASH の確率でラケットを地面に叩きつける
+   * - DELAY  決着から動き出すまで（振り終わりを見せてから）。SPAN  その後の長さ（ポイント間 TIMING.NEXT_POINT
+   *   より短くする。次のサーブの構えに入ったら必ず消える）
+   */
+  const EMOTION = {
+    DELAY: 0.3,
+    SPAN: 1.1,
+    LONG_RALLY: 7,
+    TEMPERS: {
+      calm: { FIST: 0.2, FIST_BIG: 0.45, SLUMP: 0.12, SMASH: 0 },
+      normal: { FIST: 0.45, FIST_BIG: 0.8, SLUMP: 0.35, SMASH: 0 },
+      fiery: { FIST: 0.7, FIST_BIG: 1, SLUMP: 0.6, SMASH: 0.7 },
+    },
+    FIST: { PUMPS: 2, PUMP_T: 0.3, RISE: 0.55 }, // 往復の回数・1往復の秒数・そのうち振り上げに使う割合
+    SMASH: { RAISE_T: 0.32, SLAM_T: 0.12, HOLD_T: 0.3 }, // 振りかぶる・振り下ろす・叩きつけたまま止まる秒数
+  };
+
+  const HIGHLIGHT = {
+    MAX_CLIPS: 4,
+    MIN_SCORE: 8,
+    SCORE: {
+      PER_SHOT: 1,
+      ACE: 5,
+      FAST_SERVE_KMH: 185, // これ以上のエースはさらに FAST_SERVE だけ上乗せ
+      FAST_SERVE: 3,
+      WINNER: 2,           // 相手のミスではなく決め球で取った
+      SPECIAL: 8,          // そのポイントで必殺技が出た（何本出ても1回ぶん）
+      STAKE: { match: 12, set: 8, break: 5, game: 1, saved: 6 },
+    },
+    SPEED: REPLAY.SPEED,
+    HOLD_SEC: 0.9,  // 1本ごとに最後のコマで静止する長さ（次の1本との区切り）
   };
 
   /**
@@ -3784,6 +3950,80 @@
     Object.assign(SURFACE, SURFACE_PRESETS[name] || SURFACE_PRESETS.hard);
   }
 
+  /**
+   * にわか雨（スタート画面の「天候」で「にわか雨」を選んだときだけ。game.js が進め、表示は
+   * scene/weather.js）。流れ：
+   *   1. 試合の最初から小雨が降っていて、コートも DRIZZLE_WET まで濡れている。小雨の間は試合が続く
+   *   2. ポイントの始まり（newPoint）に、MIN_POINTS 本を過ぎていれば HEAVY_CHANCE の確率で雨脚が強まる
+   *      （heavy。1試合に MAX_PER_MATCH 回まで）。強まってもそのポイントは最後までやり（コートは HEAVY_T 秒で
+   *      HEAVY_WET まで濡れていく）、決まったら主審が中断する（雨天中断）。
+   *      コートにシートが掛かり（COVER_T 秒）、DELAY 秒待つ（Space で切り上げられる）
+   *   3. 雨が弱まるとシートを外し（CLEAR_T 秒）、RESUME_T 置いて試合再開。雨は小雨に戻って降り続く。
+   *      コートは濡れきっていて（wet=1）、1ポイントごとに 1/WET_POINTS ずつ小雨の濡れ具合（DRIZZLE_WET）まで乾いていく
+   * 濡れたコートは低く弾んで滑る（physics.js#reflectBounce が wet に応じて WET_RESTITUTION／
+   * WET_FRICTION へ寄せる）。
+   */
+  const RAIN = {
+    MIN_POINTS: 6,
+    MAX_PER_MATCH: 2,
+    DRIZZLE_WET: 0.35,
+    HEAVY_CHANCE: 0.15,   // 小雨の1ポイントごとに雨脚が強まる確率
+    HEAVY_T: 6,
+    HEAVY_WET: 0.6,
+    DELAY: 9,
+    COVER_T: 1.8,
+    CLEAR_T: 1.8,
+    RESUME_T: 2.2,
+    WET_POINTS: 8,
+    WET_RESTITUTION: 0.84,
+    WET_FRICTION: 1.06,
+    // 表示（scene/weather.js）
+    DROPS: 2400,          // 雨粒の数（強さ1のとき。小雨は DRIZZLE_LEVEL ぶんだけ見せる）
+    DRIZZLE_LEVEL: 0.35,
+    AREA: { X: 30, Z: 34, TOP: 16 }, // 雨粒を降らせる範囲（半幅・半長・高さ, m）
+    FALL: 17,             // 落ちる速さ(m/s)
+    STREAK: 0.45,         // 雨粒の筋の長さ(m)
+    DROP_COLOR: 0xa9c4dd,
+    COVER_COLOR: 0x0b2e1c,   // コートに掛けるシート（濃い緑。sRGB 出力で明るく出るぶん暗めに）
+    COVER_MARGIN: 1.2,       // シートがコートの外へはみ出す幅(m)
+    WET_DARKEN: 0.32,        // 濡れきったコートを暗くする度合い（0〜1）
+    SKY_DIM: 0.5,            // 強い雨のときの空と照明の暗さ（1＝変えない）
+    LEVEL_RATE: 0.6,         // 雨の強さが目標へ寄っていく速さ（1秒あたり）
+    // 雨音（audio.js#rain）。強さ1のときの音量と、ノイズを通す帯域
+    SOUND: { VOL: 0.07, HZ: 2400, Q: 0.35, LOW_HZ: 600, LOW_VOL: 0.5 },
+  };
+
+  /**
+   * 時間帯（スタート画面の「時間帯」）。day はこれまでの見た目そのもの。night は照明塔の光で
+   * 照らすナイトセッション：空と霧を暗くし、太陽を消して、四隅の照明塔（TOWERS）から当てる。
+   * 照明が4方向から当たるので、選手の足元の影も4方向へ薄く伸びる（SHADOW）。ゲームの判定には一切関わらない。
+   * SKY があればその空のグラデーション（画面の上＝TOP → 地平線＝HORIZON）を背景にし、霧も地平線の色にする
+   * （遠くのスタンドが空へ霞む）。雨の強さぶん RAIN_SKY（曇り空）へ寄せる。SKY がなければ BG 一色。
+   */
+  const SESSIONS = {
+    day: {
+      BG: 0x0b1a2b, HEMI: { SKY: 0xdfefff, GROUND: 0x0c2033, INTENSITY: 0.85 }, SUN: 0.85,
+      SKY: { TOP: 0x3f86d6, HORIZON: 0xc9e2f5 },
+      RAIN_SKY: { TOP: 0x5c6670, HORIZON: 0x9aa3ab },
+    },
+    night: {
+      BG: 0x02060d, HEMI: { SKY: 0x7d8fb0, GROUND: 0x05101c, INTENSITY: 0.42 }, SUN: 0,
+    },
+  };
+  const NIGHT = {
+    // スタンドの四隅（STANDS の壁の外）
+    TOWERS: [{ x: 22, z: 28 }, { x: -22, z: 28 }, { x: 22, z: -28 }, { x: -22, z: -28 }],
+    HEIGHT: 17,
+    FLOOD_COLOR: 0xfff4e0,
+    FLOOD_INTENSITY: 0.32,  // 1基あたり（4基ぶん足し合わさる）
+    POLE_COLOR: 0x5b6b7d,
+    LAMP_COLOR: 0xfff7d6,
+    LAMP: { W: 3.2, H: 1.4 },  // 照明の灯具の板の大きさ(m)
+    GLOW: 6,                   // 灯具の周りのにじみ（光の玉）の大きさ(m)
+    SHADOW: { OPACITY: 0.11, STRETCH: 0.55 }, // 4方向の薄い影の濃さと、照明と反対側へずれる量(m)
+    STARS: 260,
+  };
+
   /** court.js がテクスチャを焼くときの配色（見た目だけ。物理は上の SURFACE_PRESETS）。 */
   const SURFACE_COLORS = {
     hard: { surface: '#2b6cb0', apron: '#1d7a5f' }, // 現状のTHEME.COURT_SURFACE/COURT_APRONと同じ
@@ -3936,11 +4176,18 @@
    * - look は似顔絵（hud.js が SVG で描く）。肌・髪の色と髪型、カードの差し色。
    *   シャツの色は選手ではなく枠（ROSTER の kit）で決まる。
    *   style は 'short' | 'buzz' | 'ponytail' | 'cap' | 'curly' | 'bun' | 'long' | 'band' | 'crown'。
+   * - cpuStyle は、この選手を相手（ROSTER の 'cpu' 枠）に選んだとき自動で切り替わる
+   *   「CPUのプレースタイル」（CPU_STYLES のキー）。選んだ後にスタート画面で別のスタイルへ
+   *   変えることもできる。型にはまらない選手（オールラウンダー等）は 'none'。
+   * - temper ポイントの後の感情表現の出やすさ（EMOTION.TEMPERS のキー）。'fiery' だけが
+   *   ブレークされるとラケットを叩きつける。カスタムの選手は 'normal'。
    */
   const CHARACTER_BUDGET = SKILL_DEFAULT * SKILLS.filter((s) => !s.aiOnly).length;
   const CHARACTERS = [
     {
       key: 'standard',
+      temper: 'normal',
+      cpuStyle: 'none',
       name: 'ケン・アサギ',
       type: 'オールラウンダー',
       text: '得意も苦手もない、基準になる選手。迷ったらこの人。',
@@ -3952,6 +4199,8 @@
     },
     {
       key: 'bigServer',
+      temper: 'fiery',
+      cpuStyle: 'aggressiveBaseliner',
       name: 'ボリス・ヴァルガ',
       type: 'ビッグサーバー',
       text: '重いサーブとスマッシュで、ポイントを短く決める。足が遅く、走らされると苦しい。',
@@ -3963,6 +4212,8 @@
     },
     {
       key: 'counterPuncher',
+      temper: 'calm',
+      cpuStyle: 'retriever',
       name: 'ルシア・ベガ',
       type: 'カウンターパンチャー',
       text: 'どこまでも走って拾い、ミスをしない。決め球は持たず、相手が崩れるのを待つ。',
@@ -3974,6 +4225,8 @@
     },
     {
       key: 'serveVolley',
+      temper: 'normal',
+      cpuStyle: 'serveAndVolley',
       name: 'オリバー・ハート',
       type: 'サーブ&ボレーヤー',
       text: 'サーブから一気にネットへ詰め、ボレーで仕留める。後ろでの打ち合いは苦手で、ミスも出る。',
@@ -3985,6 +4238,8 @@
     },
     {
       key: 'powerHitter',
+      temper: 'fiery',
+      cpuStyle: 'aggressiveBaseliner',
       name: 'レオ・ブラント',
       type: 'パワーヒッター',
       text: 'フォアの強打で押し込む。当たれば誰より速いが、ミスも多い。',
@@ -3996,6 +4251,8 @@
     },
     {
       key: 'speedster',
+      temper: 'normal',
+      cpuStyle: 'retriever',
       name: 'ミア・ソーン',
       type: 'スピードスター',
       text: 'コートを駆け回る俊足で、届かないはずの球に届く。サーブの威力はない。',
@@ -4007,6 +4264,8 @@
     },
     {
       key: 'technician',
+      temper: 'calm',
+      cpuStyle: 'none',
       name: 'エマ・ルグラン',
       type: 'テクニシャン',
       text: 'バックハンドとボレーの名手。崩れずに打ち分ける。足は速くない。',
@@ -4018,6 +4277,8 @@
     },
     {
       key: 'veteran',
+      temper: 'calm',
+      cpuStyle: 'none',
       name: 'ヨハン・ベルク',
       type: 'ベテラン',
       text: '読みの速さと広い守備範囲、組み立てのうまいサーブ。足と体力は衰えた。',
@@ -4031,6 +4292,8 @@
     // 最高にはせず既定の3（＝AI のふだんどおりの詰め方）のまま。差し色は必殺技と同じ金。
     {
       key: 'champion',
+      temper: 'calm',
+      cpuStyle: 'none',
       name: 'レイ・カグラ',
       type: '最強のチャンピオン',
       text: 'すべての能力が最高。弱点のない、最強の選手。相手に選べば、どの強さでも手ごわい。',
@@ -4153,9 +4416,9 @@
 
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
-    BOUNDS, CPU, DOUBLES, RULES, TIMING, CHANGEOVER, MATCH_POINT, FINALE, PRACTICE, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
+    BOUNDS, CPU, DOUBLES, RULES, MATCH_FORMATS, applyMatchFormat, TIMING, CHANGEOVER, MATCH_POINT, FINALE, PRACTICE, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT, GUIDE,
-    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, STAMINA, TOSS, OFFICIALS, LINE_CALL, BALL_MARK,
+    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, HIGHLIGHT, EMOTION, RAIN, SESSIONS, NIGHT, STAMINA, TOSS, OFFICIALS, LINE_CALL, BALL_MARK,
     STANDS, SPECTATORS, FLAG, MOTION,
     SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET,
     SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, ATTR_SPREAD, ATTRS, NEUTRAL_ATTR,

@@ -49,33 +49,44 @@
   </div>
   <div id="scorewrap">
     <div id="bug">
-      <div class="nm" id="n1">YOU</div><div class="gm" id="g1">0</div><div class="pt" id="p1">0</div>
+      <!-- .st は決まったセットのゲーム数（複数セットの試合で、1セット目が決まってから出る） -->
+      <div class="nm" id="n1">YOU</div><div class="st" id="s1"></div><div class="gm" id="g1">0</div><div class="pt" id="p1">0</div>
       <div class="row2">
-        <div class="nm" id="n2">CPU</div><div class="gm" id="g2">0</div><div class="pt" id="p2">0</div>
+        <div class="nm" id="n2">CPU</div><div class="st" id="s2"></div><div class="gm" id="g2">0</div><div class="pt" id="p2">0</div>
       </div>
     </div>
     <!-- 次の1点に何がかかっているか（ブレーク／ゲーム／マッチポイント）。かかっていない
          ポイントでは hud が中身を空にするので :empty で行ごと消える（風・サーブ速度と同じ作り）。 -->
+    <!-- タイブレーク中だけ出る札（hud.renderScore）。3／4／6ゲームどの形式でも、ゲーム数が
+         並んでタイブレークに入ってから、そのセットが決まるまで出しっぱなしにする。 -->
+    <div id="tiebreakTag" hidden>タイブレーク</div>
     <div id="stakes"></div>
     <div id="stats">A <span id="ace1">0</span>–<span id="ace2">0</span> · DF <span id="df1">0</span>–<span id="df2">0</span></div>
     <div id="wind"></div>
+    <!-- にわか雨・濡れたコート（hud.setWeather）。晴れて乾いている間は空＝:empty で行ごと消える -->
+    <div id="weather"></div>
     <div id="serveSpeed"></div>
     <!-- 必殺技の残り回数（●＝使える／○＝使用済み）。1つも装備していなければ hud が行ごと隠す。 -->
     <div id="specialUses"></div>
+    <!-- ダブルスの立ち位置の指示（Q/E＝パートナー、R/F＝自分）のいまの状態。シングルスでは
+         hud が中身を空にするので :empty で行ごと消える（hud.setFormation）。 -->
+    <div id="formation"></div>
     <div id="stamina">
-      <div class="staminaRow"><div class="staminaLabel">YOU</div><div class="staminaBar"><div class="staminaFill" id="staminaFillYou"></div></div></div>
-      <div class="staminaRow"><div class="staminaLabel">CPU</div><div class="staminaBar"><div class="staminaFill" id="staminaFillCpu"></div></div></div>
-      <div class="staminaRow" id="staminaRowYouMate"><div class="staminaLabel">パートナー</div><div class="staminaBar"><div class="staminaFill" id="staminaFillYouMate"></div></div></div>
-      <div class="staminaRow" id="staminaRowCpuMate"><div class="staminaLabel">CPU2</div><div class="staminaBar"><div class="staminaFill" id="staminaFillCpuMate"></div></div></div>
+      <div class="staminaRow"><div class="staminaLabel" id="staminaLabelYou">YOU</div><div class="staminaBar"><div class="staminaFill" id="staminaFillYou"></div></div></div>
+      <div class="staminaRow"><div class="staminaLabel" id="staminaLabelCpu">CPU</div><div class="staminaBar"><div class="staminaFill" id="staminaFillCpu"></div></div></div>
+      <div class="staminaRow" id="staminaRowYouMate"><div class="staminaLabel" id="staminaLabelYouMate">パートナー</div><div class="staminaBar"><div class="staminaFill" id="staminaFillYouMate"></div></div></div>
+      <div class="staminaRow" id="staminaRowCpuMate"><div class="staminaLabel" id="staminaLabelCpuMate">CPU2</div><div class="staminaBar"><div class="staminaFill" id="staminaFillCpuMate"></div></div></div>
     </div>
   </div>
-  <div id="head">1 set match · <span id="setinfo">first to 6</span>
+  <div id="head"><span id="formatInfo">1 set match · first to 6</span>
     <!-- 対戦しているCPU/AIの強さ（スタート画面の「CPUの強さ」）。試合を始めるときに
          hud.setMatchLevel() が入れる。練習モード中は #head ごと隠れる。 -->
     <div id="matchLevel"></div>
   </div>
   <div id="call"><div class="big" id="callBig"></div><div class="sub" id="callSub"></div><div class="shot" id="callShot"></div></div>
-  <div id="replayTag"><span class="dot"></span>リプレイ<span class="markTag">ボールマーク確認</span><span class="skip">SPACE でスキップ</span></div>
+  <div id="replayTag"><span class="dot"></span><span class="rtLabel">リプレイ</span><span class="hlTag">ハイライト <span id="hlCount"></span></span><span class="markTag">ボールマーク確認</span><span class="skip">SPACE でスキップ</span></div>
+  <!-- 試合後のハイライトで流している1点の見出し（中継の下部テロップ）。hud.setHighlight() が出す -->
+  <div id="hlCaption"><div class="hlTitle" id="hlTitle"></div><div class="hlSub" id="hlSub"></div></div>
   <!-- 画面下は縦積み（上から：ガイド／スマッシュの案内／溜めバー／操作一覧）。
        個別に bottom を指定していた頃は、操作一覧が折り返して2行になった分だけ
        溜めバーの上に重なってしまっていた。積むことで何行になっても重ならない。 -->
@@ -142,6 +153,15 @@
               <div class="seg" data-level="doubles"><kbd>D</kbd><b class="optName">ダブルス</b><em>2 vs 2 — あなた＋AIパートナー vs CPU2人</em></div>
             </div>
           </div>
+          <!-- 試合の長さ。カードは hud.js が config.MATCH_FORMATS から組み立てる（L・M キーで順に切り替わる） -->
+          <div class="menuRow" id="gamesRow">
+            <div class="menuLabel">ゲーム数</div>
+            <div class="segs"></div>
+          </div>
+          <div class="menuRow" id="setsRow">
+            <div class="menuLabel">セット数</div>
+            <div class="segs"></div>
+          </div>
           <!-- 最初のゲームのサーバー。コイントスなら勝った側が選ぶ（人間が勝てば #tossChoice で選ぶ）。
                サーブ／レシーブを選んでおけばトスはせず、そのまま始まる。T キーで順に切り替わる。 -->
           <div class="menuRow" id="firstServeRow">
@@ -159,6 +179,20 @@
               <div class="seg on" data-level="hard"><kbd>4</kbd><b class="optName"><i class="sw"></i>ハード</b><em>標準的な弾み。癖がない</em></div>
               <div class="seg" data-level="clay"><kbd>5</kbd><b class="optName"><i class="sw"></i>クレー</b><em>高く弾んで遅い。ラリーが続く</em></div>
               <div class="seg" data-level="grass"><kbd>6</kbd><b class="optName"><i class="sw"></i>芝</b><em>低く滑って速い。ネット有利</em></div>
+            </div>
+          </div>
+          <div class="menuRow" id="sessionRow">
+            <div class="menuLabel">時間帯</div>
+            <div class="segs">
+              <div class="seg on" data-level="day"><kbd>N</kbd><b class="optName">デー</b><em>いつもの明るさ</em></div>
+              <div class="seg" data-level="night"><kbd>N</kbd><b class="optName">ナイト</b><em>照明塔に照らされたナイトセッション</em></div>
+            </div>
+          </div>
+          <div class="menuRow" id="weatherRow">
+            <div class="menuLabel">天候</div>
+            <div class="segs">
+              <div class="seg on" data-level="clear"><kbd>R</kbd><b class="optName">晴れ</b><em>雨は降らない</em></div>
+              <div class="seg" data-level="rain"><kbd>R</kbd><b class="optName">にわか雨</b><em>降り出すと中断。再開後のコートは低く滑る</em></div>
             </div>
           </div>
 
@@ -295,6 +329,7 @@
 <script src="src/scene/player.js"></script>
 <script src="src/scene/ball.js"></script>
 <script src="src/scene/hint.js"></script>
+<script src="src/scene/weather.js"></script>
 <script src="src/scene/world.js"></script>
 <script src="src/main.js"></script>
 

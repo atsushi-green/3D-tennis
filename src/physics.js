@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    COURT, PHYSICS, SPIN, SURFACE,
+    COURT, PHYSICS, RAIN, SPIN, SURFACE,
   } = RallyOne.config;
   const { lerp } = RallyOne.math;
   const { GRAVITY, BALL_R } = PHYSICS;
@@ -129,9 +129,19 @@
    * 反射の前に、接地点そのものを groundCrossing() で補正する：IN/OUT 判定も軌跡も
    * ここで確定した x/z を読むので、行き過ぎた座標のままだと判定が外側へ偏る。
    */
+  /**
+   * コートの濡れ具合（0＝乾いている〜1＝濡れきっている）。にわか雨の後に game.js が
+   * setWetness() で入れる。実際の物理（bounce）と予測（predict*）の両方が同じ値で弾むよう、
+   * ボールごとではなくここに1つだけ持つ（SURFACE と同じ考え方）。
+   */
+  let wetness = 0;
+  function setWetness(w) {
+    wetness = Math.max(0, Math.min(1, w));
+  }
+
   function reflectBounce(b) {
-    const restMult = SPIN.BOUNCE_RESTITUTION_MULT[b.spin] || 1;
-    const friMult = SPIN.BOUNCE_FRICTION_MULT[b.spin] || 1;
+    const restMult = (SPIN.BOUNCE_RESTITUTION_MULT[b.spin] || 1) * lerp(1, RAIN.WET_RESTITUTION, wetness);
+    const friMult = (SPIN.BOUNCE_FRICTION_MULT[b.spin] || 1) * lerp(1, RAIN.WET_FRICTION, wetness);
     const at = groundCrossing(b);
     b.x = at.x;
     b.z = at.z;
@@ -401,6 +411,7 @@
     netCrossing,
     hitsNet,
     reflectBounce,
+    setWetness,
     predictLanding,
     predictApex,
     predictBounceApex,

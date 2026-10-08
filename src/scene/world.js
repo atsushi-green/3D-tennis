@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    CAMERA, FX, PLAYER, SPECIAL, THEME, REPLAY, HALF_L, LINE_CALL, BALL_MARK, SURFACE, MATCH_POINT, FINALE,
+    CAMERA, FX, PLAYER, SPECIAL, THEME, REPLAY, HIGHLIGHT, HALF_L, LINE_CALL, BALL_MARK, SURFACE, MATCH_POINT, FINALE, NIGHT,
   } = RallyOne.config;
   const { lerp, clamp } = RallyOne.math;
   const scene3d = RallyOne.scene;
@@ -39,6 +39,8 @@
     const crowd = scene3d.createCrowd();
     venue.add(officials, ballMarks.group, crowd, flags, stage.sun);
     scene.add(court, scene3d.createNet(), venue);
+    // 時間帯と天候（照明塔・星・雨粒・コートのシート・濡れたコート）
+    const weather = scene3d.createWeather(stage);
 
     const you = scene3d.createPlayer(THEME.YOU, 'you');
     const cpu = scene3d.createPlayer(THEME.CPU, 'cpu');
@@ -58,6 +60,30 @@
       youMate: scene3d.createShadow(0.26),
       cpuMate: scene3d.createShadow(0.26),
     };
+    // ナイトセッションの照明塔4基ぶんの薄い影（選手ごとに、それぞれの塔と反対側へずらして置く）
+    const nightShadows = Object.fromEntries(['you', 'cpu', 'youMate', 'cpuMate'].map((key) => {
+      const list = NIGHT.TOWERS.map(() => scene3d.createShadow(NIGHT.SHADOW.OPACITY));
+      list.forEach((m) => { m.visible = false; scene.add(m); });
+      return [key, list];
+    }));
+
+    /** その選手の影（syncPlayer で置き終えた後）に合わせて、ナイトの4方向の影を置く。 */
+    function placeNightShadows(key, shadow) {
+      const on = weather.isNight() && shadow.visible;
+      nightShadows[key].forEach((m, i) => {
+        m.visible = on;
+        if (!on) return;
+        const tower = NIGHT.TOWERS[i];
+        const dx = shadow.position.x - tower.x;
+        const dz = shadow.position.z - tower.z;
+        const len = Math.hypot(dx, dz) || 1;
+        m.position.set(
+          shadow.position.x + (dx / len) * NIGHT.SHADOW.STRETCH, shadow.position.y,
+          shadow.position.z + (dz / len) * NIGHT.SHADOW.STRETCH,
+        );
+        m.scale.copy(shadow.scale);
+      });
+    }
     // 縮地（必殺技）の残像。跳ぶ前に立っていた位置へ置いて薄れさせるだけなので、
     // 選手と同じメッシュのマテリアルを半透明の金色1枚に差し替えて使い回す。
     // 人間だけでなく AI も縮地を使う（難易度 Extreme）ので、4人ぶん用意する。
@@ -249,6 +275,7 @@
       scene3d.applyImpactPunch(ballMesh, ball, FX);
       scene3d.placeImpact(impactFlash, ball, FX);
       scene3d.placeBallShadow(shadows.ball, ball);
+      ['you', 'cpu', 'youMate', 'cpuMate'].forEach((key) => placeNightShadows(key, shadows[key]));
     }
 
     // --- 線審のコール（game.lineCall が変わったら、担当の線審が合図を出す） ---
@@ -357,8 +384,14 @@
     let replayClock = 0;
     let replayHold = REPLAY.HOLD_SEC; // 最後のコマで静止する長さ（線審のコールで終わる再生だけ長い）
     let markCheck = null; // リプレイの最後で映すボールマーク（{ shape, n }。映さないなら null）
-    // startReplay(wait) で待っている間の予約（{ endT, wait }）。endT＝決着の瞬間の録画時刻
+    // startReplay(wait) で待っている間の予約（{ endT, wait, clipId }）。endT＝決着の瞬間の録画時刻
     let pendingReplay = null;
+    // 試合後のハイライト用に残しておくポイントの録画（game.pointLog の id → { frames, swapped }）。
+    // 残すかどうかは game.highlightKeep() を見て main.js が pruneClips() で間引く。
+    const clips = new Map();
+    // ハイライトの再生中だけ { queue:[{frames, swapped, point}], index }。
+    let highlight = null;
+    let swappedNow = false; // 最後に sync() した時点の会場の向き（録画に添える）
 
     /** state.you/cpu/youMate/cpuMate のうち、見た目の再現に必要な分だけを浅くコピーする */
     function snapshotPlayer(p) {
@@ -442,18 +475,20 @@
      *   画面でコールを見せてから再生する。LINE_CALL.REPLAY_DELAY）。待っている間も録画は続くが、
      *   再生するのは呼ばれた瞬間（＝決着の瞬間）までのコマ。
      */
-    function startReplay(wait = 0) {
+    function startReplay(wait = 0, clipId = null) {
       if (wait > 0) {
-        pendingReplay = { endT: recClock, wait };
+        pendingReplay = { endT: recClock, wait, clipId };
         return;
       }
-      beginReplay(recClock);
+      beginReplay(recClock, clipId);
     }
 
-    /** endT（録画時刻）までのコマを切り出して再生を始める。 */
-    function beginReplay(endT) {
+    /**
+     * endT（録画時刻）までの、決着したサーブの構えから後のコマを切り出す（足りなければ null）。
+     */
+    function cutReel(endT) {
       const recorded = history.filter((f) => f.t <= endT);
-      if (recorded.length < 2) return;
+      if (recorded.length < 2) return null;
       // 再生してよいのは、決着したサーブの構えに入ってから後のコマだけ。
       // 以前は直近 MAX_PLAY_SEC ぶんをそのまま切り出していたため、サーブで決まる短い
       // ポイント（特にダブルフォルト：CPU は構えてから打つまで2秒足らず）では、頭に
@@ -461,6 +496,9 @@
       // 終わりが混ざり、そこから beginServe() が選手とボールをスタンスへ瞬間移動させる
       // コマまで映っていた＝「アウトなのにネットに掛かる」「立ち位置が一瞬おかしい」。
       let from = recorded.length - 1; // 最後のコマ＝決着の瞬間（phase は 'over'）
+      // ネットに掛かったポイントは、決着の後に球が落ちて着地するまでを末尾に含めて再生する
+      // （main.js が着地の瞬間を endT にする）。その間のコマは既に 'over' なので先に遡っておく。
+      while (from > 0 && recorded[from - 1].phase === 'over') from--;
       while (from > 0 && IN_POINT.has(recorded[from - 1].phase)) from--;
       const segment = recorded.slice(from);
       // MAX_PLAY_SEC で長さを絞るのは前側（リード）だけ。末尾は必ず history の最後の
@@ -469,9 +507,39 @@
       // 再生していたときは、肝心の決着の瞬間が再生範囲の外に切り落とされ、
       // リプレイがボールの決着より手前で止まって見えていた。
       const startT = recorded[recorded.length - 1].t - REPLAY.MAX_PLAY_SEC;
-      reel = segment.filter((f) => f.t >= startT);
-      if (reel.length < 2) reel = segment.slice(-2);
-      if (reel.length < 2) return; // このサーブのコマが録れていない
+      let cut = segment.filter((f) => f.t >= startT);
+      if (cut.length < 2) cut = segment.slice(-2);
+      return cut.length < 2 ? null : cut; // このサーブのコマが録れていない
+    }
+
+    /** そのポイントの録画をハイライト用に残す（clipId が無ければ何もしない）。 */
+    function keepClip(clipId, frames) {
+      if (clipId == null || !frames) return;
+      clips.set(clipId, { frames, swapped: swappedNow });
+    }
+
+    /** 再生はせずに、いまの時点までをそのポイントの録画として残す（リプレイをスキップされたとき）。 */
+    function captureClip(clipId, endT = recClock) {
+      keepClip(clipId, cutReel(endT));
+    }
+
+    /** @param {Set<number>} keep game.highlightKeep() */
+    function pruneClips(keep) {
+      [...clips.keys()].forEach((id) => { if (!keep.has(id)) clips.delete(id); });
+    }
+
+    /** Game を作り直したとき（id が1から振り直される）に、前の Game の録画を捨てる。 */
+    function resetClips() {
+      clips.clear();
+      highlight = null;
+    }
+
+    /** endT（録画時刻）までのコマを切り出して再生を始める。 */
+    function beginReplay(endT, clipId = null) {
+      const cut = cutReel(endT);
+      if (!cut) return;
+      keepClip(clipId, cut);
+      reel = cut;
       replayClock = 0;
       replaying = true;
       // 決着の瞬間に線審がコールしていれば、静止している間にその合図を見せる
@@ -485,10 +553,44 @@
       if (markCheck) replayHold = Math.max(replayHold, BALL_MARK.CHECK_AFTER + BALL_MARK.CHECK_HOLD);
     }
 
+    /**
+     * 試合後のハイライトを流し始める（game.highlightPicks() の記録を古い順に）。録画が残っている
+     * 1点だけを流す。1本も残っていなければ false（main.js はそのままスタッツ画面を開く）。
+     * 流し終えたら録画は捨てる（次の試合の id とは混ざらないが、持っていても使わない）。
+     * @param {Array<{id:number}>} points
+     */
+    function playHighlights(points) {
+      const queue = points.filter((p) => clips.has(p.id)).map((p) => ({ ...clips.get(p.id), point: p }));
+      clips.clear();
+      if (!queue.length) return false;
+      highlight = { queue, index: 0 };
+      playClip();
+      return true;
+    }
+
+    function playClip() {
+      reel = highlight.queue[highlight.index].frames;
+      replayClock = 0;
+      replaying = true;
+      replayHold = HIGHLIGHT.HOLD_SEC;
+      markCheck = null;
+      // 前の1本の終わりからカメラを振って寄せない（別の場面なので切り替わって見せる）
+      camera.position.z = clamp(reel[0].ball.z, -HALF_L, HALF_L);
+    }
+
+    /** ハイライトの再生中なら { index, total, point }（HUD の見出しに使う）。それ以外は null。 */
+    function highlightInfo() {
+      if (!replaying || !highlight) return null;
+      return { index: highlight.index, total: highlight.queue.length, point: highlight.queue[highlight.index].point };
+    }
+
     /** リプレイ中にキー操作があったら main.js から呼ぶ。即座に通常表示へ戻す（予約も取り消す）。 */
     function skipReplay() {
+      // 待っている間に飛ばされたポイントも、ハイライトの候補としては録っておく
+      if (pendingReplay) captureClip(pendingReplay.clipId, pendingReplay.endT);
       replaying = false;
       pendingReplay = null;
+      highlight = null; // ハイライトは残りの本数ごと飛ばす
     }
 
     /** 再生の最後で、ボールマークを映している最中か（HUD の表示に使う）。 */
@@ -514,7 +616,10 @@
     function sync(state, dt) {
       // 入れ替わるのは game の時計で暗転しきった瞬間（game.changeoverShade() が1の間）だけ。
       // リプレイは update() を止めて再生するので、再生中に向きが変わることはない。
-      venue.rotation.y = state.endsSwapped ? Math.PI : 0;
+      swappedNow = !!state.endsSwapped;
+      // ハイライトは別の時点の1点なので、会場もその1点のときの向きで映す
+      const swapped = replaying && highlight ? highlight.queue[highlight.index].swapped : swappedNow;
+      venue.rotation.y = swapped ? Math.PI : 0;
       // 旗はリプレイ中も今の風でなびかせる（再生中は game.update() が止まっていて風も変わらない）。
       // game.wind/windZ はゲームの座標（人間のチームから見た向き）なので、180°回っている会場の
       // 座標へ戻して渡す＝チェンジエンズの瞬間に旗がくるりと向きを変えたりしない。
@@ -528,6 +633,7 @@
       if (cut || (finale && !finale.done)) crowdHype = Math.min(1, crowdHype + dt * H.RISE);
       else crowdHype = Math.max(0, crowdHype - dt * (finale ? FINALE.CROWD_FALL : H.FALL));
       scene3d.updateCrowd(crowd, crowdHype, dt);
+      weather.update(state, dt);
       // 録画は再生中も止めない：裏では game.update() が実際の試合を進め続けているので、
       // ここで録り漏らすと再生の直後に次のポイントがすぐ終わったとき history が
       // 足りず（history.length<2）、そのポイントのリプレイだけ出せなくなってしまう。
@@ -537,13 +643,14 @@
       if (pendingReplay) {
         pendingReplay.wait -= dt;
         if (pendingReplay.wait <= 0) {
-          beginReplay(pendingReplay.endT);
+          const { endT, clipId } = pendingReplay;
           pendingReplay = null;
+          beginReplay(endT, clipId);
         }
       }
 
       if (replaying) {
-        replayClock += dt * REPLAY.SPEED;
+        replayClock += dt * (highlight ? HIGHLIGHT.SPEED : REPLAY.SPEED);
         // reel は startReplay() の時点で末尾（決着の瞬間）を必ず含む形に切り出し済みなので、
         // ここでは単純にその全長を再生し切ればよい。
         const playEnd = replayEnd();
@@ -564,22 +671,36 @@
           const checking = isCheckingMark();
           ballMesh.visible = shadows.ball.visible = !checking;
           if (checking) placeMarkCamera(markCheck);
-          else placeReplayCamera(frame, dt, state.endsSwapped ? -1 : 1);
+          else placeReplayCamera(frame, dt, swapped ? -1 : 1);
           return;
         }
+        if (highlight && highlight.index < highlight.queue.length - 1) {
+          highlight.index++; // 次の1本へ（通常表示へは戻らない）
+          playClip();
+          return;
+        }
+        highlight = null;
         replaying = false; // 再生し終わったら通常表示へ戻る
         // 横視点で静止していた状態から通常カメラへは lerp させず瞬時に切り替える
         snapCamera(state.you);
       }
 
+      // 雨天中断でシートが掛かっている間は、選手はコートを離れている（球も片付けてある）。
+      // ダブルスの2人の表示は applyFrame() が決めるので、隠すのはその後
+      const away = weather.isCovered(state);
+      you.visible = cpu.visible = shadows.you.visible = shadows.cpu.visible = !away;
       applyFrame(state, dt, serveStages(state), finale && finale.team);
-      ballMesh.visible = shadows.ball.visible = true;
+      if (away) {
+        youMate.visible = cpuMate.visible = shadows.youMate.visible = shadows.cpuMate.visible = false;
+        Object.keys(nightShadows).forEach((key) => nightShadows[key].forEach((m) => { m.visible = false; }));
+      }
+      ballMesh.visible = shadows.ball.visible = !away;
       poseLineJudges(recClock);
       // 軌跡はラリーの決着がついた後（ポイント間の 'serve' 待ち・'over'）だけ見せる。
       // ラリー中に出しっぱなしだと本来の目的（アウトの結果を振り返る）を超えて
       // 「次にどこへ来るか」の手がかりになってしまうため。観客席や勝者を映す演出のカットでも
       // 隠す（コートの外から映すと、前のポイントの軌跡が線になって空に浮いて見える）。
-      const cutting = cut || (finale && finale.cut);
+      const cutting = cut || (finale && finale.cut) || away; // シートの上にも浮かせない
       scene3d.updateTrail(trail, state.phase === 'rally' || cutting ? NO_TRAIL : state.trail);
       // スマッシュの先回り地点。打てる球が来ていないフレームは state.smashHint が null になる。
       scene3d.placeSmashHint(smashHint, state.smashHint);
@@ -607,9 +728,15 @@
       scene3d.setCourtSurface(court, surfaceName);
     }
 
+    /** スタート画面の時間帯（'day'｜'night'）を、空・照明・照明塔へ反映する。 */
+    function setSession(name) {
+      weather.setSession(name);
+    }
+
     return {
       sync, render: stage.render, scene, camera, setSurface, startReplay, skipReplay, isReplaying,
-      isCheckingMark,
+      isCheckingMark, captureClip, pruneClips, resetClips, playHighlights, highlightInfo,
+      setSession, rainLevel: () => weather.rainLevel(),
     };
   };
 })(window.RallyOne = window.RallyOne || {});

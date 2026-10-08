@@ -21,7 +21,7 @@
   'use strict';
 
   const {
-    COURT, GAIT, MOTION, PHYSICS, PLAYER, SERVE, SPECIAL, SWING, THEME,
+    COURT, EMOTION, GAIT, MOTION, PHYSICS, PLAYER, SERVE, SPECIAL, SWING, THEME,
   } = RallyOne.config;
   const { clamp, lerp } = RallyOne.math;
   const scene3d = RallyOne.scene = RallyOne.scene || {};
@@ -313,6 +313,53 @@
   const READY = compilePose(MOTION.READY, null);
   const IDLE = compilePose(MOTION.IDLE, null);
   const CHEER = compilePose(MOTION.CHEER, IDLE);
+  const MOOD = Object.fromEntries(['FIST_UP', 'FIST_DOWN', 'SLUMP', 'SMASH_UP', 'SMASH_DOWN']
+    .map((key) => [key, compilePose(MOTION.MOOD[key], IDLE)]));
+
+  function mixPose(a, b, k, out) {
+    for (let c = 0; c < CHANNELS; c++) out[c] = lerp(a[c], b[c], k);
+  }
+
+  /**
+   * ポイントの後の感情表現（game.js#setMoods の actor.mood）の形を out に書き、首の前傾(rad)を返す。
+   * 決着から EMOTION.DELAY の間（振り終わりを見せている間）は何もしない＝null。
+   */
+  function moodPose(mood, out) {
+    const u = mood.t - EMOTION.DELAY;
+    if (u < 0) return null;
+    if (mood.kind === 'fist') {
+      // 拳を振り上げ（RISE の割合）、一気に引き下ろす。PUMPS 回くり返した後は引き下ろした形のまま
+      const F = EMOTION.FIST;
+      const n = u / F.PUMP_T;
+      if (n >= F.PUMPS) {
+        out.set(MOOD.FIST_DOWN);
+        return 0;
+      }
+      const p = n % 1;
+      const up = p < F.RISE ? ease(p / F.RISE) : 1 - easeOut((p - F.RISE) / (1 - F.RISE));
+      mixPose(MOOD.FIST_DOWN, MOOD.FIST_UP, up, out);
+      return 0;
+    }
+    if (mood.kind === 'smash') {
+      // 振りかぶる → 加速して振り下ろす → 叩きつけた形で止まる → うなだれる
+      const S = EMOTION.SMASH;
+      if (u < S.RAISE_T) {
+        mixPose(IDLE, MOOD.SMASH_UP, ease(u / S.RAISE_T), out);
+        return 0;
+      }
+      const v = u - S.RAISE_T;
+      if (v < S.SLAM_T) {
+        const k = v / S.SLAM_T;
+        mixPose(MOOD.SMASH_UP, MOOD.SMASH_DOWN, k * k, out);
+        return MOTION.MOOD.HEAD_DOWN * k;
+      }
+      const w = v - S.SLAM_T - S.HOLD_T;
+      mixPose(MOOD.SMASH_DOWN, MOOD.SLUMP, w > 0 ? ease(Math.min(1, w / S.RAISE_T)) : 0, out);
+      return MOTION.MOOD.HEAD_DOWN;
+    }
+    out.set(MOOD.SLUMP); // 'slump'
+    return MOTION.MOOD.HEAD_DOWN;
+  }
 
   const CLIPS = (() => {
     const fh = compileKeys(MOTION.FOREHAND.keys, READY);
@@ -993,6 +1040,13 @@
     }
     mem.cheerT = 0;
 
+    // ポイントの後の感情表現（打ち終わるまでは上の振り付けが先。試合の勝者は両手を突き上げるほうが先）
+    const headDown = state.mood ? moodPose(state.mood, out) : null;
+    if (headDown !== null) {
+      mem.headDown = headDown;
+      return { key: `mood-${state.mood.kind}`, kind: 'cheer' };
+    }
+
     if (ctx.serve) {
       // サーブ：構え → トス（両腕を下げてから、逆手を上げ、ラケットを担ぐ）→ 跳んで打点へ。
       // トス中の進み具合はボールの上向きの速さ（＝トスを上げてからの時間）で読む。
@@ -1104,6 +1158,7 @@
     if (!state.leap) mem.leapSwung = false;
     else if (state.anim > 0) mem.leapSwung = true;
 
+    mem.headDown = 0;
     const pick = chooseMotion(player, state, ctx, mem.target);
     // 振り付けが変わったら、いま見えている形から寄せる。振っている途中に次の1打が
     // 始まったとき（ボレーの打ち合いなど）も、同じ振り付けの頭へ飛ぶので寄せる。
@@ -1129,6 +1184,8 @@
     rig.torso.rotation.y = HAND * mem.pose[C.TWIST];
     rig.torso.rotation.z = HAND * mem.pose[C.BEND];
     rig.head.rotation.y = -HAND * mem.pose[C.TWIST] * RIG.HEAD_FOLLOW;
+    // うなだれるときだけ下を向く（ポーズの切り替えと同じくらいの速さで寄せる）
+    rig.head.rotation.x = lerp(rig.head.rotation.x, mem.headDown, Math.min(1, (ctx.dt || 0) * 8));
   };
 
   /* ------------------------------------------------------------ IK */
@@ -1351,6 +1408,7 @@
         leapSwung: false,
         contact: null,
         cheerT: 0, // 両手を突き上げてからの秒数（拳を上下させる時計）
+        headDown: 0, // 首の前傾(rad)。感情表現（うなだれる）のときだけ0以外
       },
     };
     // 一度もポーズを当てないメッシュ（縮地の残像）でも、腕が付け根から垂れた形にしておく

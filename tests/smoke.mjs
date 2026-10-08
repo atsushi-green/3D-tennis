@@ -278,7 +278,23 @@ const noHooks = {
   // 凌がれて 40-15 になっても、2回目のマッチポイントでは演出を出さない
   playTo(g, 'cpu');
   ok(!!g.stakes && g.stakes.kind === 'match', 'precondition: 40-15 is still a match point');
-  ok(!g.matchPointCut, 'the second match point of the match does not replay the cut');
+  ok(!g.matchPointCut, 'the second match point of the same game does not replay the cut');
+
+  // ゲームが替わったら戻す：凌がれてそのゲームを落とし、次のゲームで再びマッチポイントになれば出す
+  const g5 = new R.Game({ input: fakeInput, hooks });
+  g5.start(false, 'you');
+  g5.match.games = { you: 5, cpu: 0 };
+  g5.match.points = { you: 3, cpu: 4 }; // 40-AD から CPU が取ってこのゲームは CPU
+  g5.matchPointCutDone = true; // このゲームではもう出した扱い
+  g5.phase = 'rally';
+  g5.serveInFlight = false;
+  g5.endPoint('cpu', 'ツーバウンド');
+  ok(g5.match.games.cpu === 1, `precondition: the CPU took the game, games=${JSON.stringify(g5.match.games)}`);
+  ok(g5.matchPointCutDone === false, 'a new game re-arms the match point cut');
+  g5.match.points = { you: 3, cpu: 0 };
+  g5.beginServe();
+  ok(!!g5.matchPointCut && g5.matchPointCut.team === 'you',
+    'the first match point of the next game starts the cut again');
 
   // CPU のサーブで CPU のマッチポイント：演出の間は CPU もサーブしてこない。Space で切り上げられる
   const g2 = new R.Game({ input: fakeInput, hooks });
@@ -1487,16 +1503,46 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     ok(flight < TAP_T && flight > CHARGE_T, `partial charge is between TAP_T and CHARGE_T, got ${flight}`);
   }
 
-  // ロブは溜め量に関わらず最優先
+  // ロブは溜めで「高い守りのロブ（溜めなし＝LOB_T）」〜「低く速い攻めのロブ（フル溜め＝
+  // LOB_ATTACK_T）」を打ち分ける。どちらも通常のドライブの飛翔時間とは別枠
   {
+    const { LOB_ATTACK_T } = R.config.SHOT;
     const input = { moveX: 0, moveZ: 0, lob: true };
     const g = new R.Game({ input, hooks: noHooks });
     g.start();
     g.phase = 'rally';
+    ok(Math.abs(g.playerShot().flight - LOB_T) < 1e-9, `an uncharged lob is the high LOB_T one, got ${g.playerShot().flight}`);
     g.chargeStart();
     for (let i = 0; i < 60; i++) g.update(1 / 60);
     g.chargeRelease();
-    ok(g.playerShot().flight === LOB_T, `lob overrides charge, got ${g.playerShot().flight}`);
+    ok(Math.abs(g.playerShot().flight - LOB_ATTACK_T) < 1e-9,
+      `a fully charged lob is the low, fast LOB_ATTACK_T one, got ${g.playerShot().flight}`);
+  }
+}
+
+// --- ロブの頂点の高さは球種（実効重力）で変わらない ---
+// (退行テスト: 以前はスライスでロブを打つと、重力が軽いぶん同じ飛翔時間で頂点が 3.2m
+//  （フラットは 4.2m）しか上がらない平たい球になり、コートの中ほどで叩かれていた)
+{
+  const peakOf = (spin) => {
+    const input = { moveX: 0, moveZ: 0, lob: true };
+    const g = new R.Game({ input, hooks: noHooks });
+    g.start();
+    g.windStrength = 0;
+    g.setWindVector();
+    g.phase = 'rally';
+    g.you.x = 0; g.you.z = -11;
+    g.ball.x = 0.3; g.ball.y = 1.0; g.ball.z = -11; g.ball.bounces = 1;
+    g.you.swingCharge = 0;
+    g.you.chargeSpin = spin;
+    g.hit('you');
+    const grav = R.physics.spinGravity(g.ball.spin);
+    return g.ball.y + (g.ball.vy * g.ball.vy) / (-2 * grav);
+  };
+  const flat = peakOf('flat');
+  for (const spin of ['top', 'slice']) {
+    const peak = peakOf(spin);
+    ok(Math.abs(peak - flat) < 0.15, `a ${spin} lob peaks as high as a flat one: ${spin}=${peak.toFixed(2)} flat=${flat.toFixed(2)}`);
   }
 }
 
@@ -3804,6 +3850,30 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     const z = s.you.z;
     s.setYouFormation('net');
     ok(near(s.you.z, z), 'R/F do nothing in singles');
+  }
+
+  // HUD の「立ち位置の指示」の札に渡す状態（formationOrders）：指示の今の値と、サーブ待ちの担当
+  {
+    const { g } = setup('you');
+    let o = g.formationOrders();
+    ok(o && o.youMate === 'net' && o.you === 'net', `both orders start at the net, got ${JSON.stringify(o)}`);
+    ok(o.youDuty === 'サーブ' && o.youMateDuty === null, `you are serving, the partner is not, got ${JSON.stringify(o)}`);
+    g.setYouMateFormation('back');
+    ok(g.formationOrders().youMate === 'back', 'E shows up as the partner standing back');
+
+    const { g: g2 } = setup('cpu', -1);
+    g2.setYouFormation('back');
+    o = g2.formationOrders();
+    ok(o.you === 'back' && o.youMateDuty === 'レシーブ' && o.youDuty === null,
+      `F shows up while the partner receives, got ${JSON.stringify(o)}`);
+    g2.phase = 'rally';
+    o = g2.formationOrders();
+    ok(o.you === 'back' && o.youDuty === null && o.youMateDuty === null,
+      `in a rally the orders stay but no one is on serve/return duty, got ${JSON.stringify(o)}`);
+
+    const s = new R.Game({ input: fakeInput, hooks: noHooks });
+    s.start(false);
+    ok(s.formationOrders() === null, 'singles has no formation orders to show');
   }
 }
 
@@ -6470,6 +6540,38 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   const mirrored = { ...lob, z: -lob.z, vz: -lob.vz };
   const mateSpot = smashApproach(mirrored, { x: 0, z: -CPU.HOME_Z }, -1);
   ok(mateSpot !== null && mateSpot.z < 0, 'the partner does the same on its own (z<0) half');
+  // 頭上を越す高いロブは、ネット際から SMASH_RETREAT_MAX より下がらないと叩けないので
+  // 先回りしない（1バウンドさせて返す）。
+  // (退行テスト: 以前は前後どちらへも同じ速さで走れる前提で、ネット際からでも 6m 以上
+  //  下がって先回りし、待てた時間でフルパワーのスマッシュになっていた)
+  const atNetZ = { x: 0, z: 1.5 };
+  ok(smashApproach(lob, atNetZ, 1) === null, 'a high lob over a net player is left to bounce');
+}
+
+// --- CPU/AI：下がって叩くスマッシュは、落下点で待てていても弱い ---
+{
+  const { CPU } = R.config;
+  const smashSpeed = (runFwd, z) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.cpu.x = 0; g.cpu.z = z;
+    g.cpu.settleT = CPU.SMASH_SETTLE_T * 2; // 落下点で十分待てていた
+    g.cpu.chaseDist = 0;
+    g.cpu.runFwd = runFwd;
+    g.ball.x = 0.4; g.ball.y = CPU.SMASH_MIN_Y + 0.1; g.ball.z = z; g.ball.bounces = 0;
+    g.ball.vx = 0; g.ball.vy = -5; g.ball.vz = 8;
+    g.hit('cpu');
+    ok(g.cpu.stroke === 'smash', `precondition: the cpu smashes, got ${g.cpu.stroke}`);
+    return Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz);
+  };
+  const settled = smashSpeed(0, 4);
+  const retreated = smashSpeed(-CPU.SMASH_RETREAT_STRETCH_DIST, 4);
+  const deep = smashSpeed(0, CPU.SMASH_DEEP_Z_MAX);
+  ok(retreated < settled * 0.75,
+    `a smash hit after backing up is weaker: settled=${settled.toFixed(1)} retreated=${retreated.toFixed(1)}`);
+  ok(deep < settled * 0.8,
+    `a smash from deep in the court is weaker: settled=${settled.toFixed(1)} deep=${deep.toFixed(1)}`);
 }
 
 // --- CPU/AI：先回りの対象と「スマッシュ」の判定条件が食い違わない ---
@@ -6689,6 +6791,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     ok(c.name && c.type && c.text, `${c.key} has a name, a type and a description`);
     ok(STYLES.includes(c.look.style), `${c.key} has a hair style the portrait can draw: ${c.look.style}`);
     ok(['skin', 'hair', 'accent'].every((k) => HEX.test(c.look[k])), `${c.key} has #rrggbb portrait colours`);
+    ok(R.config.CPU_STYLES[c.cpuStyle], `${c.key} brings a CPU play style that exists: ${c.cpuStyle}`);
     if (c.key !== CHARACTER_DEFAULT && !c.champion) {
       ok(core.some((s) => c.ratings[s.key] > SKILL_DEFAULT) && core.some((s) => c.ratings[s.key] < SKILL_DEFAULT),
         `${c.key} has both a strength and a weakness`);
@@ -6703,6 +6806,9 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   const standard = CHARACTERS.find((c) => c.key === CHARACTER_DEFAULT);
   ok(standard && SKILLS.every((s) => standard.ratings[s.key] === SKILL_DEFAULT),
     `the default player (${CHARACTER_DEFAULT}) is all ${SKILL_DEFAULT}s`);
+  ok(standard.cpuStyle === 'none', 'and brings no play style, so the default match is unchanged');
+  ok(CHARACTERS.find((c) => c.key === 'serveVolley').cpuStyle === 'serveAndVolley',
+    'picking the serve-and-volleyer as the CPU makes it serve and volley');
 
   try {
     const big = CHARACTERS.find((c) => c.ratings.serve === SKILL_MAX);
@@ -6869,6 +6975,277 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
 
   g.resetStats();
   ok(g.stats.you.points === 0 && g.matchStats.points === 0, 'resetStats() clears everything');
+}
+
+// --- 試合後のハイライト：決まった1点ずつに見どころの点数を付け、上位と試合を決めた1点を古い順に選ぶ ---
+{
+  const { HIGHLIGHT } = R.config;
+  const S = HIGHLIGHT.SCORE;
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(false, 'you');
+  /** shots 本のラリーで winner が reason で取る（specials はそのポイントで出た技の呼び名） */
+  const point = (winner, reason, shots, specials = []) => {
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.stakes = null;
+    g.rallyShots = shots;
+    g.pointSpecials = specials.slice();
+    g.endPoint(winner, reason);
+    g.clearTimers();
+    return g.lastPoint;
+  };
+  const short = point('you', 'アウト', 2);
+  ok(short.id === 1 && short.score === 2 * S.PER_SHOT && short.outcome === 'error',
+    `a short error rally scores just its shots: ${JSON.stringify(short)}`);
+  const long = point('cpu', 'ツーバウンド', 15);
+  ok(long.score === 15 * S.PER_SHOT + S.WINNER, `a long winner rally adds the winner bonus: ${long.score}`);
+  const special = point('you', 'ツーバウンド', 3, ['ジャックナイフ']);
+  ok(special.score === 3 * S.PER_SHOT + S.WINNER + S.SPECIAL && special.specials[0] === 'ジャックナイフ',
+    `a special move adds its bonus: ${special.score}`);
+  // エース：サーブに触れられずに決まった（serveInFlight のまま）。速いサーブはさらに上乗せ
+  g.phase = 'rally'; g.serveInFlight = true; g.rallyShots = 1; g.pointSpecials = [];
+  g.lastServeKmh = S.FAST_SERVE_KMH + 5;
+  g.endPoint('you', 'ツーバウンド'); g.clearTimers();
+  ok(g.lastPoint.outcome === 'ace' && g.lastPoint.serveKmh === S.FAST_SERVE_KMH + 5
+    && g.lastPoint.score === S.PER_SHOT + S.ACE + S.FAST_SERVE, `a fast ace: ${JSON.stringify(g.lastPoint)}`);
+  for (let i = 0; i < 6; i++) point('cpu', 'ネット', 1);
+  const last = point('cpu', 'アウト', 1);
+  ok(g.pointLog.length === 11, `every decided point is logged: ${g.pointLog.length}`);
+
+  const picks = g.highlightPicks();
+  ok(picks.length <= HIGHLIGHT.MAX_CLIPS, `at most MAX_CLIPS: ${picks.length}`);
+  ok(picks[picks.length - 1] === last, 'the last (deciding) point is always in, even when it is dull');
+  ok(picks.every((p, i) => i === 0 || picks[i - 1].id < p.id), 'and the picks are in the order they were played');
+  ok(picks.indexOf(long) !== -1 && picks.indexOf(special) !== -1 && picks.indexOf(short) === -1,
+    `the best points are picked, the dull ones are not: ${picks.map((p) => p.id)}`);
+  ok(picks.slice(0, -1).every((p) => p.score >= HIGHLIGHT.MIN_SCORE), 'nothing below MIN_SCORE except the last point');
+  const keep = g.highlightKeep();
+  ok(picks.every((p) => keep.has(p.id)), 'every possible pick is kept by the display side');
+  ok(!keep.has(short.id), 'and dull points can be thrown away');
+  ok(g.matchSummary('cpu').highlights.length === picks.length, 'the match summary carries the highlights');
+  g.resetStats();
+  ok(g.pointLog.length === 0 && g.highlightPicks().length === 0, 'the next match starts a new log');
+  ok(point('you', 'アウト', 1).id === 12, 'ids keep counting so recordings never collide');
+}
+
+// --- ポイントの後の感情表現：気性と決まり方で、ガッツポーズ／うなだれる／ラケットを叩きつける ---
+{
+  const { EMOTION } = R.config;
+  const sounds = [];
+  const realRandom = Math.random;
+  /** server がサーブする場面で、winner が reason で取る。rnd＝Math.random が返す値 */
+  const play = ({ tempers, server = 'you', winner, reason, shots = 1, games, points, rnd = 0 }) => {
+    const g = new R.Game({ input: fakeInput, hooks: { ...noHooks, sound: (n) => sounds.push(n) } });
+    g.start(false, server);
+    g.setTempers(tempers);
+    if (games) g.match.games = games;
+    if (points) g.match.points = points;
+    g.stakes = R.scoring.pointStakes(g.match, g.server);
+    g.matchPointCutDone = true;
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.rallyShots = shots;
+    sounds.length = 0;
+    Math.random = () => rnd;
+    try { g.endPoint(winner, reason); } finally { Math.random = realRandom; }
+    return g;
+  };
+  const fiery = { you: 'fiery', cpu: 'fiery' };
+  // 0-40 からブレークされた（you のサーブ）：熱くなる選手はラケットを叩きつけ、取った側はガッツポーズ
+  let g = play({ tempers: fiery, winner: 'cpu', reason: 'アウト', points: { you: 0, cpu: 3 } });
+  ok(g.you.mood && g.you.mood.kind === 'smash', `a fiery server who is broken smashes the racket: ${JSON.stringify(g.you.mood)}`);
+  ok(g.cpu.mood && g.cpu.mood.kind === 'fist', `the breaker pumps a fist: ${JSON.stringify(g.cpu.mood)}`);
+  const S = EMOTION.SMASH;
+  for (let i = 0; i < 60 * (EMOTION.DELAY + S.RAISE_T + S.SLAM_T) + 2; i++) g.update(1 / 60);
+  ok(sounds.includes('racketSmash'), `the smash is heard as the racket lands: ${sounds}`);
+  // 冷静な選手は同じ場面でも叩きつけない（うなだれるだけ）
+  g = play({ tempers: { you: 'calm', cpu: 'calm' }, winner: 'cpu', reason: 'アウト', points: { you: 0, cpu: 3 } });
+  ok(g.you.mood && g.you.mood.kind === 'slump', `a calm server only slumps: ${JSON.stringify(g.you.mood)}`);
+  // 自分のサーブをキープした側（サーバーが取った）には叩きつける理由がない
+  g = play({ tempers: fiery, winner: 'you', reason: 'アウト', points: { you: 3, cpu: 0 } });
+  ok(g.cpu.mood && g.cpu.mood.kind === 'slump', `losing a return game is not a break: ${JSON.stringify(g.cpu.mood)}`);
+  // 何もかかっていない短い1点を相手のミスで取っても、ガッツポーズはしない
+  g = play({ tempers: fiery, winner: 'you', reason: 'アウト', points: { you: 1, cpu: 0 } });
+  ok(!g.you.mood, `a dull point gets no fist pump: ${JSON.stringify(g.you.mood)}`);
+  // 確率を外せば何もしない（毎回同じ反応にはならない）
+  g = play({ tempers: { you: 'normal', cpu: 'normal' }, winner: 'cpu', reason: 'ツーバウンド', shots: 12, rnd: 0.99 });
+  ok(!g.you.mood && !g.cpu.mood, 'with an unlucky roll nobody reacts');
+  // 表情は SPAN で消え、次のサーブの構えでも必ず消える
+  g = play({ tempers: fiery, winner: 'cpu', reason: 'ツーバウンド', shots: 12 });
+  ok(g.cpu.mood && g.cpu.mood.kind === 'fist', 'a long winning rally earns a fist pump');
+  for (let i = 0; i < 60 * (EMOTION.DELAY + EMOTION.SPAN) + 2; i++) g.update(1 / 60);
+  ok(!g.cpu.mood, 'and it fades after SPAN');
+  ok(EMOTION.DELAY + EMOTION.SPAN < R.config.TIMING.NEXT_POINT, 'the reaction fits inside the pause between points');
+  g = play({ tempers: fiery, winner: 'cpu', reason: 'アウト', points: { you: 0, cpu: 1 } });
+  g.beginServe();
+  ok(!g.you.mood && !g.cpu.mood, 'the next serve clears the reactions');
+  // 知らない気性・カスタムは normal
+  g.setTempers({ you: 'nope' });
+  ok(g.tempers.you === 'normal', `unknown tempers fall back to normal: ${g.tempers.you}`);
+  ok(R.config.CHARACTERS.every((c) => EMOTION.TEMPERS[c.temper]), 'every character has a known temper');
+}
+
+// --- にわか雨：最初から小雨 → 小雨の間は続く → 雨脚が強まったらポイントの後で中断 → 再開しても小雨は降り続く ---
+{
+  const { RAIN, TIMING } = R.config;
+  const calls = [];
+  const realRandom = Math.random;
+  const g = new R.Game({ input: fakeInput, hooks: { ...noHooks, call: (big) => calls.push(big) } });
+  g.start(false, 'cpu');
+  const step = (sec) => { for (let i = 0; i < Math.round(60 * sec); i++) g.update(1 / 60); };
+  const playPoint = (winner, random) => {
+    g.phase = 'rally'; g.serveInFlight = false; g.rallyShots = 3; g.stakes = null;
+    g.endPoint(winner, 'ツーバウンド');
+    // ゲームが決まるとチェンジエンズの幕が入るので、次のサーブ（か雨天中断）まで進める
+    Math.random = () => random;
+    try {
+      for (let i = 0; i < 60 * 30 && g.phase !== 'serve'; i++) {
+        g.update(1 / 60);
+        if (g.rain && g.rain.phase === 'suspended') break;
+      }
+    } finally { Math.random = realRandom; }
+  };
+  // 晴れを選んでいれば、何本やっても降らない
+  g.matchStats.points = RAIN.MIN_POINTS;
+  Math.random = () => 0;
+  try { g.newPoint(); } finally { Math.random = realRandom; }
+  ok(!g.rain, 'no rain unless the weather option is on');
+  // にわか雨を選んだ試合は、最初のポイントから小雨が降っていて、コートも濡れている
+  const r = new R.Game({ input: fakeInput, hooks: noHooks });
+  r.setRain(true);
+  Math.random = () => 0;
+  try { r.start(false, 'cpu'); } finally { Math.random = realRandom; }
+  r.update(1 / 60);
+  ok(r.rain && r.rain.phase === 'drizzle' && r.wet === RAIN.DRIZZLE_WET,
+    `it is already drizzling from the first point, even if the dice would make it heavy: ${JSON.stringify(r.rain)} wet=${r.wet}`);
+  R.physics.setWetness(0);
+  // MIN_POINTS 本までは雨脚が強まらない
+  g.setRain(true);
+  g.matchStats.points = RAIN.MIN_POINTS - 1;
+  Math.random = () => 0;
+  try { g.newPoint(); } finally { Math.random = realRandom; }
+  ok(g.rain && g.rain.phase === 'drizzle', `only a drizzle before MIN_POINTS points have been played: ${JSON.stringify(g.rain)}`);
+  g.matchStats.points = RAIN.MIN_POINTS;
+  // 小雨のままなら、何本続けても中断せず次のポイントへ進む（雨の中でプレーする）
+  for (let i = 0; i < 5; i++) playPoint(i % 2 ? 'you' : 'cpu', RAIN.HEAVY_CHANCE);
+  ok(g.rain && g.rain.phase === 'drizzle' && g.phase === 'serve' && g.wet === RAIN.DRIZZLE_WET,
+    `a drizzle alone never stops play and never stops falling: rain=${JSON.stringify(g.rain)} phase=${g.phase} wet=${g.wet}`);
+  // ポイントの始まりに確率で雨脚が強まる。そのポイントはやり切り、さらに濡れていく
+  playPoint('cpu', RAIN.HEAVY_CHANCE - 0.01);
+  ok(g.rain.phase === 'heavy' && g.phase === 'serve',
+    `the rain can grow heavy at the start of a point, and that point is still played: ${JSON.stringify(g.rain)} phase=${g.phase}`);
+  g.tickRain(RAIN.HEAVY_T);
+  ok(Math.abs(g.wet - RAIN.HEAVY_WET) < 1e-9, `the heavy rain soaks the court further: ${g.wet}`);
+  // 強まった雨の中で決まった1点の後で中断。この間は試合が止まる
+  playPoint('you', 0.99);
+  ok(g.rain.phase === 'suspended' && calls[calls.length - 1] === '雨天中断', `play is suspended after the point: ${JSON.stringify(g.rain)} ${calls.slice(-1)}`);
+  const at = { x: g.you.x, z: g.you.z, phase: g.phase, points: { ...g.match.points } };
+  step(RAIN.DELAY - 1);
+  ok(g.rain.phase === 'suspended' && g.phase === at.phase && g.match.points.you === at.points.you,
+    'nothing moves on during the delay');
+  step(1.1);
+  ok(g.rain.phase === 'clearing' && g.wet === 1 && calls[calls.length - 1] === '試合再開',
+    `after DELAY the covers come off and the court is soaked: ${JSON.stringify(g.rain)} wet=${g.wet}`);
+  Math.random = () => 0.99;
+  try { step(RAIN.RESUME_T + 0.05); } finally { Math.random = realRandom; }
+  ok(g.phase === 'serve' && g.rain && g.rain.phase === 'drizzle',
+    `then play resumes in the drizzle, which keeps falling: phase=${g.phase} rain=${JSON.stringify(g.rain)}`);
+  // 濡れたコートは低く弾み、滑る（予測も同じ物理を使う）
+  const bounceOf = (wet) => {
+    R.physics.setWetness(wet);
+    const b = { x: 0, y: 0.05, z: 3, px: 0, py: 0.15, pz: 2.8, vx: 0, vy: -8, vz: 15, spin: 'flat' };
+    R.physics.reflectBounce(b);
+    return b;
+  };
+  const dry = bounceOf(0);
+  const soaked = bounceOf(1);
+  R.physics.setWetness(g.wet);
+  ok(soaked.vy < dry.vy * 0.9 && soaked.vz > dry.vz, `a wet court bounces lower and skids: dry=${dry.vy.toFixed(2)}/${dry.vz.toFixed(2)} wet=${soaked.vy.toFixed(2)}/${soaked.vz.toFixed(2)}`);
+  // 1ポイントごとに乾いていくが、小雨が降っている間は小雨の濡れ具合までしか乾かない
+  playPoint('cpu', 0.99);
+  ok(Math.abs(g.wet - (1 - 1 / RAIN.WET_POINTS)) < 1e-9, `it dries a little after each point: ${g.wet}`);
+  for (let i = 0; i < RAIN.WET_POINTS; i++) playPoint('you', 0.99);
+  ok(g.wet === RAIN.DRIZZLE_WET, `but only down to the drizzle's dampness: ${g.wet}`);
+  // 中断は1試合に MAX_PER_MATCH 回まで
+  g.rainCount = RAIN.MAX_PER_MATCH;
+  playPoint('cpu', 0);
+  ok(g.rain.phase === 'drizzle', 'the rain grows heavy at most MAX_PER_MATCH times a match');
+  // 中断は Space で切り上げられる
+  const h = new R.Game({ input: fakeInput, hooks: noHooks });
+  h.start(false, 'cpu');
+  h.beginRainDelay(null);
+  h.skipRainDelay();
+  ok(h.rain.phase === 'clearing', 'Space cuts the rain delay short');
+  ok(new R.Game({ input: fakeInput, hooks: noHooks }).wet === 0 && (bounceOf(0), true), 'a new game starts dry');
+  R.physics.setWetness(0);
+}
+
+// --- 試合形式：ゲーム数とセット数を選べる（既定のルールは6ゲーム・1セットのまま） ---
+{
+  const { RULES, MATCH_FORMATS, applyMatchFormat } = R.config;
+  const { Match, pointStakes } = R.scoring;
+  ok(RULES.SET_GAMES === 6 && RULES.SETS_TO_WIN === 1, 'the bare rules are a 6-game one-set match');
+  ok(MATCH_FORMATS.DEFAULT.games === 3 && MATCH_FORMATS.DEFAULT.sets === 1,
+    'the start screen defaults to a 3-game one-set match');
+  const game = (m, who) => { let r; for (let i = 0; i < 4; i++) r = m.awardPoint(who); return r; };
+  try {
+    applyMatchFormat(3, 3); // 3ゲーム先取の3セットマッチ（2セット先取）
+    ok(RULES.SET_GAMES === 3 && RULES.SETS_TO_WIN === 2, `3 games, best of 3: ${RULES.SET_GAMES}/${RULES.SETS_TO_WIN}`);
+    const m = new Match();
+    game(m, 'you'); game(m, 'you');
+    m.points = { you: 3, cpu: 0 };
+    let st = pointStakes(m, 'you');
+    ok(st && st.kind === 'set' && st.label === 'セットポイント', `a point for the first set is a set point: ${JSON.stringify(st)}`);
+    let r = m.awardPoint('you');
+    ok(r.type === 'set' && r.matchOver === false && m.sets.you === 1, `the first set does not end the match: ${JSON.stringify(r)}`);
+    ok(m.games.you === 3 && m.setScores.length === 1, 'the set score stays until nextSet()');
+    m.nextSet();
+    ok(m.games.you === 0 && m.games.cpu === 0 && m.sets.you === 1, 'nextSet() starts the games again and keeps the sets');
+    // 3-3 でタイブレーク
+    for (let i = 0; i < 3; i++) { game(m, 'you'); game(m, 'cpu'); }
+    ok(m.tiebreak, `3-3 goes to a tiebreak: ${m.games.you}-${m.games.cpu}`);
+    m.tiebreakPoints = { you: 6, cpu: 0 };
+    st = pointStakes(m, 'cpu');
+    ok(st && st.kind === 'match', `a point that wins the second set wins the match: ${JSON.stringify(st)}`);
+    r = m.awardPoint('you');
+    ok(r.type === 'set' && r.matchOver === true && m.setScores.map((s) => `${s.you}-${s.cpu}`).join(' ') === '3-0 4-3',
+      `the second set ends it: ${JSON.stringify(r)} ${JSON.stringify(m.setScores)}`);
+    applyMatchFormat(4, 5);
+    ok(RULES.SET_GAMES === 4 && RULES.SETS_TO_WIN === 3, 'best of 5 needs 3 sets');
+
+    // 試合の進行：セットを取っても試合は続き、セットのコールの後に次のセットが 0-0 から始まる
+    applyMatchFormat(3, 3);
+    const calls = [];
+    const ends = [];
+    const g = new R.Game({
+      input: fakeInput,
+      hooks: { ...noHooks, call: (big, sub) => calls.push(`${big}|${sub || ''}`), matchEnd: (x) => ends.push(x) },
+    });
+    g.start(false, 'cpu');
+    g.match.games = { you: 2, cpu: 0 };
+    g.match.points = { you: 3, cpu: 0 };
+    g.matchPointCutDone = true;
+    g.phase = 'rally'; g.serveInFlight = false; g.rallyShots = 3; g.stakes = null;
+    g.endPoint('you', 'ツーバウンド');
+    ok(!g.finale && calls[calls.length - 1].startsWith('セット — YOU|第1セット 3-0'), `a set call, not game set: ${calls.slice(-1)}`);
+    for (let i = 0; i < 60 * 12 && g.match.games.you !== 0; i++) g.update(1 / 60);
+    ok(g.match.games.you === 0 && g.match.sets.you === 1 && !g.finale, 'the next set starts from 0-0');
+    for (let i = 0; i < 60 * 20 && g.changeover; i++) g.update(1 / 60);
+    g.match.games = { you: 2, cpu: 1 };
+    g.match.points = { you: 3, cpu: 0 };
+    g.matchPointCutDone = true;
+    g.phase = 'rally'; g.serveInFlight = false; g.rallyShots = 3; g.stakes = null;
+    g.endPoint('you', 'ツーバウンド');
+    ok(!!g.finale, 'the second set ends the match');
+    const { FINALE } = R.config;
+    for (let i = 0; i < 60 * (FINALE.DELAY + FINALE.DURATION + 1) && ends.length === 0; i++) g.update(1 / 60);
+    ok(calls.some((c) => c.startsWith('ゲームセット|あなたの勝ち 3-0 3-1')), `the game set call lists every set: ${calls.filter((c) => c.startsWith('ゲームセット')).slice(-1)}`);
+    ok(ends.length === 1 && ends[0].sets.length === 2 && ends[0].sets[1].cpu === 1, `the summary has the set scores: ${JSON.stringify(ends[0] && ends[0].sets)}`);
+    for (let i = 0; i < 60 * 4 && g.match.sets.you > 0; i++) g.update(1 / 60);
+    ok(g.match.sets.you === 0 && g.match.setScores.length === 0, 'the next match starts with no sets');
+  } finally {
+    applyMatchFormat(6, 1);
+  }
 }
 
 // --- 試合後のスタッツ：セットが終わると matchEnd が1回だけ呼ばれ、次のマッチで0に戻る ---
@@ -10089,6 +10466,58 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   } finally {
     applyCpuLevel('normal');
   }
+}
+
+// --- ネットに掛かって決まった球は、その場で止まらず1バウンドするまで落ちて軌跡に残る ---
+{
+  const { NET, PHYSICS } = R.config;
+  const savedIn = NET.IN_CHANCE;
+  NET.IN_CHANCE = 0; // ネットインの抽選を外す
+  try {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(false, 'you');
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    Object.assign(g.ball, {
+      x: 0, y: 0.5, z: -2, px: 0, py: 0.5, pz: -2, vx: 0, vy: 0, vz: 15,
+      live: true, last: 'you', bounces: 0, age: 0, sinceBounce: 0, spin: 'flat', curve: 0, wind: 0, windZ: 0,
+    });
+    g.resetTrail();
+    let hitNetAt = null;
+    for (let i = 0; i < 60 * 3; i++) {
+      g.update(1 / 60);
+      if (hitNetAt === null && g.phase === 'over') hitNetAt = g.trail.length;
+      else if (hitNetAt !== null && !g.ball.netFall) break; // 着地した
+    }
+    ok(hitNetAt !== null && g.phase === 'over', `the ball into the net ends the point, got phase=${g.phase}`);
+    ok(Math.abs(g.ball.y - PHYSICS.BALL_R) < 1e-6 && g.ball.z < 0 && !g.ball.netFall,
+      `after the net the ball keeps falling to the hitter's side and rests on the ground, got y=${g.ball.y} z=${g.ball.z}`);
+    const last = g.trail[g.trail.length - 1];
+    ok(g.trail.length > hitNetAt + 5 && Math.abs(last.y - PHYSICS.BALL_R) < 1e-6,
+      `the trail follows the fall down to the bounce (${hitNetAt} -> ${g.trail.length} points, last y=${last.y})`);
+  } finally {
+    NET.IN_CHANCE = savedIn;
+  }
+}
+
+// --- タイブレーク入りのコールは、その試合形式の実際のゲーム数を言う ---
+// (退行テスト: 以前は「（6-6 タイブレーク！）」と固定の文言で、3ゲーム先取の 3-3 でも 6-6 と出ていた)
+{
+  const { RULES } = R.config;
+  const saved = { games: RULES.SET_GAMES, sets: RULES.SETS_TO_WIN };
+  R.config.applyMatchFormat(3, 1);
+  const calls = [];
+  const g = new R.Game({ input: fakeInput, hooks: { ...noHooks, call: (big, sub) => calls.push(sub) } });
+  g.start();
+  g.match.games = { you: 3, cpu: 2 };
+  g.match.points = { you: 0, cpu: 3 };
+  g.phase = 'rally';
+  g.endPoint('cpu', 'アウト'); // 3-3 → タイブレーク
+  ok(g.match.tiebreak === true, `3-3 enters a tiebreak in a 3-game set, got tiebreak=${g.match.tiebreak}`);
+  ok(calls.some((sub) => sub && sub.includes('3-3 タイブレーク')),
+    `the call names the real score (3-3), got ${JSON.stringify(calls)}`);
+  RULES.SET_GAMES = saved.games;
+  RULES.SETS_TO_WIN = saved.sets;
 }
 
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);

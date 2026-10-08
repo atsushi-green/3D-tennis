@@ -6,15 +6,15 @@
   'use strict';
 
   const {
-    ATTRS, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, FINALE, FX, HALF_L, HALF_W, LINE_CALL, MATCH_POINT,
-    NET, PHYSICS, PLAYER, PRACTICE, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, SWING,
+    ATTRS, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, EMOTION, FINALE, FX, HALF_L, HALF_W, HIGHLIGHT, LINE_CALL, MATCH_POINT,
+    NET, PHYSICS, PLAYER, PRACTICE, RAIN, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, SWING,
     TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND, shotSkill,
   } = RallyOne.config;
   const {
     approach2D, clamp, lerp, mpsToKmh, rand, signOr,
   } = RallyOne.math;
   const {
-    hitsNet, integrate, predictLanding, predictWindow, reflectBounce, solveShot,
+    hitsNet, integrate, predictLanding, predictWindow, reflectBounce, setWetness, solveShot, spinGravity,
   } = RallyOne.physics;
   const {
     chasePosition, homePosition, netRushPosition, cpuShot, cpuVolleyShot, cpuSmashShot,
@@ -177,11 +177,16 @@
    * 頭上へ上がってきた球（CPU.SMASH_MIN_Y 以上でコートの中）ならスマッシュで叩ける。
    * 後者を許さないと、ai.js#smashApproach() が先回りさせた位置に立っていても
    * 打点が高いまま素通りさせてしまい、結局バウンド後に打ち直すことになる。
+   * ただし頭上を越されて CPU.SMASH_RETREAT_MAX より下がらされたロブは叩かずにバウンドを待つ
+   * （ai.smashApproach() が先回りをあきらめた球を、追いかける途中で無理に叩かせない）。
    * @param {number} volleyZ ノーバウンドで返してよい深さの限界（aiVolleyZ()）
    */
   function aiCanReturnNow(actor, ball, volleyZ) {
-    return ball.bounces >= 1
-      || Math.abs(actor.z) <= volleyZ
+    if (ball.bounces >= 1) return true;
+    // ボレーの側（ネットへ詰めている最中は自陣どこでもボレーできる＝NET_RUSH_VOLLEY_Z）
+    // にも掛ける。そうしないと、詰めていた CPU だけは何m下がらされても空中で叩けてしまう。
+    if (-actor.runFwd > CPU.SMASH_RETREAT_MAX) return false;
+    return Math.abs(actor.z) <= volleyZ
       || (ball.y >= CPU.SMASH_MIN_Y && ball.vy <= CPU.SMASH_FALLING_VY
         && Math.abs(actor.z) <= CPU.SMASH_Z_MAX);
   }
@@ -667,6 +672,8 @@
         px: 0, py: SERVE.BALL_Y, pz: -HALF_L, // 1ステップ前の位置
         vx: 0, vy: 0, vz: 0,
         bounces: 0, last: 'you', live: false,
+        netFall: false, // ネットに掛かって決まった後、1バウンドするまで落ち続けている間（stepBall() 参照）
+        netFallT: 0,
         impact: 0,      // 打った瞬間の演出（着弾フラッシュ・膨張）の残り時間
         impactPower: 0, // その打球の溜め量(0〜1)。演出の派手さに使う
         spin: 'flat',   // 'flat'|'top'|'slice'。飛翔中の実効重力とバウンドの弾み方に効く
@@ -802,6 +809,24 @@
       this.stakes = null;
       /** このポイントで何本打たれたか（サーブも1本に数える）。beginServe() で数え直す。 */
       this.rallyShots = 0;
+      /** このポイントで出た必殺技の呼び名（ハイライトの見出しに使う）。rallyShots と同じく数え直す。 */
+      this.pointSpecials = [];
+      /**
+       * 4人それぞれの気性（config.EMOTION.TEMPERS のキー。選んだ選手の temper を main.js が
+       * setTempers() で渡す）。ポイントの後の感情表現（各選手の mood）の出やすさが変わる。
+       */
+      this.tempers = { you: 'normal', youMate: 'normal', cpu: 'normal', cpuMate: 'normal' };
+      /**
+       * にわか雨（config.RAIN）。rainEnabled はスタート画面の「天候」（setRain()）。
+       * rain は降っている間だけ { phase:'drizzle'|'heavy'|'suspended'|'clearing', t, resume }（にわか雨の試合中はずっと降っている）：
+       * 小雨で試合が続いている／雨天中断／シートを外して再開を待っている。t はその段階に入ってからの秒数。
+       * wet はコートの濡れ具合（0〜1。physics.setWetness() へそのまま渡す）。
+       */
+      this.rainEnabled = false;
+      this.rain = null;
+      this.rainCount = 0;
+      this.wet = 0;
+      setWetness(0); // 前の Game（練習モードの作り直しなど）の濡れを持ち越さない
       /**
        * スマッシュの先回りヒント。毎フレーム smashSpot() が入れ直す（打てる球が来ていなければ null）。
        * 表示専用の値なので、ゲームの判定はここを一切読まない（scene/hint.js と hud.js だけが使う）。
@@ -946,6 +971,15 @@
        * totalShots はポイントが決まった時点の rallyShots の合計＝サーブも1本に数える。
        */
       this.matchStats = { points: 0, longestRally: 0, totalShots: 0 };
+      /**
+       * このマッチで決まった1点ずつの記録（試合後のハイライトの候補。pointRecord() 参照）。
+       * id は Game を通した通し番号＝表示側が録ったリプレイのコマと突き合わせる鍵。
+       * matchStats と同じく resetStats() で空に戻す。
+       */
+      this.pointLog = [];
+      this.pointSeq = 0;
+      /** 直前に決まった1点の記録（pointLog の最後。練習モードでは null のまま）。 */
+      this.lastPoint = null;
 
       /**
        * このポイント中に吹いている風（加速度、m/s²）。wind＝横(±x)、windZ＝前後(±z。+z＝
@@ -996,10 +1030,11 @@
        */
       this.changeover = null;
       /**
-       * 試合で初めてのマッチポイントの演出の最中だけ { t, team } が入る（それ以外は null）。
+       * そのゲームで初めてのマッチポイントの演出の最中だけ { t, team } が入る（それ以外は null）。
        * t＝始まってからの秒数、team＝あと1点で勝つ側。演出の間は update() が試合を止め、
-       * 表示側（scene/world.js）がカメラを観客席へ回す。matchPointCutDone は、この試合で
-       * もう演出を出したか（2回目以降のマッチポイントでは出さない）。
+       * 表示側（scene/world.js）がカメラを観客席へ回す。matchPointCutDone は、このゲームで
+       * もう演出を出したか（同じゲームの2回目以降のマッチポイントでは出さない。ゲームが
+       * 替わったら戻す＝次のゲームでまたマッチポイントになれば改めて出す）。
        */
       this.matchPointCut = null;
       this.matchPointCutDone = false;
@@ -1159,6 +1194,27 @@
       this.youFormation = formation;
       this.placeBeforeServe('you');
       this.flashCall('自分', formation === 'net' ? '前に立つ' : '後ろに立つ');
+    }
+
+    /**
+     * ダブルスの立ち位置の指示の、いまの状態（HUD の「立ち位置の指示」の札に出す。表示専用で、
+     * ゲームの判定はここを読まない）。シングルスでは null。
+     * youMateDuty／youDuty は、サーブ待ちの間（phase==='serve'）にその人がサーバー／
+     * レシーバーの番なら serveDuty() の値（'サーブ'／'レシーブ'）、それ以外は null。担当の番は
+     * 立つ位置がルールで決まっているので、パートナーへの指示は打ってからのラリーにだけ効き
+     * （setYouMateFormation）、自分の R/F は受け付けない（setYouFormation）。
+     * @returns {{youMate:'net'|'back', you:'net'|'back',
+     *   youMateDuty:string|null, youDuty:string|null}|null}
+     */
+    formationOrders() {
+      if (!this.doubles) return null;
+      const waiting = this.phase === 'serve';
+      return {
+        youMate: this.youMateFormation,
+        you: this.youFormation,
+        youMateDuty: waiting ? this.serveDuty('youMate') : null,
+        youDuty: waiting ? this.serveDuty('you') : null,
+      };
     }
 
     /**
@@ -1573,6 +1629,7 @@
       else actor.specialUses[move] = this.usesLeft(move, who) - 1;
       this.stats[TEAM_OF[who]].specials++;
       actor.specialLabel = label || SPECIAL_LABEL[move];
+      this.pointSpecials.push(actor.specialLabel);
       this.hooks.sound('special');
       this.hooks.call(`${actor.specialLabel}！`, '必殺技');
       // ポイントが決まった後のコール（ポイント／ウィナー！）を消してしまわないよう、
@@ -1980,6 +2037,7 @@
       this.lastShotBy = { you: null, cpu: null };
       this.lastServeKmh = null;
       this.driftWind();
+      this.maybeStartRain();
       this.lineCall = null; // 前のポイントのコールを「このポイントを決めたコール」と取り違えない
       this.hooks.serveSpeed(null); // 前のポイントのサーブ速度表示を消す
       // スタミナはポイント間で少し回復するが、そのセットで消化したゲーム数が増えるほど
@@ -2055,7 +2113,7 @@
     }
 
     /**
-     * 試合で初めてのマッチポイントの演出を始める（beginServe() が構えを作った直後）。
+     * 各ゲームで初めてのマッチポイントの演出を始める（beginServe() が構えを作った直後）。
      * 選手はもう構えに立っていて、CPU/AI のサーブも予約済みだが、演出の間は update() が
      * 試合の時計ごと止めるので、サーブは演出が終わってからいつもの一拍をおいて来る。
      * @param {'you'|'cpu'} team あと1点で勝つ側
@@ -2102,8 +2160,9 @@
       this.finale = finale;
       this.after(FINALE.DELAY, () => {
         finale.cut = true;
-        const { games } = this.match; // セットの終わりは match.reset() まで最終スコアのまま
-        const result = `${winner === 'you' ? 'あなたの勝ち' : 'CPU の勝ち'} ${games.you}-${games.cpu}`;
+        // 各セットのゲーム数を古い順に（1セットマッチならその1セットの最終スコアだけ）
+        const sets = this.match.setScores.map((s) => `${s.you}-${s.cpu}`).join(' ');
+        const result = `${winner === 'you' ? 'あなたの勝ち' : 'CPU の勝ち'} ${sets}`;
         this.hooks.call('ゲームセット', `${result} ／ SPACE でスキップ`);
       });
     }
@@ -2132,23 +2191,45 @@
       this.after(TIMING.NEXT_MATCH, () => this.startNextMatch(finale.changeover));
     }
 
-    /** @param {string|null} changeover 前の試合が決まった直後のスコアでのチェンジエンズ */
-    startNextMatch(changeover) {
-      this.finale = null;
-      this.match.reset();
-      this.resetStats(); // 次のマッチは0から数え直す（スタッツ画面はもう出した後）
-      this.matchPointCutDone = false; // 次のマッチの最初のマッチポイントでも演出を出す
-      this.serverPartner = { you: 'you', cpu: 'cpu' }; // 次のセットは主力からサーブし直す
+    /**
+     * 複数セットの試合で、セットが決まった後に次のセットを始める（ゲーム数を 0-0 に戻す。
+     * 取ったセット数・スタッツ・ハイライトの記録はそのまま続く）。
+     * @param {string|null} changeover そのセットが決まった直後のスコアでのチェンジエンズ
+     */
+    startNextSet(changeover) {
+      this.match.nextSet();
       this.hooks.score();
-      // セット間の休憩。ゲーム数が奇数で終わったセットなら、その間にコートも入れ替わる。
-      // 偶数なら入れ替わらず（次のセットの第1ゲームの後に入れ替わる）、休憩ぶんの
-      // スタミナだけ戻して始める。
+      if (this.rainDue()) this.beginRainDelay(changeover);
+      else this.resumeAfterSet(changeover);
+    }
+
+    /**
+     * セット間の休憩。ゲーム数が奇数で終わったセットなら、その間にコートも入れ替わる。
+     * 偶数なら入れ替わらず（次のセットの第1ゲームの後に入れ替わる）、休憩ぶんの
+     * スタミナだけ戻して始める。
+     */
+    resumeAfterSet(changeover) {
       if (changeover) {
         this.beginChangeover(changeover);
       } else {
         this.recoverStamina(CHANGEOVER.RECOVER_MULT.setBreak);
         this.newPoint();
       }
+    }
+
+    /** @param {string|null} changeover 前の試合が決まった直後のスコアでのチェンジエンズ */
+    startNextMatch(changeover) {
+      this.finale = null;
+      // 次の試合は乾いたコートから（にわか雨なら次の newPoint() でまた小雨から。中断の回数も数え直す）
+      this.rain = null;
+      this.rainCount = 0;
+      this.setWet(0);
+      this.match.reset();
+      this.resetStats(); // 次のマッチは0から数え直す（スタッツ画面はもう出した後）
+      this.matchPointCutDone = false; // 次のマッチの最初のマッチポイントでも演出を出す
+      this.serverPartner = { you: 'you', cpu: 'cpu' }; // 次のセットは主力からサーブし直す
+      this.hooks.score();
+      this.resumeAfterSet(changeover);
     }
 
     /** コートを入れ替わる。会場の向きは表示側が endsSwapped を見て回す。 */
@@ -2214,7 +2295,7 @@
       // （セカンドサーブでもう一度通っても同じ結果になる）。
       this.stakes = pointStakes(this.match, this.server);
       this.placeForServe(faultReason);
-      // 試合で初めてのマッチポイントは、構えに入ったところで演出を挟む。セカンドサーブで
+      // そのゲームで初めてのマッチポイントは、構えに入ったところで演出を挟む。セカンドサーブで
       // 構え直すのは同じ1点なので出さない（練習モードは得点をつけないので、そもそも立たない）。
       const stakes = this.stakes;
       if (stakes && stakes.kind === 'match' && !faultReason && !this.practice && !this.matchPointCutDone) {
@@ -2235,6 +2316,8 @@
       this.serveInFlight = false;
       this.cpuNetRush = false;
       this.rallyShots = 0; // このサーブ（フォールトからのやり直しも含む）から数え直す
+      this.pointSpecials = [];
+      ACTORS.forEach((who) => { this.actor(who).mood = null; }); // 前のポイントの感情表現を持ち越さない
 
       const ball = this.ball;
       ball.live = false;
@@ -2464,6 +2547,7 @@
       const server = this.actor(serverKey);
       const front = TEAM_OF[serverKey] === 'you' ? 0.4 : -0.4;
       const ball = this.ball;
+      ball.netFall = false; // サーブの構えに入ったら、ネット後の落下は打ち切って手元へ戻す
       ball.x = ball.px = server.x;
       ball.z = ball.pz = server.z + front;
       ball.y = ball.py = SERVE.BALL_Y;
@@ -2800,9 +2884,19 @@
       // スマッシュが「走らされた」扱いになり、決め球のはずが 55〜65km/h の当てるだけの
       // 球になっていた（ユーザー報告「溜めずに打つ山なりの球を強打してこない」。実測：
       // Extreme で山なりの球への返球の3割がスマッシュで、その平均が 92km/h）。
-      const smashStretch = stretch
-        * (1 - clamp(player.settleT / CPU.SMASH_SETTLE_T, 0, 1))
-        * (player.runFwd > 0 ? 1 - CPU.SMASH_FORWARD_RELIEF : 1);
+      // 逆に**下がって**叩くスマッシュ（頭上を越されたロブ）と、サービスラインより奥からの
+      // スマッシュは、待てていても苦しい（CPU.SMASH_RETREAT_STRETCH_DIST / SMASH_DEEP_* 参照）。
+      // 以前はここが無く、人間のロブがほぼ全部フルパワーのスマッシュで叩き返されていた。
+      const retreatStretch = clamp(-player.runFwd / CPU.SMASH_RETREAT_STRETCH_DIST, 0, 1);
+      const deepStretch = clamp((Math.abs(ball.z) - CPU.SMASH_DEEP_Z_MIN)
+        / (CPU.SMASH_DEEP_Z_MAX - CPU.SMASH_DEEP_Z_MIN), 0, 1) * CPU.SMASH_DEEP_STRETCH;
+      const smashStretch = Math.max(
+        stretch
+          * (1 - clamp(player.settleT / CPU.SMASH_SETTLE_T, 0, 1))
+          * (player.runFwd > 0 ? 1 - CPU.SMASH_FORWARD_RELIEF : 1),
+        retreatStretch,
+        deepStretch,
+      );
       // ダブルスはラリーが長引きやすく、同じロブ選択率・同じ山なり化の度合いでも
       // 1ポイント中の絶対数が増えて目立つため、DOUBLES.LOB_SCALE / ARC_SCALE で
       // 抑える（config.js のコメント参照）。
@@ -2976,6 +3070,133 @@
      * 空配列を渡せば必殺技なし＝これまでと同じゲームになる（既定）。
      * @param {string[]} keys config.SPECIAL_MOVES の key
      */
+    /** スタート画面の「天候」。false（晴れ）の間は雨が降らない。 */
+    setRain(on) {
+      this.rainEnabled = !!on;
+    }
+
+    setWet(w) {
+      this.wet = clamp(w, 0, 1);
+      setWetness(this.wet);
+    }
+
+    /**
+     * ポイントの始まりに、雨の行方を1回だけ決める（config.RAIN）。にわか雨を選んだ試合は
+     * 最初から小雨が降っている（コートも最初から DRIZZLE_WET まで濡れている）。小雨の間は
+     * MIN_POINTS 本を過ぎていれば HEAVY_CHANCE の確率で雨脚が強まる（1試合に MAX_PER_MATCH 回まで）。
+     */
+    maybeStartRain() {
+      if (!this.rainEnabled || this.practice) return;
+      if (!this.rain) this.rain = { phase: 'drizzle', t: 0, resume: null };
+      if (this.rain.phase !== 'drizzle' || this.rainCount >= RAIN.MAX_PER_MATCH) return;
+      if (this.matchStats.points < RAIN.MIN_POINTS || Math.random() >= RAIN.HEAVY_CHANCE) return;
+      // 中央のコールはこの直後のサーブ案内に上書きされるので、知らせは風の下の天候表示に任せる
+      this.rain = { phase: 'heavy', t: 0, resume: null };
+      this.rainCount++;
+    }
+
+    /** 雨脚が強まっていて、このポイントの後で中断する番か。 */
+    rainDue() {
+      return !!this.rain && this.rain.phase === 'heavy';
+    }
+
+    /**
+     * 雨天中断（ポイント間の一拍の後）。この間は試合そのもの（タイマー・選手・球）が止まり、
+     * tickRain() だけが進む。明けたら、入れ替わるはずだったコート（changeover）から続ける。
+     * @param {string|null} changeover
+     */
+    beginRainDelay(changeover) {
+      this.rain = { phase: 'suspended', t: 0, resume: changeover };
+      this.hooks.call('雨天中断', '雨が上がるのを待っています ／ SPACE でスキップ');
+    }
+
+    /** 中断を切り上げる（Space）。 */
+    skipRainDelay() {
+      if (this.rain && this.rain.phase === 'suspended') this.endRainDelay();
+    }
+
+    endRainDelay() {
+      const resume = this.rain.resume;
+      this.rain = { phase: 'clearing', t: 0, resume: null };
+      this.setWet(1);
+      this.hooks.call('試合再開', 'コートが濡れていて、球が低く滑ります');
+      this.after(RAIN.RESUME_T, () => {
+        if (resume) this.beginChangeover(resume);
+        else this.newPoint();
+      });
+    }
+
+    tickRain(dt) {
+      const rain = this.rain;
+      if (!rain) return;
+      rain.t += dt;
+      if (rain.phase === 'drizzle') {
+        // 小雨の間は、少なくとも DRIZZLE_WET まで濡れている（中断明けの濡れは1ポイントごとにそこまで乾く）
+        this.setWet(Math.max(this.wet, RAIN.DRIZZLE_WET));
+      } else if (rain.phase === 'heavy') {
+        // 強い雨の中でポイントを終えるまでに、さらに濡れていく
+        this.setWet(Math.max(this.wet, RAIN.DRIZZLE_WET
+          + (RAIN.HEAVY_WET - RAIN.DRIZZLE_WET) * Math.min(1, rain.t / RAIN.HEAVY_T)));
+      } else if (rain.phase === 'suspended') {
+        if (rain.t >= RAIN.DELAY) this.endRainDelay();
+      } else if (rain.t >= RAIN.CLEAR_T) {
+        // シートを外し終えた。雨は小雨に戻って降り続く（コートは小雨の濡れ具合まで、1ポイントごとに乾いていく）
+        this.rain = { phase: 'drizzle', t: 0, resume: null };
+      }
+    }
+
+    /** @param {{you?:string, youMate?:string, cpu?:string, cpuMate?:string}} tempers */
+    setTempers(tempers) {
+      ACTORS.forEach((who) => {
+        const t = tempers[who];
+        this.tempers[who] = EMOTION.TEMPERS[t] ? t : 'normal';
+      });
+    }
+
+    /**
+     * ポイントが決まった直後の、4人それぞれの感情表現（actor.mood ＝ {kind, t}。表示側が形にする）。
+     * kind は 'fist'（ガッツポーズ）／'slump'（うなだれる）／'smash'（ラケットを叩きつける）。
+     * 何もしない選手は null のまま。t は決着からの秒数（tickMoods() が進める）。
+     * @param {'you'|'cpu'} winner
+     * @param {string} outcome endPoint() の決まり方
+     * @param {object|null} stakes かかっていた1点（scoring.pointStakes()）
+     * @param {string} server その1点をサーブした選手
+     * @param {boolean} broken この1点でサーバーのゲームが落ちた（ブレークされた）
+     */
+    setMoods(winner, outcome, stakes, server, broken) {
+      const rollFor = (who) => {
+        const T = EMOTION.TEMPERS[this.tempers[who]] || EMOTION.TEMPERS.normal;
+        if (TEAM_OF[who] === winner) {
+          const big = !!stakes;
+          const notable = big || outcome === 'ace' || outcome === 'winner'
+            || this.rallyShots >= EMOTION.LONG_RALLY;
+          return notable && Math.random() < (big ? T.FIST_BIG : T.FIST) ? 'fist' : null;
+        }
+        if (broken && who === server && Math.random() < T.SMASH) return 'smash';
+        const ownMiss = outcome === 'error' || outcome === 'doubleFault';
+        return (ownMiss || stakes) && Math.random() < T.SLUMP ? 'slump' : null;
+      };
+      ACTORS.forEach((who) => {
+        if (!this.doubles && (who === 'youMate' || who === 'cpuMate')) return;
+        const kind = rollFor(who);
+        this.actor(who).mood = kind ? { kind, t: 0 } : null;
+        // 叩きつけた瞬間の音（振りかぶって振り下ろした時点）。ゲームの時計なので、リプレイの間は進まない
+        if (kind === 'smash') {
+          const S = EMOTION.SMASH;
+          this.after(EMOTION.DELAY + S.RAISE_T + S.SLAM_T, () => this.hooks.sound('racketSmash'));
+        }
+      });
+    }
+
+    tickMoods(dt) {
+      ACTORS.forEach((who) => {
+        const actor = this.actor(who);
+        if (!actor.mood) return;
+        actor.mood.t += dt;
+        if (actor.mood.t >= EMOTION.DELAY + EMOTION.SPAN) actor.mood = null;
+      });
+    }
+
     setSpecials(keys) {
       const known = SPECIAL_MOVES.map((m) => m.key);
       this.specials = (keys || []).filter((k) => known.indexOf(k) !== -1);
@@ -3154,6 +3375,7 @@
 
     /** 誰か（serve()/hit()の呼び出し元）が新しく打った瞬間、軌跡をその打点1点から描き直す。 */
     resetTrail() {
+      this.ball.netFall = false; // 前のポイントのネット後の落下が残っていても、新しい1打で打ち切る
       this.trail = [{ x: this.ball.x, y: this.ball.y, z: this.ball.z }];
     }
 
@@ -3246,7 +3468,12 @@
 
       // ロブは威力ではなくタッチの球なので能力の倍率は掛けない（CPU/AI 側の cpuShot() と同じ扱い）。
       const strokeAttr = attr[stroke === 'backhand' ? 'backhand' : 'forehand'];
-      const flight = lob ? SHOT.LOB_T : lerp(SHOT.TAP_T, SHOT.CHARGE_T, charge) * strokeAttr;
+      // ロブは溜めで高い守りのロブ（溜めなし）〜低く速い攻めのロブ（フル溜め）を打ち分ける。
+      // スピンで実効重力が変わっても頂点の高さが同じになるよう √(重力比) で飛翔時間を補正する
+      // （頂点の高さ ∝ 重力×飛翔時間²）。トップスピンは速く、スライスはゆっくり落ちてくる。
+      const lobFlight = lerp(SHOT.LOB_T, SHOT.LOB_ATTACK_T, charge)
+        * Math.sqrt(spinGravity('flat') / spinGravity(this.you.chargeSpin));
+      const flight = lob ? lobFlight : lerp(SHOT.TAP_T, SHOT.CHARGE_T, charge) * strokeAttr;
       // 溜めるほど深く。速さと深さの両方が変わるので「強い球を打った」感が出る。
       const depth = lerp(SHOT.TAP_Z, SHOT.CHARGE_Z, charge);
 
@@ -3261,7 +3488,7 @@
         target: {
           x: aimed + spread(-risk, risk),
           y: BALL_R,
-          z: lob ? SHOT.LOB_Z : spread(depth, depth + SHOT.DRIVE_Z_SPREAD),
+          z: lob ? lerp(SHOT.LOB_Z, SHOT.LOB_ATTACK_Z, charge) : spread(depth, depth + SHOT.DRIVE_Z_SPREAD),
         },
         flight,
         lob,
@@ -3480,6 +3707,61 @@
     resetStats() {
       this.stats = teamStats();
       this.matchStats = { points: 0, longestRally: 0, totalShots: 0 };
+      this.pointLog = [];
+    }
+
+    /**
+     * 決まった1点の記録。score は config.HIGHLIGHT.SCORE で付ける見どころの点数。
+     * @param {'you'|'cpu'} winner
+     * @param {'ace'|'winner'|'error'|'doubleFault'} outcome
+     * @param {string|null} stake 取った側から見たかかっていた1点（'match'|'break'|'game'|'saved'）
+     * @param {number|null} serveKmh エースのときだけそのサーブの球速
+     */
+    pointRecord(winner, outcome, stake, serveKmh) {
+      const S = HIGHLIGHT.SCORE;
+      const shots = this.rallyShots;
+      const specials = this.pointSpecials.slice();
+      let score = shots * S.PER_SHOT;
+      if (outcome === 'ace') score += S.ACE + (serveKmh >= S.FAST_SERVE_KMH ? S.FAST_SERVE : 0);
+      if (outcome === 'winner') score += S.WINNER;
+      if (specials.length) score += S.SPECIAL;
+      if (stake) score += S.STAKE[stake] || 0;
+      return {
+        id: ++this.pointSeq,
+        winner, outcome, stake, serveKmh, shots, specials, score,
+        games: { you: this.match.games.you, cpu: this.match.games.cpu },
+      };
+    }
+
+    /**
+     * 試合後に流すハイライトの1点（pointLog から選んだ記録を、古い順に）。
+     * 最後の1点（試合を決めた1点）は必ず入れ、残りは点数の高い順に MIN_SCORE 以上から選ぶ
+     * （同点なら長いラリーを先に）。表示側は録ってあるコマのうち、ここで選ばれる可能性の
+     * ある id だけを残せばよい（highlightKeep()）。
+     */
+    highlightPicks() {
+      const log = this.pointLog;
+      if (!log.length) return [];
+      const last = log[log.length - 1];
+      const rest = log.slice(0, -1)
+        .filter((p) => p.score >= HIGHLIGHT.MIN_SCORE)
+        .sort((a, b) => b.score - a.score || b.shots - a.shots)
+        .slice(0, HIGHLIGHT.MAX_CLIPS - 1);
+      return rest.concat([last]).sort((a, b) => a.id - b.id);
+    }
+
+    /**
+     * ハイライトに入りうる1点の id（いまの上位 MAX_CLIPS 本＋直前の1点＝次の1点で試合が
+     * 決まらなくても、点数が高ければ残る）。表示側はこれ以外の録画を捨ててよい。
+     */
+    highlightKeep() {
+      const log = this.pointLog;
+      const top = log.filter((p) => p.score >= HIGHLIGHT.MIN_SCORE)
+        .sort((a, b) => b.score - a.score || b.shots - a.shots)
+        .slice(0, HIGHLIGHT.MAX_CLIPS);
+      const ids = new Set(top.map((p) => p.id));
+      if (log.length) ids.add(log[log.length - 1].id);
+      return ids;
     }
 
     /**
@@ -3493,10 +3775,13 @@
         winner,
         doubles: this.doubles,
         games: { you: this.match.games.you, cpu: this.match.games.cpu },
+        // 各セットのゲーム数（古い順）。1セットマッチなら games と同じ1つだけ
+        sets: this.match.setScores.map((s) => ({ ...s })),
         points,
         longestRally,
         // 1ポイントあたりの平均本数（サーブを1本目に数える）。0ポイントで割らない。
         avgRally: points ? totalShots / points : 0,
+        highlights: this.highlightPicks(),
         you: { ...this.stats.you },
         cpu: { ...this.stats.cpu },
       };
@@ -3560,6 +3845,8 @@
       // 出してあるので、それをそのまま「決め球で取った(winners)」「相手のミスで取った
       // (相手の unforced)」に振り分ける。エース／ダブルフォルトは専用の欄に数えるので
       // ここでは二重に数えない。
+      this.lastPoint = this.pointRecord(winner, outcome, stakeKey, isAce ? this.lastServeKmh : null);
+      this.pointLog.push(this.lastPoint);
       this.stats[winner].points++;
       if (outcome === 'winner') this.stats[winner].winners++;
       else if (outcome === 'error') this.stats[opponent(winner)].unforced++;
@@ -3567,8 +3854,13 @@
       this.matchStats.totalShots += this.rallyShots;
       this.matchStats.longestRally = Math.max(this.matchStats.longestRally, this.rallyShots);
 
+      // サーブ権が移る前に（ブレークされたサーバー）。タイブレークにはブレークがない
+      const server = this.servingPlayer();
+      const inTiebreak = this.match.tiebreak;
       const result = this.match.awardPoint(winner);
       const mine = winner === 'you';
+      this.setMoods(winner, outcome, stakes, server,
+        result.type !== 'point' && !inTiebreak && winner !== this.server);
       // この1点でコートを入れ替わるか（チェンジエンズ）。決まった直後のスコアで判定する
       // ＝セットの終わりは match.reset() の前（最終スコアのゲーム数）で見る。
       const changeover = changeoverAfter(result, this.match);
@@ -3591,12 +3883,23 @@
         this.passServe(); // ゲームごとにサーブ交代
         if (result.tiebreak) this.tiebreakOpener = this.server; // 6-6：ここからタイブレーク
         this.refreshSpecials(); // 必殺技はゲームが替わるたびに回復する
+        this.matchPointCutDone = false; // マッチポイントの演出はゲームごとに1回（次のゲームでまた出す）
       }
 
-      if (result.type === 'set') {
+      if (result.type === 'set' && result.matchOver) {
         this.hooks.call('ゲームセット', mine ? 'あなたの勝ち' : 'CPU の勝ち');
         this.hooks.score();
         this.beginFinale(winner, changeover);
+        return;
+      }
+      if (result.type === 'set') {
+        // まだ試合は続く（複数セットの試合）。決まったセットのスコアを読む一拍の後、次のセットへ
+        const { games, sets } = this.match;
+        const n = sets.you + sets.cpu;
+        this.hooks.call(`セット — ${mine ? 'YOU' : 'CPU'}`,
+          `第${n}セット ${games.you}-${games.cpu} ／ セットカウント ${sets.you}-${sets.cpu}`);
+        this.hooks.score();
+        this.after(TIMING.NEXT_POINT, () => this.startNextSet(changeover));
         return;
       }
 
@@ -3606,7 +3909,7 @@
       // ブレークで取ったゲームはそう言う（サーブを持っていない側が取った＝試合が動く1ゲーム）。
       const broke = stakes && stakes.breakPoint && stakes.team === winner;
       const sub = result.type === 'game'
-        ? `ゲーム — ${mine ? 'YOU' : 'CPU'}${broke ? '（ブレーク！）' : ''}${result.tiebreak ? '（6-6 タイブレーク！）' : ''}`
+        ? `ゲーム — ${mine ? 'YOU' : 'CPU'}${broke ? '（ブレーク！）' : ''}${result.tiebreak ? `（${this.match.games.you}-${this.match.games.cpu} タイブレーク！）` : ''}`
         : reason === 'ツーバウンド' ? twoBounceCall : reason;
       // 取った側がこのポイントで最後に放ったショット（決め球、または相手のミスを誘った球）。
       // 相手のネット／アウトで決まった場合は「その1本前に自分が打った球」になる。
@@ -3619,8 +3922,12 @@
       this.hooks.call(mine ? 'ポイント' : '失点', sub, shot);
       this.hooks.score();
       // 入れ替わるときも、決まったコールを読む一拍（NEXT_POINT）を置いてから暗転する
+      // 濡れたコートは1ポイントごとに乾いていく（小雨が降っている間は小雨の濡れ具合までしか乾かない）
+      const dryFloor = this.rain ? RAIN.DRIZZLE_WET : 0;
+      if (this.wet > dryFloor) this.setWet(Math.max(dryFloor, this.wet - 1 / RAIN.WET_POINTS));
       this.after(TIMING.NEXT_POINT, () => {
-        if (changeover) this.beginChangeover(changeover);
+        if (this.rainDue()) this.beginRainDelay(changeover);
+        else if (changeover) this.beginChangeover(changeover);
         else this.newPoint();
       });
     }
@@ -3814,8 +4121,15 @@
         this.tickFinaleCut(dt);
         return;
       }
+      // 雨天中断の間も止める（選手はコートを離れ、シートが掛かっている）
+      if (this.rain && this.rain.phase === 'suspended') {
+        this.tickRain(dt);
+        return;
+      }
+      this.tickRain(dt);
       this.tickTimers(dt);
       this.tickChangeover(dt);
+      this.tickMoods(dt);
 
       const swingBefore = this.you.swing;
       this.you.anim = Math.max(0, this.you.anim - dt);
@@ -3845,7 +4159,7 @@
       // 軌跡を打ち返した側の打点から描き直すので、ここで伸ばすのは常に「今まさに飛んでいる
       // 最新の1打」。ポイントが終わった瞬間から先は（ball.live===false になり）伸びず、
       // その時点の軌跡がそのまま残る（＝次に誰かが打つまで、最新の1本として表示され続ける）。
-      if (this.ball.live && this.trail.length < TRAIL.MAX_POINTS) {
+      if ((this.ball.live || this.ball.netFall) && this.trail.length < TRAIL.MAX_POINTS) {
         this.trail.push({ x: this.ball.x, y: this.ball.y, z: this.ball.z });
       }
 
@@ -4786,6 +5100,23 @@
         return;
       }
 
+      // ネットに掛かって決まった後の球。得点・当たり判定には一切関わらせず、重力だけで
+      // 1バウンドするまで落とし続ける（以前は決まった瞬間に ball.live=false でネット際の
+      // 空中に止まり、軌跡もそこで途切れていた）。着地点は bounce() と同じく明示的に軌跡へ足す。
+      if (!ball.live && ball.netFall) {
+        integrate(ball, dt);
+        ball.netFallT += dt;
+        if (ball.y <= BALL_R || ball.netFallT >= NET.FALL_MAX_SEC) {
+          ball.y = Math.max(ball.y, BALL_R);
+          ball.vx = ball.vy = ball.vz = 0;
+          ball.netFall = false;
+          if (this.trail.length < TRAIL.MAX_POINTS) {
+            this.trail.push({ x: ball.x, y: ball.y, z: ball.z });
+          }
+        }
+        return;
+      }
+
       if (!ball.live) {
         if (this.phase === 'serve') this.placeServeBall();
         return;
@@ -4811,6 +5142,8 @@
         ball.vz *= NET.FAULT_VZ_MULT;
         ball.vx *= NET.FAULT_VX_MULT;
         ball.vy *= NET.FAULT_VY_MULT;
+        ball.netFall = true; // ↓で live が落ちても、1バウンドするまでは落ち続けさせる
+        ball.netFallT = 0;
         if (this.serveInFlight) this.serveFault('ネット');
         else this.endPoint(opponent(ball.last), 'ネット');
         return;

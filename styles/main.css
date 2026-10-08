@@ -46,7 +46,7 @@ canvas{display:block}
 
 /* broadcast-style scorebug */
 #bug{
-  display:grid;grid-template-columns:auto 46px 56px;
+  display:grid;grid-template-columns:auto auto 46px 56px;
   background:rgba(9,20,34,.82);
   border-left:4px solid var(--ball);
   border-radius:2px;
@@ -57,9 +57,18 @@ canvas{display:block}
 #bug div{padding:6px 10px;font-size:13px;letter-spacing:.04em;line-height:1.15}
 #bug .nm{min-width:112px;text-transform:uppercase;font-weight:600}
 #bug .gm{text-align:center;color:var(--dim)}
+/* 決まったセットのゲーム数（「6 3」のように並べる）。1セット目が決まるまでは幅ごと消える */
+#bug .st{padding:6px 0;color:var(--dim);font-size:12px;letter-spacing:.12em;white-space:nowrap}
+#bug .st:not(:empty){padding:6px 4px 6px 8px}
+#bug .st b{display:inline-block;min-width:1.2em;text-align:center;font-weight:400}
+#bug .st b.won{color:var(--line);font-weight:700}
 #bug .pt{text-align:center;background:rgba(216,242,74,.12);font-weight:700}
 #bug .row2{display:contents}
 #bug .row2 div{border-top:1px solid rgba(232,238,245,.12)}
+#bug .nm .side{
+  display:inline-block;margin-right:7px;padding:0 4px;border-radius:2px;
+  font-size:10px;letter-spacing:.06em;color:var(--dim);border:1px solid rgba(232,238,245,.25)
+}
 #bug .srv::after{content:"●";color:var(--ball);font-size:9px;margin-left:6px;vertical-align:2px}
 
 /* エース／ダブルフォルトの通算（you–cpu）。スコアボードの邪魔をしない控えめな表示 */
@@ -83,6 +92,14 @@ canvas{display:block}
   animation:stakePulse 1.6s ease-in-out infinite;
 }
 #stakes:empty{display:none}
+/* タイブレーク中の札。#stakes（その1点の山場）と違い、タイブレークの間ずっと出ているので点滅させない */
+#tiebreakTag{
+  margin-top:6px;padding:4px 10px;
+  background:rgba(9,20,34,.85);border-radius:2px;
+  border-left:3px solid var(--ball);
+  font-size:12px;font-weight:700;letter-spacing:.1em;color:var(--ball);
+}
+#tiebreakTag[hidden]{display:none}
 #stakes.brk{color:#ff6b6b}
 #stakes.match{color:#ffc83d}
 /* 誰にかかっているか。見出しより一段落として、色は見出しから受け継ぐ */
@@ -101,6 +118,14 @@ canvas{display:block}
   font-variant-numeric:tabular-nums;
 }
 #wind:empty{display:none}
+/* 雨・濡れたコート。弾み方に効くので風と同じくらい目立たせ、色だけ雨の青にする */
+#weather{
+  margin-top:6px;padding:4px 10px;
+  background:rgba(9,20,34,.75);border-radius:2px;
+  border-left:3px solid #7fb3e6;
+  font-size:13px;font-weight:700;letter-spacing:.04em;color:#cfe3f7;
+}
+#weather:empty{display:none}
 
 /* サーブ速度。風と同じスコアバー脇の並びだが、控えめな #stats 寄りの主張の弱さにする */
 #serveSpeed{
@@ -126,15 +151,45 @@ canvas{display:block}
 .spUse{flex:0 0 calc(50% - 4px);color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .spUse.on{color:#ffc83d}
 
+/* ダブルスの立ち位置の指示（Q/E＝パートナー、R/F＝自分）。効いている方を黄緑で点灯させ、
+   押すキーを添える。サーブ待ちの担当の注記（.fmNote）は行の下に出す。シングルスでは
+   hud が中身を空にするので :empty で行ごと消える（風・サーブ速度と同じ作り）。
+   注記は width:0＋min-width:100% で、列の幅（スコアボードで決まる）を押し広げずに
+   その幅いっぱいで折り返す（ふつうに置くと、注記の1行の長さまで左上の列全体が広がる）。 */
+#formation{
+  margin-top:6px;padding:4px 10px 5px;
+  background:rgba(9,20,34,.6);border-radius:2px;
+  border-left:3px solid var(--ball);
+  font-size:11px;letter-spacing:.04em;
+}
+#formation:empty{display:none}
+.fmHead{color:var(--dim);letter-spacing:.12em}
+.fmRow{display:flex;flex-wrap:wrap;align-items:center;gap:3px 4px;margin-top:4px}
+.fmWho{min-width:64px;white-space:nowrap}
+.fmOpt{padding:1px 7px;border-radius:2px;white-space:nowrap;
+  color:var(--dim);border:1px solid rgba(232,238,245,.18)}
+.fmOpt.on{color:var(--ink);background:var(--ball);border-color:var(--ball);font-weight:700}
+.fmKey{font-size:9px;font-weight:600;margin-right:4px;opacity:.75}
+.fmOpt.flash{animation:fmFlash .6s ease-out}
+.fmNote{width:0;min-width:100%;margin-top:2px;font-size:10px;color:#f2a65a}
+@keyframes fmFlash{from{box-shadow:0 0 0 4px rgba(216,242,74,.55)}to{box-shadow:0 0 0 0 rgba(216,242,74,0)}}
+@media (prefers-reduced-motion:reduce){.fmOpt.flash{animation:none}}
+
 /* スタミナ（自分以外も含めた全員を常時表示。パートナー/CPU2はダブルスのときだけ）。
    ラリーで減り、ポイント間で少し回復する */
 #stamina{
   margin-top:6px;padding:5px 10px;
   background:rgba(9,20,34,.6);border-radius:2px;
-  display:flex;flex-direction:column;gap:4px;
+  /* 名前の長さが選手ごとに違っても、バーの左端が揃うように列で組む */
+  display:grid;grid-template-columns:auto 1fr;align-items:center;gap:4px 8px;
 }
-.staminaRow{display:flex;align-items:center;gap:8px}
+.staminaRow{display:contents}
 .staminaLabel{font-size:11px;letter-spacing:.04em;color:var(--dim);white-space:nowrap;min-width:52px}
+/* 枠の呼び名（YOU／CPU／パートナー／CPU2）の小札。スコアボードの名前欄（#bug .nm .side）と同じ見た目 */
+.staminaLabel .side{
+  display:inline-block;margin-right:6px;padding:0 4px;border-radius:2px;
+  font-size:9px;letter-spacing:.06em;border:1px solid rgba(232,238,245,.25)
+}
 .staminaBar{flex:1;height:5px;border-radius:3px;overflow:hidden;
   background:rgba(232,238,245,.12);
 }
@@ -248,6 +303,24 @@ canvas{display:block}
 #replayTag .markTag{display:none;letter-spacing:.1em;color:var(--ball)}
 #replayTag.mark .markTag{display:inline}
 @keyframes replayBlink{50%{opacity:.15}}
+/* 試合後のハイライト中は「リプレイ」の代わりに「ハイライト 2/4」と出す */
+#replayTag .hlTag{display:none}
+#replayTag.hl .rtLabel{display:none}
+#replayTag.hl .hlTag{display:inline}
+#hlCaption{
+  position:absolute;left:24px;bottom:22%;max-width:calc(100vw - 48px);
+  padding:10px 20px 11px;background:rgba(9,20,34,.86);
+  border-left:4px solid var(--ball);border-radius:2px;
+  box-shadow:0 6px 24px rgba(0,0,0,.35);
+  opacity:0;transform:translateX(-12px);transition:opacity .2s,transform .2s
+}
+#hlCaption.on{opacity:1;transform:none}
+#hlCaption .hlTitle{font-size:24px;font-weight:700;line-height:1.25}
+#hlCaption .hlSub{font-size:13px;color:#c8d3e0;margin-top:3px;letter-spacing:.03em}
+@media (max-width:620px){
+  #hlCaption{left:16px;max-width:calc(100vw - 32px)}
+  #hlCaption .hlTitle{font-size:19px}
+}
 
 #smashTip{
   font-size:12px;letter-spacing:.08em;white-space:nowrap;

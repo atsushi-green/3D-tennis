@@ -6,7 +6,7 @@
   const {
     GUIDE, SERVE, WIND, STAMINA, SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, getRating,
     CHARACTERS, CHARACTER_BUDGET, CHARACTER_DEFAULT, THEME, SURFACE_COLORS,
-    SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE,
+    SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE, MATCH_FORMATS,
   } = RallyOne.config;
   /** 練習モードのレッスン一覧の見出し（config.PRACTICE.LESSONS の group ごと） */
   const LESSON_GROUPS = { basic: '基本', special: '必殺技' };
@@ -27,6 +27,16 @@
   const accentOf = (c) => (c.look ? c.look.accent : c.accent);
   /** レーダーチャートの軸＝人間にも効く項目（ネット志向は AI の動き方の好みなので外す）。 */
   const RADAR_SKILLS = SKILLS.filter((s) => !s.aiOnly);
+  /**
+   * ダブルスの「立ち位置の指示」の札（setFormation）の行。keys は input.js の
+   * FORMATION_NET/BACK（パートナー）・STAND_NET/BACK（自分）と同じキー。duty は、サーブ待ちで
+   * その人がサーバー／レシーバーの番のときに添える「指示がどう効くか」（Game#formationOrders）。
+   */
+  const FORMATION_ROWS = [
+    { who: 'youMate', label: 'パートナー', keys: { net: 'Q', back: 'E' }, duty: '打ってから効く' },
+    { who: 'you', label: '自分', keys: { net: 'R', back: 'F' }, duty: 'このポイントは動けない' },
+  ];
+  const FORMATION_LABEL = { net: '前', back: '後ろ' };
   /** レーダーチャートの半径（viewBox -100〜100 の単位）。軸の名前はこの外側に置く。 */
   const RADAR = { R: 56, LABEL_R: 67 };
   /** ガイドで「タイミングが効かない」と伝えるときの打ち方の呼び名。 */
@@ -221,10 +231,13 @@
       this.el = {
         names: { you: $('n1'), cpu: $('n2') },
         games: { you: $('g1'), cpu: $('g2') },
+        setCells: { you: $('s1'), cpu: $('s2') },
+        formatInfo: $('formatInfo'),
         points: { you: $('p1'), cpu: $('p2') },
         aces: { you: $('ace1'), cpu: $('ace2') },
         doubleFaults: { you: $('df1'), cpu: $('df2') },
         stakes: $('stakes'),
+        tiebreakTag: $('tiebreakTag'),
         wind: $('wind'),
         serveSpeed: $('serveSpeed'),
         matchLevel: $('matchLevel'),
@@ -234,6 +247,12 @@
         staminaFillCpuMate: $('staminaFillCpuMate'),
         staminaRowYouMate: $('staminaRowYouMate'),
         staminaRowCpuMate: $('staminaRowCpuMate'),
+        staminaLabels: {
+          you: $('staminaLabelYou'),
+          cpu: $('staminaLabelCpu'),
+          youMate: $('staminaLabelYouMate'),
+          cpuMate: $('staminaLabelCpuMate'),
+        },
         shade: $('shade'),
         hud: $('hud'),
         lsKicker: $('lsKicker'),
@@ -258,6 +277,7 @@
         smashTip: $('smashTip'),
         specialTip: $('specialTip'),
         specialUses: $('specialUses'),
+        formation: $('formation'),
         specialSegs: $('specialSegs'),
         specialPresets: $('specialPresets'),
         specialBadge: $('specialBadge'),
@@ -266,6 +286,11 @@
         guideText: $('guideText'),
         guideNeedle: $('guideNeedle'),
         replayTag: $('replayTag'),
+        weather: $('weather'),
+        hlCount: $('hlCount'),
+        hlCaption: $('hlCaption'),
+        hlTitle: $('hlTitle'),
+        hlSub: $('hlSub'),
         matchStats: $('matchStats'),
         msTitle: $('msTitle'),
         msScore: $('msScore'),
@@ -289,6 +314,8 @@
         modeOpts: segs('modeRow'),
         diffOpts: segs('diffRow'),
         surfaceOpts: segs('surfaceRow'),
+        sessionOpts: segs('sessionRow'),
+        weatherOpts: segs('weatherRow'),
         styleOpts: segs('styleRow'),
         firstServeOpts: segs('firstServeRow'),
         guideOpts: segs('guideRow'),
@@ -308,9 +335,33 @@
       const bind = (opts, fn) => opts.forEach((el) => {
         el.addEventListener('click', () => fn(el.dataset.level));
       });
+      // 試合の長さのカード（config.MATCH_FORMATS から作る。L＝ゲーム数、M＝セット数で順に切り替わる）
+      const formatCards = (rowId, list, kbd, onSelect) => {
+        const cards = list.map((f) => {
+          const el = document.createElement('div');
+          el.className = 'seg';
+          el.dataset.level = String(f.key);
+          const key = document.createElement('kbd');
+          key.textContent = kbd;
+          const name = document.createElement('b');
+          name.className = 'optName';
+          name.textContent = f.label;
+          const hint = document.createElement('em');
+          hint.textContent = f.hint;
+          el.append(key, name, hint);
+          el.addEventListener('click', () => onSelect(f.key));
+          return el;
+        });
+        $(rowId).querySelector('.segs').replaceChildren(...cards);
+        return cards;
+      };
+      this.el.gamesOpts = formatCards('gamesRow', MATCH_FORMATS.GAMES, 'L', handlers.onSelectGames);
+      this.el.setsOpts = formatCards('setsRow', MATCH_FORMATS.SETS, 'M', handlers.onSelectSets);
       bind(this.el.modeOpts, (level) => handlers.onSelectMode(level === 'doubles'));
       bind(this.el.diffOpts, handlers.onSelectDifficulty);
       bind(this.el.surfaceOpts, handlers.onSelectSurface);
+      bind(this.el.sessionOpts, handlers.onSelectSession);
+      bind(this.el.weatherOpts, (level) => handlers.onSelectRain(level === 'rain'));
       bind(this.el.styleOpts, handlers.onSelectStyle);
       bind(this.el.firstServeOpts, handlers.onSelectFirstServe);
       bind(this.el.guideOpts, (level) => handlers.onSelectGuide(level === 'on'));
@@ -758,6 +809,58 @@
       el.classList.toggle('low', fraction < STAMINA.LOW_THRESHOLD);
     }
 
+    /**
+     * 試合中の表示（スコアボードの名前欄・スタミナの行）に、スタート画面で選んだ選手の名前を出す
+     * （試合を始めるときに main.js が呼ぶ）。スコアボードは「YOU」「CPU」の小札を残したうえで
+     * 名前を並べる（選手名だけだと、どちらが自分の側か一目で分からないため）。ダブルスは2人を
+     * 「名 / 名」で並べ、長くなりすぎないよう名前の「・」より前（ファーストネーム）だけにする。
+     * カスタムの選手には名前が無いので、枠の呼び名（YOU／パートナー など）をそのまま使う。
+     * @param {{[who:string]: string}} picks 枠ごとの config.CHARACTERS の key、または 'custom'
+     * @param {boolean} doubles
+     */
+    setPlayerNames(picks, doubles) {
+      const nameOf = (who) => {
+        const picked = pickOf(picks[who]);
+        return picked === CUSTOM ? null : picked.name;
+      };
+      const short = (name) => name.split('・')[0];
+      // ハイライトの見出しで「誰のポイントか」を言うのに使う（スコアボードの名前と同じ考え方）
+      this.teamNames = {};
+      // スタミナの行も、スコアボードと同じく枠の呼び名（YOU／CPU など）の小札を名前の前に付ける。
+      // カスタムの選手（名前なし）は呼び名だけ＝小札と同じ文字を2度並べない。
+      ROSTER.forEach((r) => {
+        const label = this.el.staminaLabels[r.key];
+        const name = nameOf(r.key);
+        if (!name) {
+          label.textContent = r.label;
+          return;
+        }
+        const tag = document.createElement('span');
+        tag.className = 'side';
+        tag.textContent = r.label;
+        label.replaceChildren(tag, name);
+      });
+      ['you', 'cpu'].forEach((side) => {
+        const members = doubles ? [side, `${side}Mate`] : [side];
+        const names = members.map(nameOf);
+        const cell = this.el.names[side];
+        const sideLabel = ROSTER.find((r) => r.key === side).label;
+        if (names.every((n) => n == null)) {
+          cell.textContent = sideLabel; // 全員カスタム＝これまでどおり YOU／CPU だけ
+          this.teamNames[side] = sideLabel;
+          return;
+        }
+        const tag = document.createElement('span');
+        tag.className = 'side';
+        tag.textContent = sideLabel;
+        const text = doubles
+          ? names.map((n, i) => (n ? short(n) : ROSTER.find((r) => r.key === members[i]).label)).join(' / ')
+          : names[0];
+        cell.replaceChildren(tag, text);
+        this.teamNames[side] = text;
+      });
+    }
+
     /** スタート画面の試合形式（シングルス／ダブルス）表示を切り替える。 */
     setMode(doubles) {
       const level = doubles ? 'doubles' : 'singles';
@@ -791,6 +894,41 @@
     /** スタート画面のサーフェス表示を切り替える（実際の適用は config.applySurface が行う）。 */
     setSurface(level) {
       this.el.surfaceOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === level));
+    }
+
+    /**
+     * スタート画面の試合の長さの表示と、試合中の右上の「3 set match · first to 6」。
+     * @param {number} games MATCH_FORMATS.GAMES の key
+     * @param {number} sets MATCH_FORMATS.SETS の key
+     */
+    setMatchFormat(games, sets) {
+      (this.el.gamesOpts || []).forEach((el) => el.classList.toggle('on', el.dataset.level === String(games)));
+      (this.el.setsOpts || []).forEach((el) => el.classList.toggle('on', el.dataset.level === String(sets)));
+      this.el.formatInfo.textContent = `${sets} set match · first to ${games}`;
+    }
+
+    /** スタート画面の時間帯（'day'｜'night'）の表示。 */
+    setSession(level) {
+      this.el.sessionOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === level));
+    }
+
+    /** スタート画面の天候（にわか雨あり／なし）の表示。 */
+    setRainOption(on) {
+      const level = on ? 'rain' : 'clear';
+      this.el.weatherOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === level));
+    }
+
+    /**
+     * 試合中の天候の表示（風の下）。降っている間はその段階を、上がった後は濡れ具合を出す。
+     * @param {{phase:string}|null} rain game.rain
+     * @param {number} wet game.wet（0〜1）
+     */
+    setWeather(rain, wet) {
+      const text = !rain ? (wet > 0.01 ? `コート濡れ ${Math.round(wet * 100)}%（低く滑る）` : '')
+        : rain.phase === 'drizzle' ? '小雨（強まると中断）'
+          : rain.phase === 'heavy' ? '強い雨（このポイントの後で中断）'
+          : rain.phase === 'suspended' ? '雨天中断' : '雨が弱まった';
+      if (this.el.weather.textContent !== text) this.el.weather.textContent = text;
     }
 
     /**
@@ -852,6 +990,7 @@
       const {
         points, games, tiebreak, tiebreakPoints,
       } = match;
+      this.el.tiebreakTag.hidden = !tiebreak;
       if (tiebreak) {
         // タイブレーク中は 0/15/30/40 ではなく素点（1点刻み）で表示する
         this.el.points.you.textContent = tiebreakPoints.you;
@@ -862,6 +1001,20 @@
       }
       this.el.games.you.textContent = games.you;
       this.el.games.cpu.textContent = games.cpu;
+      // 決まったセットのゲーム数（取った側を明るく）。中身が変わったときだけ組み直す
+      const setsKey = match.setScores.map((s) => `${s.you}-${s.cpu}`).join(',');
+      if (setsKey !== this.setsKey) {
+        this.setsKey = setsKey;
+        ['you', 'cpu'].forEach((side) => {
+          const other = side === 'you' ? 'cpu' : 'you';
+          this.el.setCells[side].replaceChildren(...match.setScores.map((s) => {
+            const b = document.createElement('b');
+            b.textContent = s[side];
+            if (s[side] > s[other]) b.className = 'won';
+            return b;
+          }));
+        });
+      }
       this.el.names.you.className = 'nm' + (server === 'you' ? ' srv' : '');
       this.el.names.cpu.className = 'nm' + (server === 'cpu' ? ' srv' : '');
       this.el.aces.you.textContent = stats.you.aces;
@@ -892,6 +1045,57 @@
       // スコアボードと同じ呼び名（ダブルスでもチーム名としてそのまま通る）
       who.textContent = stakes.team === 'you' ? 'YOU' : 'CPU';
       el.replaceChildren(document.createTextNode(stakes.label), who);
+    }
+
+    /**
+     * ダブルスの立ち位置の指示のいまの状態（パートナー＝Q/E、自分＝R/F）。指示を受けたときの
+     * コールはすぐ消えるので、いまどちらになっているかを常に出しておく。効いている方を点灯させて
+     * 押すキーを添え、サーブ待ちでその人がサーバー／レシーバーの番なら、指示がどう効くかを添える。
+     * 指示が変わった行は点灯をひと瞬き光らせる（担当の注記が変わっただけでは光らせない）。
+     * 毎フレーム呼ばれるので、中身が変わったときだけ組み立て直す（setStakes と同じ作り）。
+     * @param {{youMate:'net'|'back', you:'net'|'back', youMateDuty:string|null,
+     *   youDuty:string|null}|null} orders RallyOne.Game#formationOrders()。null（シングルス）なら消す。
+     */
+    setFormation(orders) {
+      const key = orders ? FORMATION_ROWS.map((r) => `${orders[r.who]}:${orders[`${r.who}Duty`]}`).join(',') : '';
+      if (key === this.formationKey) return;
+      this.formationKey = key;
+      const prev = this.formationPrev;
+      this.formationPrev = orders;
+      const el = this.el.formation;
+      if (!orders) {
+        el.replaceChildren(); // :empty で行ごと消える
+        return;
+      }
+      const span = (cls, text) => {
+        const s = document.createElement('span');
+        s.className = cls;
+        s.textContent = text;
+        return s;
+      };
+      const head = document.createElement('div');
+      head.className = 'fmHead';
+      head.textContent = '立ち位置の指示';
+      const rows = FORMATION_ROWS.map((r) => {
+        const row = document.createElement('div');
+        row.className = 'fmRow';
+        const flash = !!prev && prev[r.who] !== orders[r.who];
+        const opts = ['net', 'back'].map((f) => {
+          const on = orders[r.who] === f;
+          const opt = span(`fmOpt${on ? ' on' : ''}${on && flash ? ' flash' : ''}`, FORMATION_LABEL[f]);
+          opt.prepend(span('fmKey', r.keys[f]));
+          return opt;
+        });
+        row.append(span('fmWho', r.label), ...opts);
+        const duty = orders[`${r.who}Duty`];
+        if (!duty) return [row];
+        // 注記は行の外に置く：行（flex）の中に入れると、その幅までスコアボードの列が広がる
+        const note = document.createElement('div');
+        note.className = 'fmNote';
+        note.textContent = `${duty}担当：${r.duty}`;
+        return [row, note];
+      });
+      el.replaceChildren(head, ...[].concat(...rows));
     }
 
     /**
@@ -1145,7 +1349,15 @@
         : { you: 'YOU', cpu: 'CPU' };
       this.el.msTitle.textContent = mine ? 'あなたの勝ち' : 'CPU の勝ち';
       this.el.msTitle.classList.toggle('win', mine);
-      this.el.msScore.textContent = `${label.you} ${summary.games.you} — ${summary.games.cpu} ${label.cpu}`;
+      // 複数セットの試合はセットカウントと各セットのゲーム数、1セットマッチはゲーム数
+      const sets = summary.sets || [];
+      if (sets.length > 1) {
+        const won = (side) => sets.filter((s) => s[side] > s[side === 'you' ? 'cpu' : 'you']).length;
+        const detail = sets.map((s) => `${s.you}-${s.cpu}`).join(' ');
+        this.el.msScore.textContent = `${label.you} ${won('you')} — ${won('cpu')} ${label.cpu}（${detail}）`;
+      } else {
+        this.el.msScore.textContent = `${label.you} ${summary.games.you} — ${summary.games.cpu} ${label.cpu}`;
+      }
 
       const rows = [row('head', '', { text: label.you }, { text: label.cpu })];
       STAT_ROWS.forEach((spec) => {
@@ -1180,6 +1392,37 @@
     setReplay(on, mark = false) {
       this.el.replayTag.classList.toggle('on', on);
       this.el.replayTag.classList.toggle('mark', on && mark);
+    }
+
+    /**
+     * 試合後のハイライトで流している1点の見出し。見出しはその1点のいちばんの見どころ
+     * （マッチポイント＞凌いだ1点＞必殺技＞エース＞ブレーク＞長いラリー の順）で、
+     * 補足に誰のポイントか・ラリーの本数・そのときのゲームカウントを添える。
+     * @param {{index:number, total:number, point:object}|null} info world.highlightInfo()
+     */
+    setHighlight(info) {
+      const on = !!info;
+      this.el.replayTag.classList.toggle('hl', on);
+      this.el.hlCaption.classList.toggle('on', on);
+      if (!on) {
+        this.shownHighlight = null;
+        return;
+      }
+      const p = info.point;
+      if (this.shownHighlight === p) return; // 同じ1点の間は書き換えない
+      this.shownHighlight = p;
+      this.el.hlCount.textContent = `${info.index + 1}/${info.total}`;
+      const names = this.teamNames || {};
+      const who = names[p.winner] || (p.winner === 'you' ? 'YOU' : 'CPU');
+      const title = p.stake === 'match' ? 'マッチポイント'
+        : p.stake === 'set' ? 'セットポイント'
+        : p.stake === 'saved' ? 'ピンチを凌ぐ'
+          : p.specials.length ? `必殺技 ${p.specials.join('・')}`
+            : p.outcome === 'ace' ? `エース ${Math.round(p.serveKmh)}km/h`
+              : p.stake === 'break' ? 'ブレーク'
+                : `${p.shots}本のラリー`;
+      this.el.hlTitle.textContent = title;
+      this.el.hlSub.textContent = `${who} のポイント ／ ${p.shots}本 ／ ゲーム ${p.games.you}-${p.games.cpu}`;
     }
 
     /**

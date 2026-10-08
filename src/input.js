@@ -65,6 +65,16 @@
    */
   const FIRST_SERVE_KEYS = ['KeyT'];
   /**
+   * スタート画面でのみ有効。時間帯（デー⇔ナイト）と天候（晴れ⇔にわか雨）を切り替える。
+   * N（Night）は練習中だけ「次のレッスン」、R（Rain）は試合中だけダブルスの立ち位置の指示に使うが、
+   * どちらもスタート画面では空いている。
+   */
+  const SESSION_KEYS = ['KeyN'];
+  const RAIN_KEYS = ['KeyR'];
+  /** スタート画面でのみ有効。試合の長さ：L（Length）＝ゲーム数、M（Match）＝セット数を順に切り替える。 */
+  const GAMES_KEYS = ['KeyL'];
+  const SETS_KEYS = ['KeyM'];
+  /**
    * トス（コイントス）に勝った人間だけが選ぶ。スタート画面の各種選択が終わった後の
    * 別画面（handlers.isAwaitingToss()）でだけ意味を持つので、Digit1/2 を使い回しても
    * 難易度選択（Digit1〜3）とは表示上・時間軸上で重ならない。
@@ -112,6 +122,7 @@
      *   onStandNet:Function, onStandBack:Function,
      *   onSelectDifficulty:Function, onSelectSurface:Function, onSelectStyle:Function,
      *   onToggleGuide:Function, onCycleSpecials:Function, onCycleFirstServe:Function,
+     *   onToggleSession:Function, onToggleRain:Function, onCycleGames:Function, onCycleSets:Function,
      *   onSelectToss:Function, isAwaitingToss:Function,
      *   onSkipReplay:Function, isStarted:Function,
      *   isMatchStatsOpen:Function, onCloseMatchStats:Function,
@@ -153,6 +164,10 @@
           else if (GUIDE_KEYS.indexOf(e.code) !== -1) handlers.onToggleGuide();
           else if (SPECIAL_PRESET_KEYS.indexOf(e.code) !== -1) handlers.onCycleSpecials();
           else if (FIRST_SERVE_KEYS.indexOf(e.code) !== -1) handlers.onCycleFirstServe();
+          else if (SESSION_KEYS.indexOf(e.code) !== -1) handlers.onToggleSession();
+          else if (RAIN_KEYS.indexOf(e.code) !== -1) handlers.onToggleRain();
+          else if (GAMES_KEYS.indexOf(e.code) !== -1) handlers.onCycleGames();
+          else if (SETS_KEYS.indexOf(e.code) !== -1) handlers.onCycleSets();
           else handlers.onStart();
           return;
         }
