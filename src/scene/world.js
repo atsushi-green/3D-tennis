@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    CAMERA, FX, PLAYER, SPECIAL, THEME, REPLAY, HIGHLIGHT, HALF_L, LINE_CALL, BALL_MARK, SURFACE, MATCH_POINT, FINALE,
+    CAMERA, FX, PLAYER, SPECIAL, THEME, REPLAY, HIGHLIGHT, HALF_L, LINE_CALL, BALL_MARK, SURFACE, MATCH_POINT, FINALE, NIGHT,
   } = RallyOne.config;
   const { lerp, clamp } = RallyOne.math;
   const scene3d = RallyOne.scene;
@@ -39,6 +39,8 @@
     const crowd = scene3d.createCrowd();
     venue.add(officials, ballMarks.group, crowd, flags, stage.sun);
     scene.add(court, scene3d.createNet(), venue);
+    // 時間帯と天候（照明塔・星・雨粒・コートのシート・濡れたコート）
+    const weather = scene3d.createWeather(stage);
 
     const you = scene3d.createPlayer(THEME.YOU, 'you');
     const cpu = scene3d.createPlayer(THEME.CPU, 'cpu');
@@ -58,6 +60,30 @@
       youMate: scene3d.createShadow(0.26),
       cpuMate: scene3d.createShadow(0.26),
     };
+    // ナイトセッションの照明塔4基ぶんの薄い影（選手ごとに、それぞれの塔と反対側へずらして置く）
+    const nightShadows = Object.fromEntries(['you', 'cpu', 'youMate', 'cpuMate'].map((key) => {
+      const list = NIGHT.TOWERS.map(() => scene3d.createShadow(NIGHT.SHADOW.OPACITY));
+      list.forEach((m) => { m.visible = false; scene.add(m); });
+      return [key, list];
+    }));
+
+    /** その選手の影（syncPlayer で置き終えた後）に合わせて、ナイトの4方向の影を置く。 */
+    function placeNightShadows(key, shadow) {
+      const on = weather.isNight() && shadow.visible;
+      nightShadows[key].forEach((m, i) => {
+        m.visible = on;
+        if (!on) return;
+        const tower = NIGHT.TOWERS[i];
+        const dx = shadow.position.x - tower.x;
+        const dz = shadow.position.z - tower.z;
+        const len = Math.hypot(dx, dz) || 1;
+        m.position.set(
+          shadow.position.x + (dx / len) * NIGHT.SHADOW.STRETCH, shadow.position.y,
+          shadow.position.z + (dz / len) * NIGHT.SHADOW.STRETCH,
+        );
+        m.scale.copy(shadow.scale);
+      });
+    }
     // 縮地（必殺技）の残像。跳ぶ前に立っていた位置へ置いて薄れさせるだけなので、
     // 選手と同じメッシュのマテリアルを半透明の金色1枚に差し替えて使い回す。
     // 人間だけでなく AI も縮地を使う（難易度 Extreme）ので、4人ぶん用意する。
@@ -249,6 +275,7 @@
       scene3d.applyImpactPunch(ballMesh, ball, FX);
       scene3d.placeImpact(impactFlash, ball, FX);
       scene3d.placeBallShadow(shadows.ball, ball);
+      ['you', 'cpu', 'youMate', 'cpuMate'].forEach((key) => placeNightShadows(key, shadows[key]));
     }
 
     // --- 線審のコール（game.lineCall が変わったら、担当の線審が合図を出す） ---
@@ -606,6 +633,7 @@
       if (cut || (finale && !finale.done)) crowdHype = Math.min(1, crowdHype + dt * H.RISE);
       else crowdHype = Math.max(0, crowdHype - dt * (finale ? FINALE.CROWD_FALL : H.FALL));
       scene3d.updateCrowd(crowd, crowdHype, dt);
+      weather.update(state, dt);
       // 録画は再生中も止めない：裏では game.update() が実際の試合を進め続けているので、
       // ここで録り漏らすと再生の直後に次のポイントがすぐ終わったとき history が
       // 足りず（history.length<2）、そのポイントのリプレイだけ出せなくなってしまう。
@@ -657,14 +685,22 @@
         snapCamera(state.you);
       }
 
+      // 雨天中断でシートが掛かっている間は、選手はコートを離れている（球も片付けてある）。
+      // ダブルスの2人の表示は applyFrame() が決めるので、隠すのはその後
+      const away = weather.isCovered(state);
+      you.visible = cpu.visible = shadows.you.visible = shadows.cpu.visible = !away;
       applyFrame(state, dt, serveStages(state), finale && finale.team);
-      ballMesh.visible = shadows.ball.visible = true;
+      if (away) {
+        youMate.visible = cpuMate.visible = shadows.youMate.visible = shadows.cpuMate.visible = false;
+        Object.keys(nightShadows).forEach((key) => nightShadows[key].forEach((m) => { m.visible = false; }));
+      }
+      ballMesh.visible = shadows.ball.visible = !away;
       poseLineJudges(recClock);
       // 軌跡はラリーの決着がついた後（ポイント間の 'serve' 待ち・'over'）だけ見せる。
       // ラリー中に出しっぱなしだと本来の目的（アウトの結果を振り返る）を超えて
       // 「次にどこへ来るか」の手がかりになってしまうため。観客席や勝者を映す演出のカットでも
       // 隠す（コートの外から映すと、前のポイントの軌跡が線になって空に浮いて見える）。
-      const cutting = cut || (finale && finale.cut);
+      const cutting = cut || (finale && finale.cut) || away; // シートの上にも浮かせない
       scene3d.updateTrail(trail, state.phase === 'rally' || cutting ? NO_TRAIL : state.trail);
       // スマッシュの先回り地点。打てる球が来ていないフレームは state.smashHint が null になる。
       scene3d.placeSmashHint(smashHint, state.smashHint);
@@ -692,9 +728,15 @@
       scene3d.setCourtSurface(court, surfaceName);
     }
 
+    /** スタート画面の時間帯（'day'｜'night'）を、空・照明・照明塔へ反映する。 */
+    function setSession(name) {
+      weather.setSession(name);
+    }
+
     return {
       sync, render: stage.render, scene, camera, setSurface, startReplay, skipReplay, isReplaying,
       isCheckingMark, captureClip, pruneClips, resetClips, playHighlights, highlightInfo,
+      setSession, rainLevel: () => weather.rainLevel(),
     };
   };
 })(window.RallyOne = window.RallyOne || {});

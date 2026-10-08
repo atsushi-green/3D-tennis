@@ -31,6 +31,9 @@
    * 決めるのは最初の試合の第1ゲームだけで、その後は普段どおりサーブが交代していく。
    */
   let firstServe = 'toss';
+  /** スタート画面で選んだ時間帯（'day'｜'night'）と天候（true＝にわか雨が降りうる）。既定は晴れたデー。 */
+  let session = 'day';
+  let rainOn = false;
   /** T キーで切り替える順番（画面のカードの並びと同じ） */
   const FIRST_SERVE_ORDER = ['toss', 'serve', 'receive'];
   /**
@@ -111,6 +114,7 @@
     hud.setPlayerNames(picks, wantDoubles);
     game.setGuide(guide);
     game.setSpecials(specials);
+    game.setRain(rainOn);
     // 選んだ選手の気性（ポイントの後の感情表現の出やすさ）。カスタムは型がないので 'normal'
     game.setTempers(Object.fromEntries(ROSTER.map((r) => {
       const character = CHARACTERS.find((c) => c.key === picks[r.key]);
@@ -228,6 +232,17 @@
       cpuStyle = name;
       hud.setStyle(name);
     },
+    onSelectSession: (name) => {
+      session = name;
+      hud.setSession(name);
+      world.setSession(name); // スタート画面の背後の会場もそのまま夜にする
+    },
+    onToggleSession: () => menu.onSelectSession(session === 'day' ? 'night' : 'day'),
+    onSelectRain: (on) => {
+      rainOn = on;
+      hud.setRainOption(on);
+    },
+    onToggleRain: () => menu.onSelectRain(!rainOn),
     onSelectFirstServe: (choice) => {
       firstServe = choice;
       hud.setFirstServe(choice);
@@ -360,6 +375,8 @@
     onToggleGuide: () => menu.onToggleGuide(),
     onCycleSpecials: () => menu.onCycleSpecials(),
     onCycleFirstServe: () => menu.onCycleFirstServe(),
+    onToggleSession: () => menu.onToggleSession(),
+    onToggleRain: () => menu.onToggleRain(),
     // リプレイのスキップは Space だけ（以前はどのキーでも飛んでしまい、ラリー用の
     // キーに触れただけで意図せずスキップされていた）。チェンジエンズの休憩も同じ Space で
     // 切り上げる。リプレイ中は game.update() が止まっていて休憩はまだ始まっていないので、
@@ -372,6 +389,7 @@
       game.skipChangeover();
       game.skipMatchPointCut();
       game.skipFinaleCut();
+      game.skipRainDelay();
     },
     isMatchStatsOpen: () => matchStatsOpen,
     onCloseMatchStats: () => closeMatchStats(),
@@ -491,6 +509,8 @@
       // マッチポイントの演出の間も、沸いているスタンドを映しているのでざわめきは消さない
       sfx.murmur(!game.practice && (world.isReplaying() || matchStatsOpen || !!game.changeover
         || !!game.matchPointCut || game.phase === 'over'));
+      hud.setWeather(game.rain, game.wet);
+      sfx.rain(world.rainLevel());
       hud.setShade(game.changeoverShade());
       hud.setCinema(!!game.matchPointCut || !!(finale && finale.cut));
       hud.setPractice(game.practice);
@@ -510,6 +530,7 @@
     } else {
       sfx.ovation(null); // 試合を作り直してスタート画面／レッスン一覧へ戻った
       sfx.murmur(false);
+      sfx.rain(0);
     }
     world.render();
   }

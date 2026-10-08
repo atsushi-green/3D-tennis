@@ -12,7 +12,7 @@
 (function (RallyOne) {
   'use strict';
 
-  const { AUDIO, SURFACE, LINE_CALL } = RallyOne.config;
+  const { AUDIO, SURFACE, LINE_CALL, RAIN } = RallyOne.config;
   const { rand, clamp, lerp } = RallyOne.math;
 
   let ctx = null;
@@ -764,6 +764,48 @@
   }
 
   /**
+   * 雨音（にわか雨の間）。ループするノイズを2本の帯域（さーっという高い成分と、屋根やシートを
+   * 打つ低い成分）に通して1度だけ組み、毎フレーム強さ（0〜1）に合わせて音量だけ寄せる。
+   */
+  let rainLoop = null;
+
+  function rain(level) {
+    if (!rainLoop && !(level > 0)) return;
+    const ac = context();
+    if (!ac) return;
+    const S = RAIN.SOUND;
+    try {
+      if (!rainLoop) {
+        const src = ac.createBufferSource();
+        src.buffer = noiseBuffer(ac);
+        src.loop = true;
+        const master = ac.createGain();
+        master.gain.value = 0;
+        const high = ac.createBiquadFilter();
+        high.type = 'bandpass';
+        high.frequency.value = S.HZ;
+        high.Q.value = S.Q;
+        const low = ac.createBiquadFilter();
+        low.type = 'lowpass';
+        low.frequency.value = S.LOW_HZ;
+        const lowGain = ac.createGain();
+        lowGain.gain.value = S.LOW_VOL;
+        src.connect(high).connect(master);
+        src.connect(low).connect(lowGain).connect(master);
+        master.connect(ac.destination);
+        src.start();
+        rainLoop = { master, level: -1 };
+      }
+      // 毎フレーム同じ値を予約し直さない
+      if (Math.abs(rainLoop.level - level) < 0.005) return;
+      rainLoop.level = level;
+      rainLoop.master.gain.setTargetAtTime(S.VOL * clamp(level, 0, 1), ac.currentTime, 0.1);
+    } catch (e) {
+      /* 音が出ないだけなのでゲームは続行 */
+    }
+  }
+
+  /**
    * 打ち方とスピンから打撃音の配合（AUDIO.IMPACT.STROKE の1つ）を選ぶ。
    * スマッシュとボレーは打ち方そのものが音を決める（スピンは掛けない打ち方なので無視）。
    * グラウンドストロークだけスピンで分かれる。
@@ -864,6 +906,8 @@
     ovation: (team) => tickOvation(team),
     /** ネットコードに当たる鈍い音（低く長め＝テープ/ガットの damped な振動）。 */
     netIn: () => layered(AUDIO.NET_IN),
+    /** 雨音の強さ（0〜1）。毎フレーム呼ぶ（main.js が scene/weather.js の雨の強さを渡す）。 */
+    rain: (level) => rain(level),
     /** 選手がラケットを地面に叩きつけた（割れる音）。観客は「おぉ…」とどよめく。 */
     racketSmash: () => {
       layered(AUDIO.RACKET_SMASH);

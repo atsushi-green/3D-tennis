@@ -3887,6 +3887,74 @@
     Object.assign(SURFACE, SURFACE_PRESETS[name] || SURFACE_PRESETS.hard);
   }
 
+  /**
+   * にわか雨（スタート画面の「天候」で「にわか雨」を選んだときだけ。game.js が進め、表示は
+   * scene/weather.js）。流れ：
+   *   1. ポイントの始まり（newPoint）に、MIN_POINTS 本を過ぎていれば START_CHANCE の確率で降り出す
+   *      （1試合に MAX_PER_MATCH 回まで）。小雨の間は試合が続き、コートが少しずつ濡れる（DRIZZLE_WET まで）
+   *   2. 降り出してから DRIZZLE_T 秒を過ぎて最初にポイントが決まったら、主審が中断する（雨天中断）。
+   *      コートにシートが掛かり（COVER_T 秒）、DELAY 秒待つ（Space で切り上げられる）
+   *   3. 雨が上がるとシートを外し（CLEAR_T 秒）、RESUME_T 置いて試合再開。コートは濡れきっていて
+   *      （wet=1）、1ポイントごとに 1/WET_POINTS ずつ乾いていく
+   * 濡れたコートは低く弾んで滑る（physics.js#reflectBounce が wet に応じて WET_RESTITUTION／
+   * WET_FRICTION へ寄せる）。
+   */
+  const RAIN = {
+    START_CHANCE: 0.08,
+    MIN_POINTS: 6,
+    MAX_PER_MATCH: 1,
+    DRIZZLE_T: 7,
+    DRIZZLE_WET: 0.35,
+    DELAY: 9,
+    COVER_T: 1.8,
+    CLEAR_T: 1.8,
+    RESUME_T: 2.2,
+    WET_POINTS: 8,
+    WET_RESTITUTION: 0.84,
+    WET_FRICTION: 1.06,
+    // 表示（scene/weather.js）
+    DROPS: 2400,          // 雨粒の数（強さ1のとき。小雨は DRIZZLE_LEVEL ぶんだけ見せる）
+    DRIZZLE_LEVEL: 0.35,
+    AREA: { X: 30, Z: 34, TOP: 16 }, // 雨粒を降らせる範囲（半幅・半長・高さ, m）
+    FALL: 17,             // 落ちる速さ(m/s)
+    STREAK: 0.45,         // 雨粒の筋の長さ(m)
+    DROP_COLOR: 0xa9c4dd,
+    COVER_COLOR: 0x0b2e1c,   // コートに掛けるシート（濃い緑。sRGB 出力で明るく出るぶん暗めに）
+    COVER_MARGIN: 1.2,       // シートがコートの外へはみ出す幅(m)
+    WET_DARKEN: 0.32,        // 濡れきったコートを暗くする度合い（0〜1）
+    SKY_DIM: 0.5,            // 強い雨のときの空と照明の暗さ（1＝変えない）
+    LEVEL_RATE: 0.6,         // 雨の強さが目標へ寄っていく速さ（1秒あたり）
+    // 雨音（audio.js#rain）。強さ1のときの音量と、ノイズを通す帯域
+    SOUND: { VOL: 0.07, HZ: 2400, Q: 0.35, LOW_HZ: 600, LOW_VOL: 0.5 },
+  };
+
+  /**
+   * 時間帯（スタート画面の「時間帯」）。day はこれまでの見た目そのもの。night は照明塔の光で
+   * 照らすナイトセッション：空と霧を暗くし、太陽を消して、四隅の照明塔（TOWERS）から当てる。
+   * 照明が4方向から当たるので、選手の足元の影も4方向へ薄く伸びる（SHADOW）。ゲームの判定には一切関わらない。
+   */
+  const SESSIONS = {
+    day: {
+      BG: 0x0b1a2b, HEMI: { SKY: 0xdfefff, GROUND: 0x0c2033, INTENSITY: 0.85 }, SUN: 0.85,
+    },
+    night: {
+      BG: 0x02060d, HEMI: { SKY: 0x7d8fb0, GROUND: 0x05101c, INTENSITY: 0.42 }, SUN: 0,
+    },
+  };
+  const NIGHT = {
+    // スタンドの四隅（STANDS の壁の外）
+    TOWERS: [{ x: 22, z: 28 }, { x: -22, z: 28 }, { x: 22, z: -28 }, { x: -22, z: -28 }],
+    HEIGHT: 17,
+    FLOOD_COLOR: 0xfff4e0,
+    FLOOD_INTENSITY: 0.32,  // 1基あたり（4基ぶん足し合わさる）
+    POLE_COLOR: 0x5b6b7d,
+    LAMP_COLOR: 0xfff7d6,
+    LAMP: { W: 3.2, H: 1.4 },  // 照明の灯具の板の大きさ(m)
+    GLOW: 6,                   // 灯具の周りのにじみ（光の玉）の大きさ(m)
+    SHADOW: { OPACITY: 0.11, STRETCH: 0.55 }, // 4方向の薄い影の濃さと、照明と反対側へずれる量(m)
+    STARS: 260,
+  };
+
   /** court.js がテクスチャを焼くときの配色（見た目だけ。物理は上の SURFACE_PRESETS）。 */
   const SURFACE_COLORS = {
     hard: { surface: '#2b6cb0', apron: '#1d7a5f' }, // 現状のTHEME.COURT_SURFACE/COURT_APRONと同じ
@@ -4281,7 +4349,7 @@
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, CHANGEOVER, MATCH_POINT, FINALE, PRACTICE, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT, GUIDE,
-    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, HIGHLIGHT, EMOTION, STAMINA, TOSS, OFFICIALS, LINE_CALL, BALL_MARK,
+    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, HIGHLIGHT, EMOTION, RAIN, SESSIONS, NIGHT, STAMINA, TOSS, OFFICIALS, LINE_CALL, BALL_MARK,
     STANDS, SPECTATORS, FLAG, MOTION,
     SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET,
     SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, ATTR_SPREAD, ATTRS, NEUTRAL_ATTR,

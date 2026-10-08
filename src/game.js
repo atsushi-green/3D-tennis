@@ -7,14 +7,14 @@
 
   const {
     ATTRS, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, EMOTION, FINALE, FX, HALF_L, HALF_W, HIGHLIGHT, LINE_CALL, MATCH_POINT,
-    NET, PHYSICS, PLAYER, PRACTICE, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, SWING,
+    NET, PHYSICS, PLAYER, PRACTICE, RAIN, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, SWING,
     TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND, shotSkill,
   } = RallyOne.config;
   const {
     approach2D, clamp, lerp, mpsToKmh, rand, signOr,
   } = RallyOne.math;
   const {
-    hitsNet, integrate, predictLanding, predictWindow, reflectBounce, solveShot,
+    hitsNet, integrate, predictLanding, predictWindow, reflectBounce, setWetness, solveShot,
   } = RallyOne.physics;
   const {
     chasePosition, homePosition, netRushPosition, cpuShot, cpuVolleyShot, cpuSmashShot,
@@ -811,6 +811,17 @@
        * setTempers() で渡す）。ポイントの後の感情表現（各選手の mood）の出やすさが変わる。
        */
       this.tempers = { you: 'normal', youMate: 'normal', cpu: 'normal', cpuMate: 'normal' };
+      /**
+       * にわか雨（config.RAIN）。rainEnabled はスタート画面の「天候」（setRain()）。
+       * rain は降っている間だけ { phase:'drizzle'|'suspended'|'clearing', t, resume }：
+       * 小雨で試合が続いている／雨天中断／シートを外して再開を待っている。t はその段階に入ってからの秒数。
+       * wet はコートの濡れ具合（0〜1。physics.setWetness() へそのまま渡す）。
+       */
+      this.rainEnabled = false;
+      this.rain = null;
+      this.rainCount = 0;
+      this.wet = 0;
+      setWetness(0); // 前の Game（練習モードの作り直しなど）の濡れを持ち越さない
       /**
        * スマッシュの先回りヒント。毎フレーム smashSpot() が入れ直す（打てる球が来ていなければ null）。
        * 表示専用の値なので、ゲームの判定はここを一切読まない（scene/hint.js と hud.js だけが使う）。
@@ -2021,6 +2032,7 @@
       this.lastShotBy = { you: null, cpu: null };
       this.lastServeKmh = null;
       this.driftWind();
+      this.maybeStartRain();
       this.lineCall = null; // 前のポイントのコールを「このポイントを決めたコール」と取り違えない
       this.hooks.serveSpeed(null); // 前のポイントのサーブ速度表示を消す
       // スタミナはポイント間で少し回復するが、そのセットで消化したゲーム数が増えるほど
@@ -2176,6 +2188,10 @@
     /** @param {string|null} changeover 前の試合が決まった直後のスコアでのチェンジエンズ */
     startNextMatch(changeover) {
       this.finale = null;
+      // 次の試合は乾いたコートから（雨も上がった扱い。降る回数も数え直す）
+      this.rain = null;
+      this.rainCount = 0;
+      this.setWet(0);
       this.match.reset();
       this.resetStats(); // 次のマッチは0から数え直す（スタッツ画面はもう出した後）
       this.matchPointCutDone = false; // 次のマッチの最初のマッチポイントでも演出を出す
@@ -3020,6 +3036,69 @@
      * 空配列を渡せば必殺技なし＝これまでと同じゲームになる（既定）。
      * @param {string[]} keys config.SPECIAL_MOVES の key
      */
+    /** スタート画面の「天候」。false（晴れ）の間は雨が降らない。 */
+    setRain(on) {
+      this.rainEnabled = !!on;
+    }
+
+    setWet(w) {
+      this.wet = clamp(w, 0, 1);
+      setWetness(this.wet);
+    }
+
+    /** ポイントの始まりに、降り出すかを1回だけ決める（config.RAIN）。 */
+    maybeStartRain() {
+      if (!this.rainEnabled || this.rain || this.practice || this.rainCount >= RAIN.MAX_PER_MATCH) return;
+      if (this.matchStats.points < RAIN.MIN_POINTS || Math.random() >= RAIN.START_CHANCE) return;
+      this.rain = { phase: 'drizzle', t: 0, resume: null };
+      this.rainCount++;
+    }
+
+    /** 小雨が降り続いて、このポイントの後で中断する番か。 */
+    rainDue() {
+      return !!this.rain && this.rain.phase === 'drizzle' && this.rain.t >= RAIN.DRIZZLE_T;
+    }
+
+    /**
+     * 雨天中断（ポイント間の一拍の後）。この間は試合そのもの（タイマー・選手・球）が止まり、
+     * tickRain() だけが進む。明けたら、入れ替わるはずだったコート（changeover）から続ける。
+     * @param {string|null} changeover
+     */
+    beginRainDelay(changeover) {
+      this.rain = { phase: 'suspended', t: 0, resume: changeover };
+      this.hooks.call('雨天中断', '雨が上がるのを待っています ／ SPACE でスキップ');
+    }
+
+    /** 中断を切り上げる（Space）。 */
+    skipRainDelay() {
+      if (this.rain && this.rain.phase === 'suspended') this.endRainDelay();
+    }
+
+    endRainDelay() {
+      const resume = this.rain.resume;
+      this.rain = { phase: 'clearing', t: 0, resume: null };
+      this.setWet(1);
+      this.hooks.call('試合再開', 'コートが濡れていて、球が低く滑ります');
+      this.after(RAIN.RESUME_T, () => {
+        if (resume) this.beginChangeover(resume);
+        else this.newPoint();
+      });
+    }
+
+    tickRain(dt) {
+      const rain = this.rain;
+      if (!rain) return;
+      rain.t += dt;
+      if (rain.phase === 'drizzle') {
+        // 小雨の間に少しずつ濡れていく（乾いていく途中に降り出したなら、濡れているほうを保つ）
+        this.setWet(Math.max(this.wet, RAIN.DRIZZLE_WET * Math.min(1, rain.t / RAIN.DRIZZLE_T)));
+      } else if (rain.phase === 'suspended') {
+        if (rain.t >= RAIN.DELAY) this.endRainDelay();
+      } else if (rain.t >= RAIN.CLEAR_T) {
+        this.rain = null; // シートを外し終えた（コートは濡れたまま、1ポイントごとに乾いていく）
+      }
+    }
+
     /** @param {{you?:string, youMate?:string, cpu?:string, cpuMate?:string}} tempers */
     setTempers(tempers) {
       ACTORS.forEach((who) => {
@@ -3780,8 +3859,11 @@
       this.hooks.call(mine ? 'ポイント' : '失点', sub, shot);
       this.hooks.score();
       // 入れ替わるときも、決まったコールを読む一拍（NEXT_POINT）を置いてから暗転する
+      // 濡れたコートは1ポイントごとに乾いていく（降っている間は乾かない）
+      if (this.wet > 0 && !this.rain) this.setWet(this.wet - 1 / RAIN.WET_POINTS);
       this.after(TIMING.NEXT_POINT, () => {
-        if (changeover) this.beginChangeover(changeover);
+        if (this.rainDue()) this.beginRainDelay(changeover);
+        else if (changeover) this.beginChangeover(changeover);
         else this.newPoint();
       });
     }
@@ -3975,6 +4057,12 @@
         this.tickFinaleCut(dt);
         return;
       }
+      // 雨天中断の間も止める（選手はコートを離れ、シートが掛かっている）
+      if (this.rain && this.rain.phase === 'suspended') {
+        this.tickRain(dt);
+        return;
+      }
+      this.tickRain(dt);
       this.tickTimers(dt);
       this.tickChangeover(dt);
       this.tickMoods(dt);

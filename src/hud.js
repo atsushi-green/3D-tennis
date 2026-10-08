@@ -283,6 +283,7 @@
         guideText: $('guideText'),
         guideNeedle: $('guideNeedle'),
         replayTag: $('replayTag'),
+        weather: $('weather'),
         hlCount: $('hlCount'),
         hlCaption: $('hlCaption'),
         hlTitle: $('hlTitle'),
@@ -310,6 +311,8 @@
         modeOpts: segs('modeRow'),
         diffOpts: segs('diffRow'),
         surfaceOpts: segs('surfaceRow'),
+        sessionOpts: segs('sessionRow'),
+        weatherOpts: segs('weatherRow'),
         styleOpts: segs('styleRow'),
         firstServeOpts: segs('firstServeRow'),
         guideOpts: segs('guideRow'),
@@ -332,6 +335,8 @@
       bind(this.el.modeOpts, (level) => handlers.onSelectMode(level === 'doubles'));
       bind(this.el.diffOpts, handlers.onSelectDifficulty);
       bind(this.el.surfaceOpts, handlers.onSelectSurface);
+      bind(this.el.sessionOpts, handlers.onSelectSession);
+      bind(this.el.weatherOpts, (level) => handlers.onSelectRain(level === 'rain'));
       bind(this.el.styleOpts, handlers.onSelectStyle);
       bind(this.el.firstServeOpts, handlers.onSelectFirstServe);
       bind(this.el.guideOpts, (level) => handlers.onSelectGuide(level === 'on'));
@@ -853,6 +858,29 @@
     /** スタート画面のサーフェス表示を切り替える（実際の適用は config.applySurface が行う）。 */
     setSurface(level) {
       this.el.surfaceOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === level));
+    }
+
+    /** スタート画面の時間帯（'day'｜'night'）の表示。 */
+    setSession(level) {
+      this.el.sessionOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === level));
+    }
+
+    /** スタート画面の天候（にわか雨あり／なし）の表示。 */
+    setRainOption(on) {
+      const level = on ? 'rain' : 'clear';
+      this.el.weatherOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === level));
+    }
+
+    /**
+     * 試合中の天候の表示（風の下）。降っている間はその段階を、上がった後は濡れ具合を出す。
+     * @param {{phase:string}|null} rain game.rain
+     * @param {number} wet game.wet（0〜1）
+     */
+    setWeather(rain, wet) {
+      const text = !rain ? (wet > 0.01 ? `コート濡れ ${Math.round(wet * 100)}%（低く滑る）` : '')
+        : rain.phase === 'drizzle' ? '小雨（降り続くと中断）'
+          : rain.phase === 'suspended' ? '雨天中断' : '雨が上がった';
+      if (this.el.weather.textContent !== text) this.el.weather.textContent = text;
     }
 
     /**

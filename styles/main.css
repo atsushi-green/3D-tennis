@@ -105,6 +105,14 @@ canvas{display:block}
   font-variant-numeric:tabular-nums;
 }
 #wind:empty{display:none}
+/* 雨・濡れたコート。弾み方に効くので風と同じくらい目立たせ、色だけ雨の青にする */
+#weather{
+  margin-top:6px;padding:4px 10px;
+  background:rgba(9,20,34,.75);border-radius:2px;
+  border-left:3px solid #7fb3e6;
+  font-size:13px;font-weight:700;letter-spacing:.04em;color:#cfe3f7;
+}
+#weather:empty{display:none}
 
 /* サーブ速度。風と同じスコアバー脇の並びだが、控えめな #stats 寄りの主張の弱さにする */
 #serveSpeed{

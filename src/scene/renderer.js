@@ -19,7 +19,9 @@
     const camera = new THREE.PerspectiveCamera(CAMERA.FOV, innerWidth / innerHeight, 0.1, 200);
     camera.position.set(0, CAMERA.HEIGHT, -CAMERA.BACK);
 
-    scene.add(new THREE.HemisphereLight(0xdfefff, 0x0c2033, 0.85));
+    // 色と強さは時間帯（config.SESSIONS）で scene/weather.js が入れ直す。ここは day と同じ値
+    const hemi = new THREE.HemisphereLight(0xdfefff, 0x0c2033, 0.85);
+    scene.add(hemi);
     const sun = new THREE.DirectionalLight(0xffffff, 0.85);
     sun.position.set(-8, 16, -6);
     scene.add(sun);
@@ -30,6 +32,7 @@
       camera,
       // 太陽は会場の一部（チェンジエンズで会場ごと回す。world.js が venue へ付け替える）
       sun,
+      hemi,
       render: () => renderer.render(scene, camera),
       resize: () => {
         camera.aspect = innerWidth / innerHeight;

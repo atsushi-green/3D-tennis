@@ -7023,6 +7023,74 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   ok(R.config.CHARACTERS.every((c) => EMOTION.TEMPERS[c.temper]), 'every character has a known temper');
 }
 
+// --- にわか雨：降り出す → 小雨の間は続く → ポイントの後で中断 → 再開すると濡れたコートで低く弾む ---
+{
+  const { RAIN, TIMING } = R.config;
+  const calls = [];
+  const realRandom = Math.random;
+  const g = new R.Game({ input: fakeInput, hooks: { ...noHooks, call: (big) => calls.push(big) } });
+  g.start(false, 'cpu');
+  const step = (sec) => { for (let i = 0; i < Math.round(60 * sec); i++) g.update(1 / 60); };
+  // 晴れを選んでいれば、何本やっても降らない
+  g.matchStats.points = RAIN.MIN_POINTS;
+  Math.random = () => 0;
+  try { g.newPoint(); } finally { Math.random = realRandom; }
+  ok(!g.rain, 'no rain unless the weather option is on');
+  g.setRain(true);
+  g.matchStats.points = RAIN.MIN_POINTS - 1;
+  Math.random = () => 0;
+  try { g.newPoint(); } finally { Math.random = realRandom; }
+  ok(!g.rain, `not before MIN_POINTS points have been played`);
+  g.matchStats.points = RAIN.MIN_POINTS;
+  Math.random = () => 0;
+  try { g.newPoint(); } finally { Math.random = realRandom; }
+  ok(g.rain && g.rain.phase === 'drizzle', `it starts to drizzle at the start of a point: ${JSON.stringify(g.rain)}`);
+  // 小雨の間は試合が続き、コートが少しずつ濡れる
+  g.rain.t = RAIN.DRIZZLE_T - 0.01;
+  g.tickRain(0.02);
+  ok(Math.abs(g.wet - RAIN.DRIZZLE_WET) < 1e-9, `the court gets damp in the drizzle: ${g.wet}`);
+  // 決まった1点の後で中断。この間は試合が止まる
+  g.phase = 'rally'; g.serveInFlight = false; g.rallyShots = 3; g.stakes = null;
+  g.endPoint('you', 'ツーバウンド');
+  step(TIMING.NEXT_POINT + 0.05);
+  ok(g.rain.phase === 'suspended' && calls[calls.length - 1] === '雨天中断', `play is suspended after the point: ${JSON.stringify(g.rain)} ${calls.slice(-1)}`);
+  const at = { x: g.you.x, z: g.you.z, phase: g.phase, points: { ...g.match.points } };
+  step(RAIN.DELAY - 1);
+  ok(g.rain.phase === 'suspended' && g.phase === at.phase && g.match.points.you === at.points.you,
+    'nothing moves on during the delay');
+  step(1.1);
+  ok(g.rain.phase === 'clearing' && g.wet === 1 && calls[calls.length - 1] === '試合再開',
+    `after DELAY the covers come off and the court is soaked: ${JSON.stringify(g.rain)} wet=${g.wet}`);
+  step(RAIN.RESUME_T + 0.05);
+  ok(g.phase === 'serve' && !g.rain, `then play resumes with the next serve: phase=${g.phase} rain=${JSON.stringify(g.rain)}`);
+  // 濡れたコートは低く弾み、滑る（予測も同じ物理を使う）
+  const bounceOf = (wet) => {
+    R.physics.setWetness(wet);
+    const b = { x: 0, y: 0.05, z: 3, px: 0, py: 0.15, pz: 2.8, vx: 0, vy: -8, vz: 15, spin: 'flat' };
+    R.physics.reflectBounce(b);
+    return b;
+  };
+  const dry = bounceOf(0);
+  const soaked = bounceOf(1);
+  R.physics.setWetness(g.wet);
+  ok(soaked.vy < dry.vy * 0.9 && soaked.vz > dry.vz, `a wet court bounces lower and skids: dry=${dry.vy.toFixed(2)}/${dry.vz.toFixed(2)} wet=${soaked.vy.toFixed(2)}/${soaked.vz.toFixed(2)}`);
+  // 1ポイントごとに乾いていく。1試合に降るのは MAX_PER_MATCH 回まで
+  g.phase = 'rally'; g.serveInFlight = false;
+  g.endPoint('cpu', 'アウト');
+  ok(Math.abs(g.wet - (1 - 1 / RAIN.WET_POINTS)) < 1e-9, `it dries a little after each point: ${g.wet}`);
+  Math.random = () => 0;
+  try { step(TIMING.NEXT_POINT + 0.05); } finally { Math.random = realRandom; }
+  ok(!g.rain, 'it rains at most MAX_PER_MATCH times a match');
+  // 中断は Space で切り上げられる
+  const h = new R.Game({ input: fakeInput, hooks: noHooks });
+  h.start(false, 'cpu');
+  h.beginRainDelay(null);
+  h.skipRainDelay();
+  ok(h.rain.phase === 'clearing', 'Space cuts the rain delay short');
+  ok(new R.Game({ input: fakeInput, hooks: noHooks }).wet === 0 && (bounceOf(0), true), 'a new game starts dry');
+  R.physics.setWetness(0);
+}
+
 // --- 試合後のスタッツ：セットが終わると matchEnd が1回だけ呼ばれ、次のマッチで0に戻る ---
 {
   const ends = [];
