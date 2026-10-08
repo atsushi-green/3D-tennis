@@ -3953,21 +3953,23 @@
   /**
    * にわか雨（スタート画面の「天候」で「にわか雨」を選んだときだけ。game.js が進め、表示は
    * scene/weather.js）。流れ：
-   *   1. ポイントの始まり（newPoint）に、MIN_POINTS 本を過ぎていれば START_CHANCE の確率で降り出す
-   *      （1試合に MAX_PER_MATCH 回まで）。小雨の間は試合が続き、コートが少しずつ濡れる（DRIZZLE_WET まで）
-   *   2. 降り出してから DRIZZLE_T 秒を過ぎて最初にポイントが決まったら、主審が中断する（雨天中断）。
+   *   1. 試合の最初から小雨が降っていて、コートも DRIZZLE_WET まで濡れている。小雨の間は試合が続く
+   *   2. ポイントの始まり（newPoint）に、MIN_POINTS 本を過ぎていれば HEAVY_CHANCE の確率で雨脚が強まる
+   *      （heavy。1試合に MAX_PER_MATCH 回まで）。強まってもそのポイントは最後までやり（コートは HEAVY_T 秒で
+   *      HEAVY_WET まで濡れていく）、決まったら主審が中断する（雨天中断）。
    *      コートにシートが掛かり（COVER_T 秒）、DELAY 秒待つ（Space で切り上げられる）
-   *   3. 雨が上がるとシートを外し（CLEAR_T 秒）、RESUME_T 置いて試合再開。コートは濡れきっていて
-   *      （wet=1）、1ポイントごとに 1/WET_POINTS ずつ乾いていく
+   *   3. 雨が弱まるとシートを外し（CLEAR_T 秒）、RESUME_T 置いて試合再開。雨は小雨に戻って降り続く。
+   *      コートは濡れきっていて（wet=1）、1ポイントごとに 1/WET_POINTS ずつ小雨の濡れ具合（DRIZZLE_WET）まで乾いていく
    * 濡れたコートは低く弾んで滑る（physics.js#reflectBounce が wet に応じて WET_RESTITUTION／
    * WET_FRICTION へ寄せる）。
    */
   const RAIN = {
-    START_CHANCE: 0.08,
     MIN_POINTS: 6,
-    MAX_PER_MATCH: 1,
-    DRIZZLE_T: 7,
+    MAX_PER_MATCH: 2,
     DRIZZLE_WET: 0.35,
+    HEAVY_CHANCE: 0.15,   // 小雨の1ポイントごとに雨脚が強まる確率
+    HEAVY_T: 6,
+    HEAVY_WET: 0.6,
     DELAY: 9,
     COVER_T: 1.8,
     CLEAR_T: 1.8,
@@ -3995,10 +3997,14 @@
    * 時間帯（スタート画面の「時間帯」）。day はこれまでの見た目そのもの。night は照明塔の光で
    * 照らすナイトセッション：空と霧を暗くし、太陽を消して、四隅の照明塔（TOWERS）から当てる。
    * 照明が4方向から当たるので、選手の足元の影も4方向へ薄く伸びる（SHADOW）。ゲームの判定には一切関わらない。
+   * SKY があればその空のグラデーション（画面の上＝TOP → 地平線＝HORIZON）を背景にし、霧も地平線の色にする
+   * （遠くのスタンドが空へ霞む）。雨の強さぶん RAIN_SKY（曇り空）へ寄せる。SKY がなければ BG 一色。
    */
   const SESSIONS = {
     day: {
       BG: 0x0b1a2b, HEMI: { SKY: 0xdfefff, GROUND: 0x0c2033, INTENSITY: 0.85 }, SUN: 0.85,
+      SKY: { TOP: 0x3f86d6, HORIZON: 0xc9e2f5 },
+      RAIN_SKY: { TOP: 0x5c6670, HORIZON: 0x9aa3ab },
     },
     night: {
       BG: 0x02060d, HEMI: { SKY: 0x7d8fb0, GROUND: 0x05101c, INTENSITY: 0.42 }, SUN: 0,

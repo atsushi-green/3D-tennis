@@ -27,6 +27,41 @@
     return new THREE.CanvasTexture(canvas);
   }
 
+  /**
+   * 空のグラデーション（背景）。canvas に縦の帯を描き、色が変わったら描き直す。
+   * 背景のテクスチャは画面に貼られるので、上端＝空の高いところ、下端＝地平線の色になる。
+   */
+  function createSky() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 2;
+    canvas.height = 256;
+    const g = canvas.getContext('2d');
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.encoding = THREE.sRGBEncoding; // 描いた色そのままに見せる（出力が sRGB のため）
+    const top = new THREE.Color();
+    const horizon = new THREE.Color();
+    const rainyColor = new THREE.Color();
+    let drawn = '';
+    return {
+      texture,
+      horizon,
+      /** @param {{TOP:number, HORIZON:number}} clear @param {{TOP:number, HORIZON:number}} rainy @param {number} k 雨の強さ */
+      paint(clear, rainy, k) {
+        top.setHex(clear.TOP).lerp(rainyColor.setHex(rainy.TOP), k);
+        horizon.setHex(clear.HORIZON).lerp(rainyColor.setHex(rainy.HORIZON), k);
+        const key = `${top.getHexString()}${horizon.getHexString()}`;
+        if (key === drawn) return;
+        drawn = key;
+        const grad = g.createLinearGradient(0, 0, 0, canvas.height);
+        grad.addColorStop(0, `#${top.getHexString()}`);
+        grad.addColorStop(1, `#${horizon.getHexString()}`);
+        g.fillStyle = grad;
+        g.fillRect(0, 0, canvas.width, canvas.height);
+        texture.needsUpdate = true;
+      },
+    };
+  }
+
   /** 四隅の照明塔（柱・灯具の板・にじみ）と、そこからコートへ当てる光。 */
   function createTowers() {
     const group = new THREE.Group();
@@ -125,14 +160,17 @@
     damp.mesh.visible = false;
     scene.add(towers.group, stars, drops, tarpPivot, damp.mesh);
 
+    const sky = createSky();
     let session = 'day';
     let level = 0; // 雨の強さ（0〜1。目標へ LEVEL_RATE で寄せる）
 
     function setSession(name) {
       session = SESSIONS[name] ? name : 'day';
       const S = SESSIONS[session];
-      scene.background = new THREE.Color(S.BG);
-      scene.fog.color.setHex(S.BG);
+      if (!S.SKY) {
+        scene.background = new THREE.Color(S.BG);
+        scene.fog.color.setHex(S.BG);
+      }
       hemi.color.setHex(S.HEMI.SKY);
       hemi.groundColor.setHex(S.HEMI.GROUND);
       const night = session === 'night';
@@ -149,14 +187,21 @@
       sun.intensity = S.SUN * dim;
       towers.lights.forEach((l) => { l.intensity = NIGHT.FLOOD_INTENSITY * lerp(1, 0.8, level); });
       stars.material.opacity = 0.8 * (1 - level);
+      if (S.SKY) {
+        sky.paint(S.SKY, S.RAIN_SKY || S.SKY, level);
+        scene.background = sky.texture;
+        // 霧の色は線形の値として出力時に sRGB へ直されるので、地平線の色を線形に戻して渡す
+        scene.fog.color.copy(sky.horizon).convertSRGBToLinear();
+      }
     }
 
     /** 雨の段階（game.rain）から、目指す強さとシートの掛かり具合（0〜1）を決める。 */
     function targets(rain) {
       if (!rain) return { level: 0, cover: 0 };
       if (rain.phase === 'drizzle') return { level: RAIN.DRIZZLE_LEVEL, cover: 0 };
+      if (rain.phase === 'heavy') return { level: 1, cover: 0 };
       if (rain.phase === 'suspended') return { level: 1, cover: clamp(rain.t / RAIN.COVER_T, 0, 1) };
-      return { level: 0, cover: 1 - clamp(rain.t / RAIN.CLEAR_T, 0, 1) }; // 'clearing'
+      return { level: RAIN.DRIZZLE_LEVEL, cover: 1 - clamp(rain.t / RAIN.CLEAR_T, 0, 1) }; // 'clearing'（小雨に戻る）
     }
 
     /**

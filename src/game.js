@@ -818,7 +818,7 @@
       this.tempers = { you: 'normal', youMate: 'normal', cpu: 'normal', cpuMate: 'normal' };
       /**
        * にわか雨（config.RAIN）。rainEnabled はスタート画面の「天候」（setRain()）。
-       * rain は降っている間だけ { phase:'drizzle'|'suspended'|'clearing', t, resume }：
+       * rain は降っている間だけ { phase:'drizzle'|'heavy'|'suspended'|'clearing', t, resume }（にわか雨の試合中はずっと降っている）：
        * 小雨で試合が続いている／雨天中断／シートを外して再開を待っている。t はその段階に入ってからの秒数。
        * wet はコートの濡れ具合（0〜1。physics.setWetness() へそのまま渡す）。
        */
@@ -2220,7 +2220,7 @@
     /** @param {string|null} changeover 前の試合が決まった直後のスコアでのチェンジエンズ */
     startNextMatch(changeover) {
       this.finale = null;
-      // 次の試合は乾いたコートから（雨も上がった扱い。降る回数も数え直す）
+      // 次の試合は乾いたコートから（にわか雨なら次の newPoint() でまた小雨から。中断の回数も数え直す）
       this.rain = null;
       this.rainCount = 0;
       this.setWet(0);
@@ -3080,17 +3080,24 @@
       setWetness(this.wet);
     }
 
-    /** ポイントの始まりに、降り出すかを1回だけ決める（config.RAIN）。 */
+    /**
+     * ポイントの始まりに、雨の行方を1回だけ決める（config.RAIN）。にわか雨を選んだ試合は
+     * 最初から小雨が降っている（コートも最初から DRIZZLE_WET まで濡れている）。小雨の間は
+     * MIN_POINTS 本を過ぎていれば HEAVY_CHANCE の確率で雨脚が強まる（1試合に MAX_PER_MATCH 回まで）。
+     */
     maybeStartRain() {
-      if (!this.rainEnabled || this.rain || this.practice || this.rainCount >= RAIN.MAX_PER_MATCH) return;
-      if (this.matchStats.points < RAIN.MIN_POINTS || Math.random() >= RAIN.START_CHANCE) return;
-      this.rain = { phase: 'drizzle', t: 0, resume: null };
+      if (!this.rainEnabled || this.practice) return;
+      if (!this.rain) this.rain = { phase: 'drizzle', t: 0, resume: null };
+      if (this.rain.phase !== 'drizzle' || this.rainCount >= RAIN.MAX_PER_MATCH) return;
+      if (this.matchStats.points < RAIN.MIN_POINTS || Math.random() >= RAIN.HEAVY_CHANCE) return;
+      // 中央のコールはこの直後のサーブ案内に上書きされるので、知らせは風の下の天候表示に任せる
+      this.rain = { phase: 'heavy', t: 0, resume: null };
       this.rainCount++;
     }
 
-    /** 小雨が降り続いて、このポイントの後で中断する番か。 */
+    /** 雨脚が強まっていて、このポイントの後で中断する番か。 */
     rainDue() {
-      return !!this.rain && this.rain.phase === 'drizzle' && this.rain.t >= RAIN.DRIZZLE_T;
+      return !!this.rain && this.rain.phase === 'heavy';
     }
 
     /**
@@ -3124,12 +3131,17 @@
       if (!rain) return;
       rain.t += dt;
       if (rain.phase === 'drizzle') {
-        // 小雨の間に少しずつ濡れていく（乾いていく途中に降り出したなら、濡れているほうを保つ）
-        this.setWet(Math.max(this.wet, RAIN.DRIZZLE_WET * Math.min(1, rain.t / RAIN.DRIZZLE_T)));
+        // 小雨の間は、少なくとも DRIZZLE_WET まで濡れている（中断明けの濡れは1ポイントごとにそこまで乾く）
+        this.setWet(Math.max(this.wet, RAIN.DRIZZLE_WET));
+      } else if (rain.phase === 'heavy') {
+        // 強い雨の中でポイントを終えるまでに、さらに濡れていく
+        this.setWet(Math.max(this.wet, RAIN.DRIZZLE_WET
+          + (RAIN.HEAVY_WET - RAIN.DRIZZLE_WET) * Math.min(1, rain.t / RAIN.HEAVY_T)));
       } else if (rain.phase === 'suspended') {
         if (rain.t >= RAIN.DELAY) this.endRainDelay();
       } else if (rain.t >= RAIN.CLEAR_T) {
-        this.rain = null; // シートを外し終えた（コートは濡れたまま、1ポイントごとに乾いていく）
+        // シートを外し終えた。雨は小雨に戻って降り続く（コートは小雨の濡れ具合まで、1ポイントごとに乾いていく）
+        this.rain = { phase: 'drizzle', t: 0, resume: null };
       }
     }
 
@@ -3910,8 +3922,9 @@
       this.hooks.call(mine ? 'ポイント' : '失点', sub, shot);
       this.hooks.score();
       // 入れ替わるときも、決まったコールを読む一拍（NEXT_POINT）を置いてから暗転する
-      // 濡れたコートは1ポイントごとに乾いていく（降っている間は乾かない）
-      if (this.wet > 0 && !this.rain) this.setWet(this.wet - 1 / RAIN.WET_POINTS);
+      // 濡れたコートは1ポイントごとに乾いていく（小雨が降っている間は小雨の濡れ具合までしか乾かない）
+      const dryFloor = this.rain ? RAIN.DRIZZLE_WET : 0;
+      if (this.wet > dryFloor) this.setWet(Math.max(dryFloor, this.wet - 1 / RAIN.WET_POINTS));
       this.after(TIMING.NEXT_POINT, () => {
         if (this.rainDue()) this.beginRainDelay(changeover);
         else if (changeover) this.beginChangeover(changeover);

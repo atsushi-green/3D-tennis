@@ -925,8 +925,9 @@
      */
     setWeather(rain, wet) {
       const text = !rain ? (wet > 0.01 ? `コート濡れ ${Math.round(wet * 100)}%（低く滑る）` : '')
-        : rain.phase === 'drizzle' ? '小雨（降り続くと中断）'
-          : rain.phase === 'suspended' ? '雨天中断' : '雨が上がった';
+        : rain.phase === 'drizzle' ? '小雨（強まると中断）'
+          : rain.phase === 'heavy' ? '強い雨（このポイントの後で中断）'
+          : rain.phase === 'suspended' ? '雨天中断' : '雨が弱まった';
       if (this.el.weather.textContent !== text) this.el.weather.textContent = text;
     }
 
