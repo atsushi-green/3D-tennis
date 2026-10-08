@@ -154,7 +154,12 @@
     if (window.enter.y < top - CPU.SMASH_ENTER_SLACK) return null; // 上から落ちてきた球ではない
     if (peak < CPU.SMASH_LOB_PEAK) return null; // そもそも高く上がっていない＝ロブではない
     const { mid } = window;
-    const runT = Math.hypot(mid.x - player.x, mid.z - player.z) / PLAYER.CPU_CHASE;
+    // 頭上を越されて下がる距離（ネットから遠ざかる向きを正）。下がりすぎるロブは
+    // 叩きにいかずバウンドを待つ。下がる足は遅いので、そのぶん間に合いにくく見積もる。
+    const retreat = side * (mid.z - player.z);
+    if (retreat > CPU.SMASH_RETREAT_MAX) return null;
+    const speed = PLAYER.CPU_CHASE * (retreat > 0 ? CPU.SMASH_BACK_SPEED : 1);
+    const runT = Math.hypot(mid.x - player.x, mid.z - player.z) / speed;
     if (runT > mid.t * CPU.SMASH_CHASE_MARGIN) return null; // 走っても間に合わない
     return { x: clamp(mid.x, -CPU.CHASE_X_LIMIT, CPU.CHASE_X_LIMIT), z: mid.z };
   }
@@ -397,7 +402,7 @@
   /**
    * CPU/AI のスマッシュ。相手の逆をついて深く、飛翔時間 SMASH_T（＝グラウンドストロークの
    * 1/3 近い速さ）で突き刺す決め球。追い込まれて打つ（stretch が大きい）ときだけ
-   * SMASH_STRETCH_T まで威力が落ちる。
+   * SMASH_STRETCH_T まで威力が落ち、ミス率も SMASH_STRETCH_OUT_MULT 倍まで上がる。
    * @param {number} [aimX] 着地の横位置を明示する（ダブルスでネット際の相手を横切らない
    *   ように狙う doublesSmashShot() が使う）。省略時は従来どおり相手の逆サイド。
    */
@@ -406,12 +411,14 @@
       ? -signOr(opponent.x, Math.random() - 0.5) * rand(CPU.SMASH_AIM_X_MIN, CPU.SMASH_AIM_X_MAX)
       : aimX;
     const z = dir * rand(CPU.SMASH_AIM_Z_MIN, CPU.SMASH_AIM_Z_MAX);
+    // 追い込まれたスマッシュは叩き損ないも増える（下がりながら・深い位置からの1打）。
+    const outMult = lerp(1, CPU.SMASH_STRETCH_OUT_MULT, clamp(stretch, 0, 1));
     return {
       target: scatterOut(
         { x, y: PHYSICS.BALL_R, z },
         dir,
-        CPU.OUT_LONG * CPU.SMASH_OUT_MULT * skill.out,
-        CPU.OUT_WIDE * CPU.SMASH_OUT_MULT * skill.out,
+        CPU.OUT_LONG * CPU.SMASH_OUT_MULT * outMult * skill.out,
+        CPU.OUT_WIDE * CPU.SMASH_OUT_MULT * outMult * skill.out,
       ),
       flight: lerp(CPU.SMASH_T, CPU.SMASH_STRETCH_T, clamp(stretch, 0, 1)) * skill.power,
       lob: false,

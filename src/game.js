@@ -14,7 +14,7 @@
     approach2D, clamp, lerp, mpsToKmh, rand, signOr,
   } = RallyOne.math;
   const {
-    hitsNet, integrate, predictLanding, predictWindow, reflectBounce, setWetness, solveShot,
+    hitsNet, integrate, predictLanding, predictWindow, reflectBounce, setWetness, solveShot, spinGravity,
   } = RallyOne.physics;
   const {
     chasePosition, homePosition, netRushPosition, cpuShot, cpuVolleyShot, cpuSmashShot,
@@ -177,11 +177,16 @@
    * 頭上へ上がってきた球（CPU.SMASH_MIN_Y 以上でコートの中）ならスマッシュで叩ける。
    * 後者を許さないと、ai.js#smashApproach() が先回りさせた位置に立っていても
    * 打点が高いまま素通りさせてしまい、結局バウンド後に打ち直すことになる。
+   * ただし頭上を越されて CPU.SMASH_RETREAT_MAX より下がらされたロブは叩かずにバウンドを待つ
+   * （ai.smashApproach() が先回りをあきらめた球を、追いかける途中で無理に叩かせない）。
    * @param {number} volleyZ ノーバウンドで返してよい深さの限界（aiVolleyZ()）
    */
   function aiCanReturnNow(actor, ball, volleyZ) {
-    return ball.bounces >= 1
-      || Math.abs(actor.z) <= volleyZ
+    if (ball.bounces >= 1) return true;
+    // ボレーの側（ネットへ詰めている最中は自陣どこでもボレーできる＝NET_RUSH_VOLLEY_Z）
+    // にも掛ける。そうしないと、詰めていた CPU だけは何m下がらされても空中で叩けてしまう。
+    if (-actor.runFwd > CPU.SMASH_RETREAT_MAX) return false;
+    return Math.abs(actor.z) <= volleyZ
       || (ball.y >= CPU.SMASH_MIN_Y && ball.vy <= CPU.SMASH_FALLING_VY
         && Math.abs(actor.z) <= CPU.SMASH_Z_MAX);
   }
@@ -2879,9 +2884,19 @@
       // スマッシュが「走らされた」扱いになり、決め球のはずが 55〜65km/h の当てるだけの
       // 球になっていた（ユーザー報告「溜めずに打つ山なりの球を強打してこない」。実測：
       // Extreme で山なりの球への返球の3割がスマッシュで、その平均が 92km/h）。
-      const smashStretch = stretch
-        * (1 - clamp(player.settleT / CPU.SMASH_SETTLE_T, 0, 1))
-        * (player.runFwd > 0 ? 1 - CPU.SMASH_FORWARD_RELIEF : 1);
+      // 逆に**下がって**叩くスマッシュ（頭上を越されたロブ）と、サービスラインより奥からの
+      // スマッシュは、待てていても苦しい（CPU.SMASH_RETREAT_STRETCH_DIST / SMASH_DEEP_* 参照）。
+      // 以前はここが無く、人間のロブがほぼ全部フルパワーのスマッシュで叩き返されていた。
+      const retreatStretch = clamp(-player.runFwd / CPU.SMASH_RETREAT_STRETCH_DIST, 0, 1);
+      const deepStretch = clamp((Math.abs(ball.z) - CPU.SMASH_DEEP_Z_MIN)
+        / (CPU.SMASH_DEEP_Z_MAX - CPU.SMASH_DEEP_Z_MIN), 0, 1) * CPU.SMASH_DEEP_STRETCH;
+      const smashStretch = Math.max(
+        stretch
+          * (1 - clamp(player.settleT / CPU.SMASH_SETTLE_T, 0, 1))
+          * (player.runFwd > 0 ? 1 - CPU.SMASH_FORWARD_RELIEF : 1),
+        retreatStretch,
+        deepStretch,
+      );
       // ダブルスはラリーが長引きやすく、同じロブ選択率・同じ山なり化の度合いでも
       // 1ポイント中の絶対数が増えて目立つため、DOUBLES.LOB_SCALE / ARC_SCALE で
       // 抑える（config.js のコメント参照）。
@@ -3441,7 +3456,12 @@
 
       // ロブは威力ではなくタッチの球なので能力の倍率は掛けない（CPU/AI 側の cpuShot() と同じ扱い）。
       const strokeAttr = attr[stroke === 'backhand' ? 'backhand' : 'forehand'];
-      const flight = lob ? SHOT.LOB_T : lerp(SHOT.TAP_T, SHOT.CHARGE_T, charge) * strokeAttr;
+      // ロブは溜めで高い守りのロブ（溜めなし）〜低く速い攻めのロブ（フル溜め）を打ち分ける。
+      // スピンで実効重力が変わっても頂点の高さが同じになるよう √(重力比) で飛翔時間を補正する
+      // （頂点の高さ ∝ 重力×飛翔時間²）。トップスピンは速く、スライスはゆっくり落ちてくる。
+      const lobFlight = lerp(SHOT.LOB_T, SHOT.LOB_ATTACK_T, charge)
+        * Math.sqrt(spinGravity('flat') / spinGravity(this.you.chargeSpin));
+      const flight = lob ? lobFlight : lerp(SHOT.TAP_T, SHOT.CHARGE_T, charge) * strokeAttr;
       // 溜めるほど深く。速さと深さの両方が変わるので「強い球を打った」感が出る。
       const depth = lerp(SHOT.TAP_Z, SHOT.CHARGE_Z, charge);
 
@@ -3456,7 +3476,7 @@
         target: {
           x: aimed + spread(-risk, risk),
           y: BALL_R,
-          z: lob ? SHOT.LOB_Z : spread(depth, depth + SHOT.DRIVE_Z_SPREAD),
+          z: lob ? lerp(SHOT.LOB_Z, SHOT.LOB_ATTACK_Z, charge) : spread(depth, depth + SHOT.DRIVE_Z_SPREAD),
         },
         flight,
         lob,

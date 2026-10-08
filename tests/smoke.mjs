@@ -1503,16 +1503,46 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     ok(flight < TAP_T && flight > CHARGE_T, `partial charge is between TAP_T and CHARGE_T, got ${flight}`);
   }
 
-  // ロブは溜め量に関わらず最優先
+  // ロブは溜めで「高い守りのロブ（溜めなし＝LOB_T）」〜「低く速い攻めのロブ（フル溜め＝
+  // LOB_ATTACK_T）」を打ち分ける。どちらも通常のドライブの飛翔時間とは別枠
   {
+    const { LOB_ATTACK_T } = R.config.SHOT;
     const input = { moveX: 0, moveZ: 0, lob: true };
     const g = new R.Game({ input, hooks: noHooks });
     g.start();
     g.phase = 'rally';
+    ok(Math.abs(g.playerShot().flight - LOB_T) < 1e-9, `an uncharged lob is the high LOB_T one, got ${g.playerShot().flight}`);
     g.chargeStart();
     for (let i = 0; i < 60; i++) g.update(1 / 60);
     g.chargeRelease();
-    ok(g.playerShot().flight === LOB_T, `lob overrides charge, got ${g.playerShot().flight}`);
+    ok(Math.abs(g.playerShot().flight - LOB_ATTACK_T) < 1e-9,
+      `a fully charged lob is the low, fast LOB_ATTACK_T one, got ${g.playerShot().flight}`);
+  }
+}
+
+// --- ロブの頂点の高さは球種（実効重力）で変わらない ---
+// (退行テスト: 以前はスライスでロブを打つと、重力が軽いぶん同じ飛翔時間で頂点が 3.2m
+//  （フラットは 4.2m）しか上がらない平たい球になり、コートの中ほどで叩かれていた)
+{
+  const peakOf = (spin) => {
+    const input = { moveX: 0, moveZ: 0, lob: true };
+    const g = new R.Game({ input, hooks: noHooks });
+    g.start();
+    g.windStrength = 0;
+    g.setWindVector();
+    g.phase = 'rally';
+    g.you.x = 0; g.you.z = -11;
+    g.ball.x = 0.3; g.ball.y = 1.0; g.ball.z = -11; g.ball.bounces = 1;
+    g.you.swingCharge = 0;
+    g.you.chargeSpin = spin;
+    g.hit('you');
+    const grav = R.physics.spinGravity(g.ball.spin);
+    return g.ball.y + (g.ball.vy * g.ball.vy) / (-2 * grav);
+  };
+  const flat = peakOf('flat');
+  for (const spin of ['top', 'slice']) {
+    const peak = peakOf(spin);
+    ok(Math.abs(peak - flat) < 0.15, `a ${spin} lob peaks as high as a flat one: ${spin}=${peak.toFixed(2)} flat=${flat.toFixed(2)}`);
   }
 }
 
@@ -6510,6 +6540,38 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   const mirrored = { ...lob, z: -lob.z, vz: -lob.vz };
   const mateSpot = smashApproach(mirrored, { x: 0, z: -CPU.HOME_Z }, -1);
   ok(mateSpot !== null && mateSpot.z < 0, 'the partner does the same on its own (z<0) half');
+  // 頭上を越す高いロブは、ネット際から SMASH_RETREAT_MAX より下がらないと叩けないので
+  // 先回りしない（1バウンドさせて返す）。
+  // (退行テスト: 以前は前後どちらへも同じ速さで走れる前提で、ネット際からでも 6m 以上
+  //  下がって先回りし、待てた時間でフルパワーのスマッシュになっていた)
+  const atNetZ = { x: 0, z: 1.5 };
+  ok(smashApproach(lob, atNetZ, 1) === null, 'a high lob over a net player is left to bounce');
+}
+
+// --- CPU/AI：下がって叩くスマッシュは、落下点で待てていても弱い ---
+{
+  const { CPU } = R.config;
+  const smashSpeed = (runFwd, z) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.cpu.x = 0; g.cpu.z = z;
+    g.cpu.settleT = CPU.SMASH_SETTLE_T * 2; // 落下点で十分待てていた
+    g.cpu.chaseDist = 0;
+    g.cpu.runFwd = runFwd;
+    g.ball.x = 0.4; g.ball.y = CPU.SMASH_MIN_Y + 0.1; g.ball.z = z; g.ball.bounces = 0;
+    g.ball.vx = 0; g.ball.vy = -5; g.ball.vz = 8;
+    g.hit('cpu');
+    ok(g.cpu.stroke === 'smash', `precondition: the cpu smashes, got ${g.cpu.stroke}`);
+    return Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz);
+  };
+  const settled = smashSpeed(0, 4);
+  const retreated = smashSpeed(-CPU.SMASH_RETREAT_STRETCH_DIST, 4);
+  const deep = smashSpeed(0, CPU.SMASH_DEEP_Z_MAX);
+  ok(retreated < settled * 0.75,
+    `a smash hit after backing up is weaker: settled=${settled.toFixed(1)} retreated=${retreated.toFixed(1)}`);
+  ok(deep < settled * 0.8,
+    `a smash from deep in the court is weaker: settled=${settled.toFixed(1)} deep=${deep.toFixed(1)}`);
 }
 
 // --- CPU/AI：先回りの対象と「スマッシュ」の判定条件が食い違わない ---
