@@ -6729,6 +6729,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     ok(c.name && c.type && c.text, `${c.key} has a name, a type and a description`);
     ok(STYLES.includes(c.look.style), `${c.key} has a hair style the portrait can draw: ${c.look.style}`);
     ok(['skin', 'hair', 'accent'].every((k) => HEX.test(c.look[k])), `${c.key} has #rrggbb portrait colours`);
+    ok(R.config.CPU_STYLES[c.cpuStyle], `${c.key} brings a CPU play style that exists: ${c.cpuStyle}`);
     if (c.key !== CHARACTER_DEFAULT && !c.champion) {
       ok(core.some((s) => c.ratings[s.key] > SKILL_DEFAULT) && core.some((s) => c.ratings[s.key] < SKILL_DEFAULT),
         `${c.key} has both a strength and a weakness`);
@@ -6743,6 +6744,9 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   const standard = CHARACTERS.find((c) => c.key === CHARACTER_DEFAULT);
   ok(standard && SKILLS.every((s) => standard.ratings[s.key] === SKILL_DEFAULT),
     `the default player (${CHARACTER_DEFAULT}) is all ${SKILL_DEFAULT}s`);
+  ok(standard.cpuStyle === 'none', 'and brings no play style, so the default match is unchanged');
+  ok(CHARACTERS.find((c) => c.key === 'serveVolley').cpuStyle === 'serveAndVolley',
+    'picking the serve-and-volleyer as the CPU makes it serve and volley');
 
   try {
     const big = CHARACTERS.find((c) => c.ratings.serve === SKILL_MAX);

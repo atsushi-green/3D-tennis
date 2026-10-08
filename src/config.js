@@ -3936,11 +3936,15 @@
    * - look は似顔絵（hud.js が SVG で描く）。肌・髪の色と髪型、カードの差し色。
    *   シャツの色は選手ではなく枠（ROSTER の kit）で決まる。
    *   style は 'short' | 'buzz' | 'ponytail' | 'cap' | 'curly' | 'bun' | 'long' | 'band' | 'crown'。
+   * - cpuStyle は、この選手を相手（ROSTER の 'cpu' 枠）に選んだとき自動で切り替わる
+   *   「CPUのプレースタイル」（CPU_STYLES のキー）。選んだ後にスタート画面で別のスタイルへ
+   *   変えることもできる。型にはまらない選手（オールラウンダー等）は 'none'。
    */
   const CHARACTER_BUDGET = SKILL_DEFAULT * SKILLS.filter((s) => !s.aiOnly).length;
   const CHARACTERS = [
     {
       key: 'standard',
+      cpuStyle: 'none',
       name: 'ケン・アサギ',
       type: 'オールラウンダー',
       text: '得意も苦手もない、基準になる選手。迷ったらこの人。',
@@ -3952,6 +3956,7 @@
     },
     {
       key: 'bigServer',
+      cpuStyle: 'aggressiveBaseliner',
       name: 'ボリス・ヴァルガ',
       type: 'ビッグサーバー',
       text: '重いサーブとスマッシュで、ポイントを短く決める。足が遅く、走らされると苦しい。',
@@ -3963,6 +3968,7 @@
     },
     {
       key: 'counterPuncher',
+      cpuStyle: 'retriever',
       name: 'ルシア・ベガ',
       type: 'カウンターパンチャー',
       text: 'どこまでも走って拾い、ミスをしない。決め球は持たず、相手が崩れるのを待つ。',
@@ -3974,6 +3980,7 @@
     },
     {
       key: 'serveVolley',
+      cpuStyle: 'serveAndVolley',
       name: 'オリバー・ハート',
       type: 'サーブ&ボレーヤー',
       text: 'サーブから一気にネットへ詰め、ボレーで仕留める。後ろでの打ち合いは苦手で、ミスも出る。',
@@ -3985,6 +3992,7 @@
     },
     {
       key: 'powerHitter',
+      cpuStyle: 'aggressiveBaseliner',
       name: 'レオ・ブラント',
       type: 'パワーヒッター',
       text: 'フォアの強打で押し込む。当たれば誰より速いが、ミスも多い。',
@@ -3996,6 +4004,7 @@
     },
     {
       key: 'speedster',
+      cpuStyle: 'retriever',
       name: 'ミア・ソーン',
       type: 'スピードスター',
       text: 'コートを駆け回る俊足で、届かないはずの球に届く。サーブの威力はない。',
@@ -4007,6 +4016,7 @@
     },
     {
       key: 'technician',
+      cpuStyle: 'none',
       name: 'エマ・ルグラン',
       type: 'テクニシャン',
       text: 'バックハンドとボレーの名手。崩れずに打ち分ける。足は速くない。',
@@ -4018,6 +4028,7 @@
     },
     {
       key: 'veteran',
+      cpuStyle: 'none',
       name: 'ヨハン・ベルク',
       type: 'ベテラン',
       text: '読みの速さと広い守備範囲、組み立てのうまいサーブ。足と体力は衰えた。',
@@ -4031,6 +4042,7 @@
     // 最高にはせず既定の3（＝AI のふだんどおりの詰め方）のまま。差し色は必殺技と同じ金。
     {
       key: 'champion',
+      cpuStyle: 'none',
       name: 'レイ・カグラ',
       type: '最強のチャンピオン',
       text: 'すべての能力が最高。弱点のない、最強の選手。相手に選べば、どの強さでも手ごわい。',

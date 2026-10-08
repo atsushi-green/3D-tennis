@@ -5,7 +5,7 @@
   const {
     PHYSICS, applyCpuLevel, applyCpuStyle, applySurface, TOSS,
     setRating, getRating, resetRatings, randomizeRatings, applyCharacter,
-    SKILLS, ROSTER, CHARACTER_DEFAULT,
+    SKILLS, ROSTER, CHARACTERS, CHARACTER_DEFAULT,
     SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE, LINE_CALL,
   } = RallyOne.config;
   const { clamp } = RallyOne.math;
@@ -271,6 +271,12 @@
       }
       picks[who] = key;
       hud.setPicks(picks);
+      // 相手の主力を選んだら、その選手の型に合わせて CPU のプレースタイルも切り替える
+      // （例：サーブ&ボレーヤー → サーブ&ボレー）。カスタムは型がないので今の選択のまま。
+      if (who === 'cpu') {
+        const character = CHARACTERS.find((c) => c.key === key);
+        if (character) menu.onSelectStyle(character.cpuStyle);
+      }
     },
     // つまみを動かしたら、その枠は「カスタム」になる（選んでいた選手をもとにした微調整）
     onChange: (who, key, value) => {
@@ -287,6 +293,7 @@
         delete customRatings[r.key];
       });
       hud.setPicks(picks);
+      menu.onSelectStyle(CHARACTERS.find((c) => c.key === CHARACTER_DEFAULT).cpuStyle);
     },
     onRandom: () => {
       randomizeRatings();
