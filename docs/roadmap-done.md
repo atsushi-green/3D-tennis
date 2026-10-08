@@ -4,6 +4,12 @@
 書式：
 
 ```
+## 2026-10-08 試合後のハイライト
+- ブランチ: feat/highlights-emotions-weather
+- 実施内容: ユーザー要望（追加アイデアの4番）。`Game#endPoint()` が決まった1点ごとに見どころの点数を付けた記録（`pointRecord()`：ラリー本数・決まり方・エースの球速・出た必殺技・かかっていた1点。`config.HIGHLIGHT.SCORE`）を `pointLog` に積み、`highlightPicks()` が試合を決めた1点＋点数上位を古い順に最大 `MAX_CLIPS` 本選んで `matchSummary().highlights` に載せる。表示側は、ポイントごとのリプレイを切り出すときにその録画を id で残し（`world.startReplay(wait, clipId)`／スキップされたら `captureClip()`）、`game.highlightKeep()` に入らない録画は捨てる。締めのカットの後、`main.js` がスタッツ画面の前に `world.playHighlights()` で順に流し、HUD に「ハイライト n/m」と見出し（`hud.setHighlight()`）を出す。ハイライトの1本は、その1点のときの会場の向き（チェンジエンズ）で映す。
+- 確認: headless Chrome で、試合が決まった後にハイライトが流れ、見出し（エース／ピンチを凌ぐ／マッチポイント）が出ること、Space で残りごと飛ばしてスタッツ画面が開くことを確認。コンソールエラーなし。
+- テスト: `node tests/smoke.mjs` — ALL PASS。新規：1点ごとの点数（ラリー・ウィナー・必殺技・速いエース）、選ばれる本数の上限・試合を決めた1点が必ず入る・古い順・MIN_SCORE 未満を外す・`highlightKeep()` が候補を必ず含む・次の試合で記録が空になり id は通しで続く。
+
 ## <日付> <タイトル>
 - ブランチ: <branch名>
 - 実施内容: <何をしたか、1〜3行>

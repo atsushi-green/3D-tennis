@@ -70,6 +70,8 @@
    * replaceGame() からも触るので、それより前（ここ）で宣言しておく（REPLAY.NET_DELAY 参照）。
    */
   let netReplayPending = false;
+  /** netReplayPending の間、そのポイントの id（ハイライト用の録画の鍵。game.lastPoint.id）。 */
+  let netClipId = null;
   /** 練習モードのレッスン一覧を開いている間だけ true（スタート画面の上で、#menuBody と差し替え）。 */
   let lessonMenuOpen = false;
   /** レッスン一覧で選んでいる行（config.PRACTICE.LESSONS の添字）。 */
@@ -140,6 +142,7 @@
     game = createGame();
     RallyOne.game = game;
     world.skipReplay();
+    world.resetClips();
     netReplayPending = false;
     prevPhase = game.phase;
     pendingSummary = null;
@@ -358,6 +361,8 @@
     // 1回の押下で両方が飛ぶことはない。
     onSkipReplay: () => {
       world.skipReplay();
+      // ネットから落ちきる前に飛ばされても、ハイライトの候補としては録っておく
+      if (netReplayPending) world.captureClip(netClipId);
       netReplayPending = false;
       game.skipChangeover();
       game.skipMatchPointCut();
@@ -413,10 +418,18 @@
     if (game.started) {
       // リプレイが終わっていて、まだ出していないスタッツがあれば、ここで開く
       // （最後のポイントの再生に割り込まないよう、必ず再生が終わってから）。
+      // その前に、試合の見どころのハイライトを1度だけ流す（流せる録画が無ければすぐ開く）。
       if (pendingSummary && !world.isReplaying()) {
-        hud.showMatchStats(pendingSummary);
-        pendingSummary = null;
-        matchStatsOpen = true;
+        const summary = pendingSummary;
+        if (!summary.highlightsPlayed) {
+          summary.highlightsPlayed = true;
+          if (world.playHighlights(summary.highlights)) hud.hideCall();
+        }
+        if (!world.isReplaying()) {
+          hud.showMatchStats(summary);
+          pendingSummary = null;
+          matchStatsOpen = true;
+        }
       }
       // リプレイ中とスタッツ画面を開いている間は、試合の進行そのものを止める（＝「見て
       // いるぶんだけ待つ」）。止めないと裏で次のポイントが進んでしまい、再生が途中で
@@ -444,16 +457,25 @@
       // ネットに掛かったポイントは、球が落ちて着地するまで通常の画面で見せ、着地した瞬間を
       // 再生の終わりにしてから REPLAY.NET_DELAY 置いて再生する（REPLAY.NET_DELAY 参照）。
       // 決着の瞬間にはまだ game.ball.netFall が立っている（落下中）ことで見分ける。
+      // 再生する1点はハイライトの候補として録画を残す（id で game.pointLog と突き合わせる）。
+      // 候補から外れた録画はここで捨てる。
       if (pointJustEnded && !game.practice) {
-        if (game.ball.netFall) netReplayPending = true;
-        else world.startReplay(game.lineCall && game.lineCall.decisive ? LINE_CALL.REPLAY_DELAY : 0);
+        const clipId = game.lastPoint && game.lastPoint.id;
+        world.pruneClips(game.highlightKeep());
+        if (game.ball.netFall) {
+          netReplayPending = true;
+          netClipId = clipId;
+        } else {
+          world.startReplay(game.lineCall && game.lineCall.decisive ? LINE_CALL.REPLAY_DELAY : 0, clipId);
+        }
       }
       // 着地した（保険として、次のポイントの支度に移った）ところで再生を予約する
       if (netReplayPending && (!game.ball.netFall || game.phase !== 'over')) {
         netReplayPending = false;
-        world.startReplay(REPLAY.NET_DELAY);
+        world.startReplay(REPLAY.NET_DELAY, netClipId);
       }
       hud.setReplay(world.isReplaying(), world.isCheckingMark());
+      hud.setHighlight(world.highlightInfo());
       // 試合が決まった瞬間から、リプレイ・締めのカットを通してスタッツ画面が出るまで、スタンドは
       // 総立ちで沸き続ける（スタッツ画面の番になったら収める）。ざわめきより先に渡す：大歓声が
       // 鳴っている間と、それが収まりきるまでは、audio.js がざわめきを戻さない。

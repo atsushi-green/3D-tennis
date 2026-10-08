@@ -3426,6 +3426,31 @@
   };
 
   /**
+   * 試合後のハイライト。1セットが決まって締めのカットを終えたら、スタッツ画面の前に、
+   * 試合中の見どころのポイントのリプレイを古い順につないで流す（scene/world.js#playHighlights）。
+   * どの1点が見どころかは game.js が決着の瞬間に点数を付けて覚えておき（Game#pointLog）、
+   * 点数の高い順に MAX_CLIPS 本を選ぶ（Game#highlightPicks）。試合を決めた1点は必ず入れる。
+   * - SCORE  1点の点数の内訳。PER_SHOT×ラリーの本数＋各項目の上乗せ。STAKE のキーは
+   *   取った側から見たかかっていた1点（'saved'＝かけられていた側が凌いだ。audio.js の stakeKey と同じ）
+   * - MIN_SCORE  これ未満の1点は候補にしない（試合を決めた1点は例外）
+   */
+  const HIGHLIGHT = {
+    MAX_CLIPS: 4,
+    MIN_SCORE: 8,
+    SCORE: {
+      PER_SHOT: 1,
+      ACE: 5,
+      FAST_SERVE_KMH: 185, // これ以上のエースはさらに FAST_SERVE だけ上乗せ
+      FAST_SERVE: 3,
+      WINNER: 2,           // 相手のミスではなく決め球で取った
+      SPECIAL: 8,          // そのポイントで必殺技が出た（何本出ても1回ぶん）
+      STAKE: { match: 12, break: 5, game: 1, saved: 6 },
+    },
+    SPEED: REPLAY.SPEED,
+    HOLD_SEC: 0.9,  // 1本ごとに最後のコマで静止する長さ（次の1本との区切り）
+  };
+
+  /**
    * Space を押しっぱなしにしている間のテイクバック（溜め）。
    * ラリー中もサーブの「打つ」瞬間も共通で使う。離した瞬間の溜め量(0〜1)で
    * SHOT.TAP_T〜CHARGE_T / SERVE.T〜CHARGE_T を補間する。
@@ -4176,7 +4201,7 @@
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, CHANGEOVER, MATCH_POINT, FINALE, PRACTICE, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT, GUIDE,
-    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, STAMINA, TOSS, OFFICIALS, LINE_CALL, BALL_MARK,
+    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, HIGHLIGHT, STAMINA, TOSS, OFFICIALS, LINE_CALL, BALL_MARK,
     STANDS, SPECTATORS, FLAG, MOTION,
     SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET,
     SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, ATTR_SPREAD, ATTRS, NEUTRAL_ATTR,

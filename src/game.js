@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    ATTRS, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, FINALE, FX, HALF_L, HALF_W, LINE_CALL, MATCH_POINT,
+    ATTRS, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, FINALE, FX, HALF_L, HALF_W, HIGHLIGHT, LINE_CALL, MATCH_POINT,
     NET, PHYSICS, PLAYER, PRACTICE, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, SWING,
     TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND, shotSkill,
   } = RallyOne.config;
@@ -804,6 +804,8 @@
       this.stakes = null;
       /** このポイントで何本打たれたか（サーブも1本に数える）。beginServe() で数え直す。 */
       this.rallyShots = 0;
+      /** このポイントで出た必殺技の呼び名（ハイライトの見出しに使う）。rallyShots と同じく数え直す。 */
+      this.pointSpecials = [];
       /**
        * スマッシュの先回りヒント。毎フレーム smashSpot() が入れ直す（打てる球が来ていなければ null）。
        * 表示専用の値なので、ゲームの判定はここを一切読まない（scene/hint.js と hud.js だけが使う）。
@@ -948,6 +950,15 @@
        * totalShots はポイントが決まった時点の rallyShots の合計＝サーブも1本に数える。
        */
       this.matchStats = { points: 0, longestRally: 0, totalShots: 0 };
+      /**
+       * このマッチで決まった1点ずつの記録（試合後のハイライトの候補。pointRecord() 参照）。
+       * id は Game を通した通し番号＝表示側が録ったリプレイのコマと突き合わせる鍵。
+       * matchStats と同じく resetStats() で空に戻す。
+       */
+      this.pointLog = [];
+      this.pointSeq = 0;
+      /** 直前に決まった1点の記録（pointLog の最後。練習モードでは null のまま）。 */
+      this.lastPoint = null;
 
       /**
        * このポイント中に吹いている風（加速度、m/s²）。wind＝横(±x)、windZ＝前後(±z。+z＝
@@ -1597,6 +1608,7 @@
       else actor.specialUses[move] = this.usesLeft(move, who) - 1;
       this.stats[TEAM_OF[who]].specials++;
       actor.specialLabel = label || SPECIAL_LABEL[move];
+      this.pointSpecials.push(actor.specialLabel);
       this.hooks.sound('special');
       this.hooks.call(`${actor.specialLabel}！`, '必殺技');
       // ポイントが決まった後のコール（ポイント／ウィナー！）を消してしまわないよう、
@@ -2259,6 +2271,7 @@
       this.serveInFlight = false;
       this.cpuNetRush = false;
       this.rallyShots = 0; // このサーブ（フォールトからのやり直しも含む）から数え直す
+      this.pointSpecials = [];
 
       const ball = this.ball;
       ball.live = false;
@@ -3506,6 +3519,61 @@
     resetStats() {
       this.stats = teamStats();
       this.matchStats = { points: 0, longestRally: 0, totalShots: 0 };
+      this.pointLog = [];
+    }
+
+    /**
+     * 決まった1点の記録。score は config.HIGHLIGHT.SCORE で付ける見どころの点数。
+     * @param {'you'|'cpu'} winner
+     * @param {'ace'|'winner'|'error'|'doubleFault'} outcome
+     * @param {string|null} stake 取った側から見たかかっていた1点（'match'|'break'|'game'|'saved'）
+     * @param {number|null} serveKmh エースのときだけそのサーブの球速
+     */
+    pointRecord(winner, outcome, stake, serveKmh) {
+      const S = HIGHLIGHT.SCORE;
+      const shots = this.rallyShots;
+      const specials = this.pointSpecials.slice();
+      let score = shots * S.PER_SHOT;
+      if (outcome === 'ace') score += S.ACE + (serveKmh >= S.FAST_SERVE_KMH ? S.FAST_SERVE : 0);
+      if (outcome === 'winner') score += S.WINNER;
+      if (specials.length) score += S.SPECIAL;
+      if (stake) score += S.STAKE[stake] || 0;
+      return {
+        id: ++this.pointSeq,
+        winner, outcome, stake, serveKmh, shots, specials, score,
+        games: { you: this.match.games.you, cpu: this.match.games.cpu },
+      };
+    }
+
+    /**
+     * 試合後に流すハイライトの1点（pointLog から選んだ記録を、古い順に）。
+     * 最後の1点（試合を決めた1点）は必ず入れ、残りは点数の高い順に MIN_SCORE 以上から選ぶ
+     * （同点なら長いラリーを先に）。表示側は録ってあるコマのうち、ここで選ばれる可能性の
+     * ある id だけを残せばよい（highlightKeep()）。
+     */
+    highlightPicks() {
+      const log = this.pointLog;
+      if (!log.length) return [];
+      const last = log[log.length - 1];
+      const rest = log.slice(0, -1)
+        .filter((p) => p.score >= HIGHLIGHT.MIN_SCORE)
+        .sort((a, b) => b.score - a.score || b.shots - a.shots)
+        .slice(0, HIGHLIGHT.MAX_CLIPS - 1);
+      return rest.concat([last]).sort((a, b) => a.id - b.id);
+    }
+
+    /**
+     * ハイライトに入りうる1点の id（いまの上位 MAX_CLIPS 本＋直前の1点＝次の1点で試合が
+     * 決まらなくても、点数が高ければ残る）。表示側はこれ以外の録画を捨ててよい。
+     */
+    highlightKeep() {
+      const log = this.pointLog;
+      const top = log.filter((p) => p.score >= HIGHLIGHT.MIN_SCORE)
+        .sort((a, b) => b.score - a.score || b.shots - a.shots)
+        .slice(0, HIGHLIGHT.MAX_CLIPS);
+      const ids = new Set(top.map((p) => p.id));
+      if (log.length) ids.add(log[log.length - 1].id);
+      return ids;
     }
 
     /**
@@ -3523,6 +3591,7 @@
         longestRally,
         // 1ポイントあたりの平均本数（サーブを1本目に数える）。0ポイントで割らない。
         avgRally: points ? totalShots / points : 0,
+        highlights: this.highlightPicks(),
         you: { ...this.stats.you },
         cpu: { ...this.stats.cpu },
       };
@@ -3586,6 +3655,8 @@
       // 出してあるので、それをそのまま「決め球で取った(winners)」「相手のミスで取った
       // (相手の unforced)」に振り分ける。エース／ダブルフォルトは専用の欄に数えるので
       // ここでは二重に数えない。
+      this.lastPoint = this.pointRecord(winner, outcome, stakeKey, isAce ? this.lastServeKmh : null);
+      this.pointLog.push(this.lastPoint);
       this.stats[winner].points++;
       if (outcome === 'winner') this.stats[winner].winners++;
       else if (outcome === 'error') this.stats[opponent(winner)].unforced++;

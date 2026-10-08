@@ -6915,6 +6915,57 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   ok(g.stats.you.points === 0 && g.matchStats.points === 0, 'resetStats() clears everything');
 }
 
+// --- 試合後のハイライト：決まった1点ずつに見どころの点数を付け、上位と試合を決めた1点を古い順に選ぶ ---
+{
+  const { HIGHLIGHT } = R.config;
+  const S = HIGHLIGHT.SCORE;
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(false, 'you');
+  /** shots 本のラリーで winner が reason で取る（specials はそのポイントで出た技の呼び名） */
+  const point = (winner, reason, shots, specials = []) => {
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.stakes = null;
+    g.rallyShots = shots;
+    g.pointSpecials = specials.slice();
+    g.endPoint(winner, reason);
+    g.clearTimers();
+    return g.lastPoint;
+  };
+  const short = point('you', 'アウト', 2);
+  ok(short.id === 1 && short.score === 2 * S.PER_SHOT && short.outcome === 'error',
+    `a short error rally scores just its shots: ${JSON.stringify(short)}`);
+  const long = point('cpu', 'ツーバウンド', 15);
+  ok(long.score === 15 * S.PER_SHOT + S.WINNER, `a long winner rally adds the winner bonus: ${long.score}`);
+  const special = point('you', 'ツーバウンド', 3, ['ジャックナイフ']);
+  ok(special.score === 3 * S.PER_SHOT + S.WINNER + S.SPECIAL && special.specials[0] === 'ジャックナイフ',
+    `a special move adds its bonus: ${special.score}`);
+  // エース：サーブに触れられずに決まった（serveInFlight のまま）。速いサーブはさらに上乗せ
+  g.phase = 'rally'; g.serveInFlight = true; g.rallyShots = 1; g.pointSpecials = [];
+  g.lastServeKmh = S.FAST_SERVE_KMH + 5;
+  g.endPoint('you', 'ツーバウンド'); g.clearTimers();
+  ok(g.lastPoint.outcome === 'ace' && g.lastPoint.serveKmh === S.FAST_SERVE_KMH + 5
+    && g.lastPoint.score === S.PER_SHOT + S.ACE + S.FAST_SERVE, `a fast ace: ${JSON.stringify(g.lastPoint)}`);
+  for (let i = 0; i < 6; i++) point('cpu', 'ネット', 1);
+  const last = point('cpu', 'アウト', 1);
+  ok(g.pointLog.length === 11, `every decided point is logged: ${g.pointLog.length}`);
+
+  const picks = g.highlightPicks();
+  ok(picks.length <= HIGHLIGHT.MAX_CLIPS, `at most MAX_CLIPS: ${picks.length}`);
+  ok(picks[picks.length - 1] === last, 'the last (deciding) point is always in, even when it is dull');
+  ok(picks.every((p, i) => i === 0 || picks[i - 1].id < p.id), 'and the picks are in the order they were played');
+  ok(picks.indexOf(long) !== -1 && picks.indexOf(special) !== -1 && picks.indexOf(short) === -1,
+    `the best points are picked, the dull ones are not: ${picks.map((p) => p.id)}`);
+  ok(picks.slice(0, -1).every((p) => p.score >= HIGHLIGHT.MIN_SCORE), 'nothing below MIN_SCORE except the last point');
+  const keep = g.highlightKeep();
+  ok(picks.every((p) => keep.has(p.id)), 'every possible pick is kept by the display side');
+  ok(!keep.has(short.id), 'and dull points can be thrown away');
+  ok(g.matchSummary('cpu').highlights.length === picks.length, 'the match summary carries the highlights');
+  g.resetStats();
+  ok(g.pointLog.length === 0 && g.highlightPicks().length === 0, 'the next match starts a new log');
+  ok(point('you', 'アウト', 1).id === 12, 'ids keep counting so recordings never collide');
+}
+
 // --- 試合後のスタッツ：セットが終わると matchEnd が1回だけ呼ばれ、次のマッチで0に戻る ---
 {
   const ends = [];

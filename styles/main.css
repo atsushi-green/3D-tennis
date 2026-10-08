@@ -277,6 +277,24 @@ canvas{display:block}
 #replayTag .markTag{display:none;letter-spacing:.1em;color:var(--ball)}
 #replayTag.mark .markTag{display:inline}
 @keyframes replayBlink{50%{opacity:.15}}
+/* 試合後のハイライト中は「リプレイ」の代わりに「ハイライト 2/4」と出す */
+#replayTag .hlTag{display:none}
+#replayTag.hl .rtLabel{display:none}
+#replayTag.hl .hlTag{display:inline}
+#hlCaption{
+  position:absolute;left:24px;bottom:22%;max-width:calc(100vw - 48px);
+  padding:10px 20px 11px;background:rgba(9,20,34,.86);
+  border-left:4px solid var(--ball);border-radius:2px;
+  box-shadow:0 6px 24px rgba(0,0,0,.35);
+  opacity:0;transform:translateX(-12px);transition:opacity .2s,transform .2s
+}
+#hlCaption.on{opacity:1;transform:none}
+#hlCaption .hlTitle{font-size:24px;font-weight:700;line-height:1.25}
+#hlCaption .hlSub{font-size:13px;color:#c8d3e0;margin-top:3px;letter-spacing:.03em}
+@media (max-width:620px){
+  #hlCaption{left:16px;max-width:calc(100vw - 32px)}
+  #hlCaption .hlTitle{font-size:19px}
+}
 
 #smashTip{
   font-size:12px;letter-spacing:.08em;white-space:nowrap;

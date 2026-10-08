@@ -283,6 +283,10 @@
         guideText: $('guideText'),
         guideNeedle: $('guideNeedle'),
         replayTag: $('replayTag'),
+        hlCount: $('hlCount'),
+        hlCaption: $('hlCaption'),
+        hlTitle: $('hlTitle'),
+        hlSub: $('hlSub'),
         matchStats: $('matchStats'),
         msTitle: $('msTitle'),
         msScore: $('msScore'),
@@ -790,6 +794,8 @@
         return picked === CUSTOM ? null : picked.name;
       };
       const short = (name) => name.split('・')[0];
+      // ハイライトの見出しで「誰のポイントか」を言うのに使う（スコアボードの名前と同じ考え方）
+      this.teamNames = {};
       ROSTER.forEach((r) => {
         this.el.staminaLabels[r.key].textContent = nameOf(r.key) || r.label;
       });
@@ -800,6 +806,7 @@
         const sideLabel = ROSTER.find((r) => r.key === side).label;
         if (names.every((n) => n == null)) {
           cell.textContent = sideLabel; // 全員カスタム＝これまでどおり YOU／CPU だけ
+          this.teamNames[side] = sideLabel;
           return;
         }
         const tag = document.createElement('span');
@@ -809,6 +816,7 @@
           ? names.map((n, i) => (n ? short(n) : ROSTER.find((r) => r.key === members[i]).label)).join(' / ')
           : names[0];
         cell.replaceChildren(tag, text);
+        this.teamNames[side] = text;
       });
     }
 
@@ -1285,6 +1293,36 @@
     setReplay(on, mark = false) {
       this.el.replayTag.classList.toggle('on', on);
       this.el.replayTag.classList.toggle('mark', on && mark);
+    }
+
+    /**
+     * 試合後のハイライトで流している1点の見出し。見出しはその1点のいちばんの見どころ
+     * （マッチポイント＞凌いだ1点＞必殺技＞エース＞ブレーク＞長いラリー の順）で、
+     * 補足に誰のポイントか・ラリーの本数・そのときのゲームカウントを添える。
+     * @param {{index:number, total:number, point:object}|null} info world.highlightInfo()
+     */
+    setHighlight(info) {
+      const on = !!info;
+      this.el.replayTag.classList.toggle('hl', on);
+      this.el.hlCaption.classList.toggle('on', on);
+      if (!on) {
+        this.shownHighlight = null;
+        return;
+      }
+      const p = info.point;
+      if (this.shownHighlight === p) return; // 同じ1点の間は書き換えない
+      this.shownHighlight = p;
+      this.el.hlCount.textContent = `${info.index + 1}/${info.total}`;
+      const names = this.teamNames || {};
+      const who = names[p.winner] || (p.winner === 'you' ? 'YOU' : 'CPU');
+      const title = p.stake === 'match' ? 'マッチポイント'
+        : p.stake === 'saved' ? 'ピンチを凌ぐ'
+          : p.specials.length ? `必殺技 ${p.specials.join('・')}`
+            : p.outcome === 'ace' ? `エース ${Math.round(p.serveKmh)}km/h`
+              : p.stake === 'break' ? 'ブレーク'
+                : `${p.shots}本のラリー`;
+      this.el.hlTitle.textContent = title;
+      this.el.hlSub.textContent = `${who} のポイント ／ ${p.shots}本 ／ ゲーム ${p.games.you}-${p.games.cpu}`;
     }
 
     /**

@@ -78,7 +78,9 @@
     <div id="matchLevel"></div>
   </div>
   <div id="call"><div class="big" id="callBig"></div><div class="sub" id="callSub"></div><div class="shot" id="callShot"></div></div>
-  <div id="replayTag"><span class="dot"></span>リプレイ<span class="markTag">ボールマーク確認</span><span class="skip">SPACE でスキップ</span></div>
+  <div id="replayTag"><span class="dot"></span><span class="rtLabel">リプレイ</span><span class="hlTag">ハイライト <span id="hlCount"></span></span><span class="markTag">ボールマーク確認</span><span class="skip">SPACE でスキップ</span></div>
+  <!-- 試合後のハイライトで流している1点の見出し（中継の下部テロップ）。hud.setHighlight() が出す -->
+  <div id="hlCaption"><div class="hlTitle" id="hlTitle"></div><div class="hlSub" id="hlSub"></div></div>
   <!-- 画面下は縦積み（上から：ガイド／スマッシュの案内／溜めバー／操作一覧）。
        個別に bottom を指定していた頃は、操作一覧が折り返して2行になった分だけ
        溜めバーの上に重なってしまっていた。積むことで何行になっても重ならない。 -->
