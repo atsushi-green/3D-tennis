@@ -461,6 +461,9 @@
       // 終わりが混ざり、そこから beginServe() が選手とボールをスタンスへ瞬間移動させる
       // コマまで映っていた＝「アウトなのにネットに掛かる」「立ち位置が一瞬おかしい」。
       let from = recorded.length - 1; // 最後のコマ＝決着の瞬間（phase は 'over'）
+      // ネットに掛かったポイントは、決着の後に球が落ちて着地するまでを末尾に含めて再生する
+      // （main.js が着地の瞬間を endT にする）。その間のコマは既に 'over' なので先に遡っておく。
+      while (from > 0 && recorded[from - 1].phase === 'over') from--;
       while (from > 0 && IN_POINT.has(recorded[from - 1].phase)) from--;
       const segment = recorded.slice(from);
       // MAX_PLAY_SEC で長さを絞るのは前側（リード）だけ。末尾は必ず history の最後の

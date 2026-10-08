@@ -10135,5 +10135,37 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   }
 }
 
+// --- ネットに掛かって決まった球は、その場で止まらず1バウンドするまで落ちて軌跡に残る ---
+{
+  const { NET, PHYSICS } = R.config;
+  const savedIn = NET.IN_CHANCE;
+  NET.IN_CHANCE = 0; // ネットインの抽選を外す
+  try {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.start(false, 'you');
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    Object.assign(g.ball, {
+      x: 0, y: 0.5, z: -2, px: 0, py: 0.5, pz: -2, vx: 0, vy: 0, vz: 15,
+      live: true, last: 'you', bounces: 0, age: 0, sinceBounce: 0, spin: 'flat', curve: 0, wind: 0, windZ: 0,
+    });
+    g.resetTrail();
+    let hitNetAt = null;
+    for (let i = 0; i < 60 * 3; i++) {
+      g.update(1 / 60);
+      if (hitNetAt === null && g.phase === 'over') hitNetAt = g.trail.length;
+      else if (hitNetAt !== null && !g.ball.netFall) break; // 着地した
+    }
+    ok(hitNetAt !== null && g.phase === 'over', `the ball into the net ends the point, got phase=${g.phase}`);
+    ok(Math.abs(g.ball.y - PHYSICS.BALL_R) < 1e-6 && g.ball.z < 0 && !g.ball.netFall,
+      `after the net the ball keeps falling to the hitter's side and rests on the ground, got y=${g.ball.y} z=${g.ball.z}`);
+    const last = g.trail[g.trail.length - 1];
+    ok(g.trail.length > hitNetAt + 5 && Math.abs(last.y - PHYSICS.BALL_R) < 1e-6,
+      `the trail follows the fall down to the bounce (${hitNetAt} -> ${g.trail.length} points, last y=${last.y})`);
+  } finally {
+    NET.IN_CHANCE = savedIn;
+  }
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);

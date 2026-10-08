@@ -667,6 +667,8 @@
         px: 0, py: SERVE.BALL_Y, pz: -HALF_L, // 1ステップ前の位置
         vx: 0, vy: 0, vz: 0,
         bounces: 0, last: 'you', live: false,
+        netFall: false, // ネットに掛かって決まった後、1バウンドするまで落ち続けている間（stepBall() 参照）
+        netFallT: 0,
         impact: 0,      // 打った瞬間の演出（着弾フラッシュ・膨張）の残り時間
         impactPower: 0, // その打球の溜め量(0〜1)。演出の派手さに使う
         spin: 'flat',   // 'flat'|'top'|'slice'。飛翔中の実効重力とバウンドの弾み方に効く
@@ -2486,6 +2488,7 @@
       const server = this.actor(serverKey);
       const front = TEAM_OF[serverKey] === 'you' ? 0.4 : -0.4;
       const ball = this.ball;
+      ball.netFall = false; // サーブの構えに入ったら、ネット後の落下は打ち切って手元へ戻す
       ball.x = ball.px = server.x;
       ball.z = ball.pz = server.z + front;
       ball.y = ball.py = SERVE.BALL_Y;
@@ -3176,6 +3179,7 @@
 
     /** 誰か（serve()/hit()の呼び出し元）が新しく打った瞬間、軌跡をその打点1点から描き直す。 */
     resetTrail() {
+      this.ball.netFall = false; // 前のポイントのネット後の落下が残っていても、新しい1打で打ち切る
       this.trail = [{ x: this.ball.x, y: this.ball.y, z: this.ball.z }];
     }
 
@@ -3868,7 +3872,7 @@
       // 軌跡を打ち返した側の打点から描き直すので、ここで伸ばすのは常に「今まさに飛んでいる
       // 最新の1打」。ポイントが終わった瞬間から先は（ball.live===false になり）伸びず、
       // その時点の軌跡がそのまま残る（＝次に誰かが打つまで、最新の1本として表示され続ける）。
-      if (this.ball.live && this.trail.length < TRAIL.MAX_POINTS) {
+      if ((this.ball.live || this.ball.netFall) && this.trail.length < TRAIL.MAX_POINTS) {
         this.trail.push({ x: this.ball.x, y: this.ball.y, z: this.ball.z });
       }
 
@@ -4809,6 +4813,23 @@
         return;
       }
 
+      // ネットに掛かって決まった後の球。得点・当たり判定には一切関わらせず、重力だけで
+      // 1バウンドするまで落とし続ける（以前は決まった瞬間に ball.live=false でネット際の
+      // 空中に止まり、軌跡もそこで途切れていた）。着地点は bounce() と同じく明示的に軌跡へ足す。
+      if (!ball.live && ball.netFall) {
+        integrate(ball, dt);
+        ball.netFallT += dt;
+        if (ball.y <= BALL_R || ball.netFallT >= NET.FALL_MAX_SEC) {
+          ball.y = Math.max(ball.y, BALL_R);
+          ball.vx = ball.vy = ball.vz = 0;
+          ball.netFall = false;
+          if (this.trail.length < TRAIL.MAX_POINTS) {
+            this.trail.push({ x: ball.x, y: ball.y, z: ball.z });
+          }
+        }
+        return;
+      }
+
       if (!ball.live) {
         if (this.phase === 'serve') this.placeServeBall();
         return;
@@ -4834,6 +4855,8 @@
         ball.vz *= NET.FAULT_VZ_MULT;
         ball.vx *= NET.FAULT_VX_MULT;
         ball.vy *= NET.FAULT_VY_MULT;
+        ball.netFall = true; // ↓で live が落ちても、1バウンドするまでは落ち続けさせる
+        ball.netFallT = 0;
         if (this.serveInFlight) this.serveFault('ネット');
         else this.endPoint(opponent(ball.last), 'ネット');
         return;

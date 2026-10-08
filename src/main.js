@@ -6,7 +6,7 @@
     PHYSICS, applyCpuLevel, applyCpuStyle, applySurface, TOSS,
     setRating, getRating, resetRatings, randomizeRatings, applyCharacter,
     SKILLS, ROSTER, CHARACTERS, CHARACTER_DEFAULT,
-    SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE, LINE_CALL,
+    SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE, LINE_CALL, REPLAY,
   } = RallyOne.config;
   const { clamp } = RallyOne.math;
   const { sfx, unlock } = RallyOne.audio;
@@ -65,6 +65,11 @@
   let pendingSummary = null;
   /** 試合後のスタッツ画面を開いている間だけ true。この間は試合の進行を止める。 */
   let matchStatsOpen = false;
+  /**
+   * ネットに掛かって決まったポイントで、球がネットから落ちきるのを待っている間。
+   * replaceGame() からも触るので、それより前（ここ）で宣言しておく（REPLAY.NET_DELAY 参照）。
+   */
+  let netReplayPending = false;
   /** 練習モードのレッスン一覧を開いている間だけ true（スタート画面の上で、#menuBody と差し替え）。 */
   let lessonMenuOpen = false;
   /** レッスン一覧で選んでいる行（config.PRACTICE.LESSONS の添字）。 */
@@ -135,6 +140,7 @@
     game = createGame();
     RallyOne.game = game;
     world.skipReplay();
+    netReplayPending = false;
     prevPhase = game.phase;
     pendingSummary = null;
     matchStatsOpen = false;
@@ -352,6 +358,7 @@
     // 1回の押下で両方が飛ぶことはない。
     onSkipReplay: () => {
       world.skipReplay();
+      netReplayPending = false;
       game.skipChangeover();
       game.skipMatchPointCut();
       game.skipFinaleCut();
@@ -434,8 +441,17 @@
       // 練習モードはリプレイを挟まない（1本ごとに止まると反復練習のテンポが崩れる）
       // 線審のコール（アウト／ダブルフォルト）で決まったポイントは、通常の画面でコールを
       // 見せてからリプレイへ移る（実際の中継と同じ順番。LINE_CALL.REPLAY_DELAY 参照）。
+      // ネットに掛かったポイントは、球が落ちて着地するまで通常の画面で見せ、着地した瞬間を
+      // 再生の終わりにしてから REPLAY.NET_DELAY 置いて再生する（REPLAY.NET_DELAY 参照）。
+      // 決着の瞬間にはまだ game.ball.netFall が立っている（落下中）ことで見分ける。
       if (pointJustEnded && !game.practice) {
-        world.startReplay(game.lineCall && game.lineCall.decisive ? LINE_CALL.REPLAY_DELAY : 0);
+        if (game.ball.netFall) netReplayPending = true;
+        else world.startReplay(game.lineCall && game.lineCall.decisive ? LINE_CALL.REPLAY_DELAY : 0);
+      }
+      // 着地した（保険として、次のポイントの支度に移った）ところで再生を予約する
+      if (netReplayPending && (!game.ball.netFall || game.phase !== 'over')) {
+        netReplayPending = false;
+        world.startReplay(REPLAY.NET_DELAY);
       }
       hud.setReplay(world.isReplaying(), world.isCheckingMark());
       // 試合が決まった瞬間から、リプレイ・締めのカットを通してスタッツ画面が出るまで、スタンドは
