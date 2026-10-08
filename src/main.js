@@ -111,6 +111,11 @@
     hud.setPlayerNames(picks, wantDoubles);
     game.setGuide(guide);
     game.setSpecials(specials);
+    // 選んだ選手の気性（ポイントの後の感情表現の出やすさ）。カスタムは型がないので 'normal'
+    game.setTempers(Object.fromEntries(ROSTER.map((r) => {
+      const character = CHARACTERS.find((c) => c.key === picks[r.key]);
+      return [r.key, character ? character.temper : 'normal'];
+    })));
     game.start(wantDoubles, initialServer);
   }
 

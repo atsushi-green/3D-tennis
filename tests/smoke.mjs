@@ -6966,6 +6966,63 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   ok(point('you', 'アウト', 1).id === 12, 'ids keep counting so recordings never collide');
 }
 
+// --- ポイントの後の感情表現：気性と決まり方で、ガッツポーズ／うなだれる／ラケットを叩きつける ---
+{
+  const { EMOTION } = R.config;
+  const sounds = [];
+  const realRandom = Math.random;
+  /** server がサーブする場面で、winner が reason で取る。rnd＝Math.random が返す値 */
+  const play = ({ tempers, server = 'you', winner, reason, shots = 1, games, points, rnd = 0 }) => {
+    const g = new R.Game({ input: fakeInput, hooks: { ...noHooks, sound: (n) => sounds.push(n) } });
+    g.start(false, server);
+    g.setTempers(tempers);
+    if (games) g.match.games = games;
+    if (points) g.match.points = points;
+    g.stakes = R.scoring.pointStakes(g.match, g.server);
+    g.matchPointCutDone = true;
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.rallyShots = shots;
+    sounds.length = 0;
+    Math.random = () => rnd;
+    try { g.endPoint(winner, reason); } finally { Math.random = realRandom; }
+    return g;
+  };
+  const fiery = { you: 'fiery', cpu: 'fiery' };
+  // 0-40 からブレークされた（you のサーブ）：熱くなる選手はラケットを叩きつけ、取った側はガッツポーズ
+  let g = play({ tempers: fiery, winner: 'cpu', reason: 'アウト', points: { you: 0, cpu: 3 } });
+  ok(g.you.mood && g.you.mood.kind === 'smash', `a fiery server who is broken smashes the racket: ${JSON.stringify(g.you.mood)}`);
+  ok(g.cpu.mood && g.cpu.mood.kind === 'fist', `the breaker pumps a fist: ${JSON.stringify(g.cpu.mood)}`);
+  const S = EMOTION.SMASH;
+  for (let i = 0; i < 60 * (EMOTION.DELAY + S.RAISE_T + S.SLAM_T) + 2; i++) g.update(1 / 60);
+  ok(sounds.includes('racketSmash'), `the smash is heard as the racket lands: ${sounds}`);
+  // 冷静な選手は同じ場面でも叩きつけない（うなだれるだけ）
+  g = play({ tempers: { you: 'calm', cpu: 'calm' }, winner: 'cpu', reason: 'アウト', points: { you: 0, cpu: 3 } });
+  ok(g.you.mood && g.you.mood.kind === 'slump', `a calm server only slumps: ${JSON.stringify(g.you.mood)}`);
+  // 自分のサーブをキープした側（サーバーが取った）には叩きつける理由がない
+  g = play({ tempers: fiery, winner: 'you', reason: 'アウト', points: { you: 3, cpu: 0 } });
+  ok(g.cpu.mood && g.cpu.mood.kind === 'slump', `losing a return game is not a break: ${JSON.stringify(g.cpu.mood)}`);
+  // 何もかかっていない短い1点を相手のミスで取っても、ガッツポーズはしない
+  g = play({ tempers: fiery, winner: 'you', reason: 'アウト', points: { you: 1, cpu: 0 } });
+  ok(!g.you.mood, `a dull point gets no fist pump: ${JSON.stringify(g.you.mood)}`);
+  // 確率を外せば何もしない（毎回同じ反応にはならない）
+  g = play({ tempers: { you: 'normal', cpu: 'normal' }, winner: 'cpu', reason: 'ツーバウンド', shots: 12, rnd: 0.99 });
+  ok(!g.you.mood && !g.cpu.mood, 'with an unlucky roll nobody reacts');
+  // 表情は SPAN で消え、次のサーブの構えでも必ず消える
+  g = play({ tempers: fiery, winner: 'cpu', reason: 'ツーバウンド', shots: 12 });
+  ok(g.cpu.mood && g.cpu.mood.kind === 'fist', 'a long winning rally earns a fist pump');
+  for (let i = 0; i < 60 * (EMOTION.DELAY + EMOTION.SPAN) + 2; i++) g.update(1 / 60);
+  ok(!g.cpu.mood, 'and it fades after SPAN');
+  ok(EMOTION.DELAY + EMOTION.SPAN < R.config.TIMING.NEXT_POINT, 'the reaction fits inside the pause between points');
+  g = play({ tempers: fiery, winner: 'cpu', reason: 'アウト', points: { you: 0, cpu: 1 } });
+  g.beginServe();
+  ok(!g.you.mood && !g.cpu.mood, 'the next serve clears the reactions');
+  // 知らない気性・カスタムは normal
+  g.setTempers({ you: 'nope' });
+  ok(g.tempers.you === 'normal', `unknown tempers fall back to normal: ${g.tempers.you}`);
+  ok(R.config.CHARACTERS.every((c) => EMOTION.TEMPERS[c.temper]), 'every character has a known temper');
+}
+
 // --- 試合後のスタッツ：セットが終わると matchEnd が1回だけ呼ばれ、次のマッチで0に戻る ---
 {
   const ends = [];

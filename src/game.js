@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    ATTRS, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, FINALE, FX, HALF_L, HALF_W, HIGHLIGHT, LINE_CALL, MATCH_POINT,
+    ATTRS, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, EMOTION, FINALE, FX, HALF_L, HALF_W, HIGHLIGHT, LINE_CALL, MATCH_POINT,
     NET, PHYSICS, PLAYER, PRACTICE, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, SWING,
     TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND, shotSkill,
   } = RallyOne.config;
@@ -806,6 +806,11 @@
       this.rallyShots = 0;
       /** このポイントで出た必殺技の呼び名（ハイライトの見出しに使う）。rallyShots と同じく数え直す。 */
       this.pointSpecials = [];
+      /**
+       * 4人それぞれの気性（config.EMOTION.TEMPERS のキー。選んだ選手の temper を main.js が
+       * setTempers() で渡す）。ポイントの後の感情表現（各選手の mood）の出やすさが変わる。
+       */
+      this.tempers = { you: 'normal', youMate: 'normal', cpu: 'normal', cpuMate: 'normal' };
       /**
        * スマッシュの先回りヒント。毎フレーム smashSpot() が入れ直す（打てる球が来ていなければ null）。
        * 表示専用の値なので、ゲームの判定はここを一切読まない（scene/hint.js と hud.js だけが使う）。
@@ -2272,6 +2277,7 @@
       this.cpuNetRush = false;
       this.rallyShots = 0; // このサーブ（フォールトからのやり直しも含む）から数え直す
       this.pointSpecials = [];
+      ACTORS.forEach((who) => { this.actor(who).mood = null; }); // 前のポイントの感情表現を持ち越さない
 
       const ball = this.ball;
       ball.live = false;
@@ -3014,6 +3020,58 @@
      * 空配列を渡せば必殺技なし＝これまでと同じゲームになる（既定）。
      * @param {string[]} keys config.SPECIAL_MOVES の key
      */
+    /** @param {{you?:string, youMate?:string, cpu?:string, cpuMate?:string}} tempers */
+    setTempers(tempers) {
+      ACTORS.forEach((who) => {
+        const t = tempers[who];
+        this.tempers[who] = EMOTION.TEMPERS[t] ? t : 'normal';
+      });
+    }
+
+    /**
+     * ポイントが決まった直後の、4人それぞれの感情表現（actor.mood ＝ {kind, t}。表示側が形にする）。
+     * kind は 'fist'（ガッツポーズ）／'slump'（うなだれる）／'smash'（ラケットを叩きつける）。
+     * 何もしない選手は null のまま。t は決着からの秒数（tickMoods() が進める）。
+     * @param {'you'|'cpu'} winner
+     * @param {string} outcome endPoint() の決まり方
+     * @param {object|null} stakes かかっていた1点（scoring.pointStakes()）
+     * @param {string} server その1点をサーブした選手
+     * @param {boolean} broken この1点でサーバーのゲームが落ちた（ブレークされた）
+     */
+    setMoods(winner, outcome, stakes, server, broken) {
+      const rollFor = (who) => {
+        const T = EMOTION.TEMPERS[this.tempers[who]] || EMOTION.TEMPERS.normal;
+        if (TEAM_OF[who] === winner) {
+          const big = !!stakes;
+          const notable = big || outcome === 'ace' || outcome === 'winner'
+            || this.rallyShots >= EMOTION.LONG_RALLY;
+          return notable && Math.random() < (big ? T.FIST_BIG : T.FIST) ? 'fist' : null;
+        }
+        if (broken && who === server && Math.random() < T.SMASH) return 'smash';
+        const ownMiss = outcome === 'error' || outcome === 'doubleFault';
+        return (ownMiss || stakes) && Math.random() < T.SLUMP ? 'slump' : null;
+      };
+      ACTORS.forEach((who) => {
+        if (!this.doubles && (who === 'youMate' || who === 'cpuMate')) return;
+        const kind = rollFor(who);
+        this.actor(who).mood = kind ? { kind, t: 0 } : null;
+        // 叩きつけた瞬間の音（振りかぶって振り下ろした時点）。ゲームの時計なので、リプレイの間は進まない
+        if (kind === 'smash') {
+          const S = EMOTION.SMASH;
+          this.after(EMOTION.DELAY + S.RAISE_T + S.SLAM_T, () => this.hooks.sound('racketSmash'));
+        }
+      });
+    }
+
+    tickMoods(dt) {
+      ACTORS.forEach((who) => {
+        const actor = this.actor(who);
+        if (!actor.mood) return;
+        actor.mood.t += dt;
+        if (actor.mood.t >= EMOTION.DELAY + EMOTION.SPAN) actor.mood = null;
+      });
+    }
+
     setSpecials(keys) {
       const known = SPECIAL_MOVES.map((m) => m.key);
       this.specials = (keys || []).filter((k) => known.indexOf(k) !== -1);
@@ -3664,8 +3722,13 @@
       this.matchStats.totalShots += this.rallyShots;
       this.matchStats.longestRally = Math.max(this.matchStats.longestRally, this.rallyShots);
 
+      // サーブ権が移る前に（ブレークされたサーバー）。タイブレークにはブレークがない
+      const server = this.servingPlayer();
+      const inTiebreak = this.match.tiebreak;
       const result = this.match.awardPoint(winner);
       const mine = winner === 'you';
+      this.setMoods(winner, outcome, stakes, server,
+        result.type !== 'point' && !inTiebreak && winner !== this.server);
       // この1点でコートを入れ替わるか（チェンジエンズ）。決まった直後のスコアで判定する
       // ＝セットの終わりは match.reset() の前（最終スコアのゲーム数）で見る。
       const changeover = changeoverAfter(result, this.match);
@@ -3914,6 +3977,7 @@
       }
       this.tickTimers(dt);
       this.tickChangeover(dt);
+      this.tickMoods(dt);
 
       const swingBefore = this.you.swing;
       this.you.anim = Math.max(0, this.you.anim - dt);

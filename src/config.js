@@ -1815,6 +1815,16 @@
      * 必殺技の発動音。他の音が「打った」瞬間の打撃音なのに対し、これだけは音程が
      * 上がっていく（BODY_DROP > 1）合図の音にして、打球音と混ざっても聞き分けられるようにする。
      */
+    /**
+     * 選手がラケットを地面に叩きつけた（EMOTION）。フレームが割れる「バキッ」（高いノイズ）と、
+     * 地面を打つ鈍い「ドン」（低い胴鳴り）、ガットとフレームのびびり（ブラシ層）。
+     */
+    RACKET_SMASH: {
+      NOISE_VOL: 0.22, NOISE_HZ: 1900, NOISE_Q: 0.8, NOISE_DUR: 0.09,
+      BODY_VOL: 0.26, BODY_HZ: 120, BODY_DROP: 0.45, BODY_DUR: 0.22,
+      BRUSH_VOL: 0.07, BRUSH_HZ: 3600, BRUSH_DUR: 0.28,
+    },
+
     SPECIAL: {
       NOISE_VOL: 0.06, NOISE_HZ: 2600, NOISE_Q: 2.2, NOISE_DUR: 0.09,
       BODY_VOL: 0.20, BODY_HZ: 420, BODY_DROP: 2.6, BODY_DUR: 0.30,
@@ -2995,6 +3005,42 @@
     },
     CHEER_PUMP: 0.07,
     CHEER_PUMP_HZ: 1.7,
+    /**
+     * ポイントの後の感情表現（EMOTION）の形。座標は他のポーズと同じ（腰の高さが原点、+x＝ラケット側）。
+     * - FIST_UP/FIST_DOWN  ガッツポーズ：ラケットは下げたまま、逆手の拳を肩の前へ振り上げ
+     *   （UP）、腰へ引き下ろす（DOWN）。EMOTION.FIST の回数・速さで往復する
+     * - SLUMP  うなだれる：ラケットをぶら下げ、背を丸めて下を向く（HEAD_DOWN＝首の前傾 rad）
+     * - SMASH_UP/SMASH_DOWN  ラケットを叩きつける：両手で頭の上へ振りかぶり（UP）、体ごと
+     *   前へ倒して足元の前の地面へ振り下ろす（DOWN）。その後は SLUMP に移る
+     */
+    MOOD: {
+      FIST_UP: {
+        hand: [0.30, -0.04, 0.08], dir: [0.1, -0.5, 0.86], face: [1, 0, 0],
+        elbow: [0.3, -1, -0.5], off: [-0.16, 0.62, 0.30], offElbow: [-1, -0.6, -0.2],
+        twist: 0.12, bend: -0.04, crouch: 0.12, lean: 0.04,
+      },
+      FIST_DOWN: {
+        hand: [0.30, -0.04, 0.08], dir: [0.1, -0.5, 0.86], face: [1, 0, 0],
+        elbow: [0.3, -1, -0.5], off: [-0.22, 0.12, 0.26], offElbow: [-0.6, -0.4, -1],
+        twist: 0.22, bend: 0.06, crouch: 0.42, lean: 0.24,
+      },
+      SLUMP: {
+        hand: [0.27, -0.14, 0.04], dir: [0.05, -1, 0.12], face: [1, 0, 0],
+        elbow: [0.2, -1, -0.3], off: [-0.27, -0.08, 0.03], offElbow: [-0.2, -1, -0.3],
+        twist: 0, bend: 0, crouch: 0.08, lean: 0.34,
+      },
+      HEAD_DOWN: 0.5,
+      SMASH_UP: {
+        hand: [0.10, 0.88, -0.02], dir: [0, 0.55, -0.83], face: [0, 0, -1],
+        elbow: [1, 0.3, -0.3], off: 'grip', offElbow: [-1, 0.3, -0.3],
+        twist: 0, bend: 0, crouch: 0.1, lean: -0.12,
+      },
+      SMASH_DOWN: {
+        hand: [0.08, -0.30, 0.46], dir: [0, -0.62, 0.78], face: [0, 0.8, 0.6],
+        elbow: [1, -0.2, 0.2], off: 'grip', offElbow: [-1, -0.2, 0.2],
+        twist: 0, bend: 0, crouch: 0.55, lean: 0.55,
+      },
+    },
 
     /**
      * フォアハンド。肩を入れてラケットを後ろに引き（逆手はボールの方へ伸ばす）、
@@ -3434,6 +3480,29 @@
    *   取った側から見たかかっていた1点（'saved'＝かけられていた側が凌いだ。audio.js の stakeKey と同じ）
    * - MIN_SCORE  これ未満の1点は候補にしない（試合を決めた1点は例外）
    */
+  /**
+   * ポイントの後の選手の感情表現（game.js#setMoods が決め、scene/player.js が形にする）。
+   * 誰がどうするかは選手の気性（CHARACTERS の temper。カスタムは 'normal'）と、その1点の決まり方で決まる。
+   * - 取った側：見どころのある1点（エース・ウィナー・何かがかかっていた1点・LONG_RALLY 本以上のラリー）なら
+   *   FIST の確率でガッツポーズ（かかっていた1点は FIST_BIG）
+   * - 落とした側：自分のミス（アウト・ネット・ダブルフォルト）か、かかっていた1点を落としたなら SLUMP の確率で
+   *   うなだれる。自分のサーブのゲームをブレークされたサーバーは、SMASH の確率でラケットを地面に叩きつける
+   * - DELAY  決着から動き出すまで（振り終わりを見せてから）。SPAN  その後の長さ（ポイント間 TIMING.NEXT_POINT
+   *   より短くする。次のサーブの構えに入ったら必ず消える）
+   */
+  const EMOTION = {
+    DELAY: 0.3,
+    SPAN: 1.1,
+    LONG_RALLY: 7,
+    TEMPERS: {
+      calm: { FIST: 0.2, FIST_BIG: 0.45, SLUMP: 0.12, SMASH: 0 },
+      normal: { FIST: 0.45, FIST_BIG: 0.8, SLUMP: 0.35, SMASH: 0 },
+      fiery: { FIST: 0.7, FIST_BIG: 1, SLUMP: 0.6, SMASH: 0.7 },
+    },
+    FIST: { PUMPS: 2, PUMP_T: 0.3, RISE: 0.55 }, // 往復の回数・1往復の秒数・そのうち振り上げに使う割合
+    SMASH: { RAISE_T: 0.32, SLAM_T: 0.12, HOLD_T: 0.3 }, // 振りかぶる・振り下ろす・叩きつけたまま止まる秒数
+  };
+
   const HIGHLIGHT = {
     MAX_CLIPS: 4,
     MIN_SCORE: 8,
@@ -3973,11 +4042,14 @@
    * - cpuStyle は、この選手を相手（ROSTER の 'cpu' 枠）に選んだとき自動で切り替わる
    *   「CPUのプレースタイル」（CPU_STYLES のキー）。選んだ後にスタート画面で別のスタイルへ
    *   変えることもできる。型にはまらない選手（オールラウンダー等）は 'none'。
+   * - temper ポイントの後の感情表現の出やすさ（EMOTION.TEMPERS のキー）。'fiery' だけが
+   *   ブレークされるとラケットを叩きつける。カスタムの選手は 'normal'。
    */
   const CHARACTER_BUDGET = SKILL_DEFAULT * SKILLS.filter((s) => !s.aiOnly).length;
   const CHARACTERS = [
     {
       key: 'standard',
+      temper: 'normal',
       cpuStyle: 'none',
       name: 'ケン・アサギ',
       type: 'オールラウンダー',
@@ -3990,6 +4062,7 @@
     },
     {
       key: 'bigServer',
+      temper: 'fiery',
       cpuStyle: 'aggressiveBaseliner',
       name: 'ボリス・ヴァルガ',
       type: 'ビッグサーバー',
@@ -4002,6 +4075,7 @@
     },
     {
       key: 'counterPuncher',
+      temper: 'calm',
       cpuStyle: 'retriever',
       name: 'ルシア・ベガ',
       type: 'カウンターパンチャー',
@@ -4014,6 +4088,7 @@
     },
     {
       key: 'serveVolley',
+      temper: 'normal',
       cpuStyle: 'serveAndVolley',
       name: 'オリバー・ハート',
       type: 'サーブ&ボレーヤー',
@@ -4026,6 +4101,7 @@
     },
     {
       key: 'powerHitter',
+      temper: 'fiery',
       cpuStyle: 'aggressiveBaseliner',
       name: 'レオ・ブラント',
       type: 'パワーヒッター',
@@ -4038,6 +4114,7 @@
     },
     {
       key: 'speedster',
+      temper: 'normal',
       cpuStyle: 'retriever',
       name: 'ミア・ソーン',
       type: 'スピードスター',
@@ -4050,6 +4127,7 @@
     },
     {
       key: 'technician',
+      temper: 'calm',
       cpuStyle: 'none',
       name: 'エマ・ルグラン',
       type: 'テクニシャン',
@@ -4062,6 +4140,7 @@
     },
     {
       key: 'veteran',
+      temper: 'calm',
       cpuStyle: 'none',
       name: 'ヨハン・ベルク',
       type: 'ベテラン',
@@ -4076,6 +4155,7 @@
     // 最高にはせず既定の3（＝AI のふだんどおりの詰め方）のまま。差し色は必殺技と同じ金。
     {
       key: 'champion',
+      temper: 'calm',
       cpuStyle: 'none',
       name: 'レイ・カグラ',
       type: '最強のチャンピオン',
@@ -4201,7 +4281,7 @@
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, TIMING, CHANGEOVER, MATCH_POINT, FINALE, PRACTICE, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
     CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT, GUIDE,
-    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, HIGHLIGHT, STAMINA, TOSS, OFFICIALS, LINE_CALL, BALL_MARK,
+    SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, HIGHLIGHT, EMOTION, STAMINA, TOSS, OFFICIALS, LINE_CALL, BALL_MARK,
     STANDS, SPECTATORS, FLAG, MOTION,
     SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET,
     SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, ATTR_SPREAD, ATTRS, NEUTRAL_ATTR,

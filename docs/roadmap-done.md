@@ -4,6 +4,12 @@
 書式：
 
 ```
+## 2026-10-08 選手の感情表現（ガッツポーズ・うなだれる・ラケットを叩きつける）
+- ブランチ: feat/highlights-emotions-weather
+- 実施内容: ユーザー要望（追加アイデアの7番）。`Game#endPoint()` が決着の直後に `setMoods()` で4人それぞれの `mood`（'fist'／'slump'／'smash'、決着からの秒数 t）を決め、`tickMoods()` が `EMOTION.DELAY + SPAN` で消す（次のサーブの構えでも必ず消す）。決め方は選手の気性（`CHARACTERS[].temper` → `EMOTION.TEMPERS` の確率）と決まり方：取った側は見どころのある1点ならガッツポーズ、落とした側は自分のミスかかかっていた1点ならうなだれ、ブレークされたサーバーは 'fiery' の選手だけラケットを叩きつける（叩きつけた瞬間に `hooks.sound('racketSmash')`：割れる音＋観客の「おぉ…」）。`main.js` が選んだ選手の気性を `setTempers()` で渡す。形は `scene/player.js#moodPose()`（`MOTION.MOOD` のポーズを時間で補間。うなだれる間は首を前へ倒す）。試合の勝者は従来どおり両手を突き上げるほうが先。リプレイのコマには録らない（再生は決着の瞬間で終わるため）。
+- 確認: headless Chrome でカメラを選手に寄せ、ガッツポーズの振り上げ／引き下ろし、うなだれる、振りかぶる／叩きつけるの各ポーズを目視。コンソールエラーなし。
+- テスト: `node tests/smoke.mjs` — ALL PASS。新規：熱くなる選手はブレークされると叩きつけて音が鳴る・冷静な選手はうなだれるだけ・リターンゲームを落としてもブレークではない・地味な1点ではガッツポーズしない・確率を外せば反応なし・SPAN で消え、ポイント間に収まり、次のサーブで消える・未知の気性は normal・全選手の気性が定義済み。
+
 ## 2026-10-08 試合後のハイライト
 - ブランチ: feat/highlights-emotions-weather
 - 実施内容: ユーザー要望（追加アイデアの4番）。`Game#endPoint()` が決まった1点ごとに見どころの点数を付けた記録（`pointRecord()`：ラリー本数・決まり方・エースの球速・出た必殺技・かかっていた1点。`config.HIGHLIGHT.SCORE`）を `pointLog` に積み、`highlightPicks()` が試合を決めた1点＋点数上位を古い順に最大 `MAX_CLIPS` 本選んで `matchSummary().highlights` に載せる。表示側は、ポイントごとのリプレイを切り出すときにその録画を id で残し（`world.startReplay(wait, clipId)`／スキップされたら `captureClip()`）、`game.highlightKeep()` に入らない録画は捨てる。締めのカットの後、`main.js` がスタッツ画面の前に `world.playHighlights()` で順に流し、HUD に「ハイライト n/m」と見出し（`hud.setHighlight()`）を出す。ハイライトの1本は、その1点のときの会場の向き（チェンジエンズ）で映す。

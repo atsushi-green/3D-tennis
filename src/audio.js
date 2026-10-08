@@ -864,6 +864,11 @@
     ovation: (team) => tickOvation(team),
     /** ネットコードに当たる鈍い音（低く長め＝テープ/ガットの damped な振動）。 */
     netIn: () => layered(AUDIO.NET_IN),
+    /** 選手がラケットを地面に叩きつけた（割れる音）。観客は「おぉ…」とどよめく。 */
+    racketSmash: () => {
+      layered(AUDIO.RACKET_SMASH);
+      crowdVoices(AUDIO.CROWD.OOH);
+    },
     /** 必殺技の発動。音程が上がっていくので、直後に鳴る打球音と混ざっても聞き分けられる。 */
     special: () => layered(AUDIO.SPECIAL),
     /**
