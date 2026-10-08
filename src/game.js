@@ -996,10 +996,11 @@
        */
       this.changeover = null;
       /**
-       * 試合で初めてのマッチポイントの演出の最中だけ { t, team } が入る（それ以外は null）。
+       * そのゲームで初めてのマッチポイントの演出の最中だけ { t, team } が入る（それ以外は null）。
        * t＝始まってからの秒数、team＝あと1点で勝つ側。演出の間は update() が試合を止め、
-       * 表示側（scene/world.js）がカメラを観客席へ回す。matchPointCutDone は、この試合で
-       * もう演出を出したか（2回目以降のマッチポイントでは出さない）。
+       * 表示側（scene/world.js）がカメラを観客席へ回す。matchPointCutDone は、このゲームで
+       * もう演出を出したか（同じゲームの2回目以降のマッチポイントでは出さない。ゲームが
+       * 替わったら戻す＝次のゲームでまたマッチポイントになれば改めて出す）。
        */
       this.matchPointCut = null;
       this.matchPointCutDone = false;
@@ -2076,7 +2077,7 @@
     }
 
     /**
-     * 試合で初めてのマッチポイントの演出を始める（beginServe() が構えを作った直後）。
+     * 各ゲームで初めてのマッチポイントの演出を始める（beginServe() が構えを作った直後）。
      * 選手はもう構えに立っていて、CPU/AI のサーブも予約済みだが、演出の間は update() が
      * 試合の時計ごと止めるので、サーブは演出が終わってからいつもの一拍をおいて来る。
      * @param {'you'|'cpu'} team あと1点で勝つ側
@@ -2235,7 +2236,7 @@
       // （セカンドサーブでもう一度通っても同じ結果になる）。
       this.stakes = pointStakes(this.match, this.server);
       this.placeForServe(faultReason);
-      // 試合で初めてのマッチポイントは、構えに入ったところで演出を挟む。セカンドサーブで
+      // そのゲームで初めてのマッチポイントは、構えに入ったところで演出を挟む。セカンドサーブで
       // 構え直すのは同じ1点なので出さない（練習モードは得点をつけないので、そもそも立たない）。
       const stakes = this.stakes;
       if (stakes && stakes.kind === 'match' && !faultReason && !this.practice && !this.matchPointCutDone) {
@@ -3612,6 +3613,7 @@
         this.passServe(); // ゲームごとにサーブ交代
         if (result.tiebreak) this.tiebreakOpener = this.server; // 6-6：ここからタイブレーク
         this.refreshSpecials(); // 必殺技はゲームが替わるたびに回復する
+        this.matchPointCutDone = false; // マッチポイントの演出はゲームごとに1回（次のゲームでまた出す）
       }
 
       if (result.type === 'set') {

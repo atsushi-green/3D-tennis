@@ -340,7 +340,7 @@
   }
 
   /**
-   * 試合で初めてのマッチポイントの演出の間、スタンドが沸き続ける音（AUDIO.CROWD.MATCH_POINT）。
+   * 各ゲームで初めてのマッチポイントの演出の間、スタンドが沸き続ける音（AUDIO.CROWD.MATCH_POINT）。
    * 長く伸ばした歓声（ループさせたノイズの山）・鳴りやまない拍手・「ワー」という声の波を、
    * 1本のつまみ（master）にまとめて鳴らす。演出が終わったら（Space で切り上げても）
    * settleRoar() がそのつまみを絞り、サーブの構えに合わせて静まらせる。
@@ -873,7 +873,7 @@
      * のコメント参照）。今は歓声と拍手の大きさ・明るさだけで勝敗が分かる。
      */
     point: (winner, outcome, rallyShots, stake) => crowd(rallyShots, outcome, winner, stake),
-    /** 試合で初めてのマッチポイントの演出が始まった（スタンドが沸き続ける）／終わった（静まる）。 */
+    /** 各ゲームで初めてのマッチポイントの演出が始まった（スタンドが沸き続ける）／終わった（静まる）。 */
     matchPoint: (team) => matchPointRoar(team),
     matchPointEnd: () => settleRoar(),
   };

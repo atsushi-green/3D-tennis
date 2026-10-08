@@ -278,7 +278,23 @@ const noHooks = {
   // 凌がれて 40-15 になっても、2回目のマッチポイントでは演出を出さない
   playTo(g, 'cpu');
   ok(!!g.stakes && g.stakes.kind === 'match', 'precondition: 40-15 is still a match point');
-  ok(!g.matchPointCut, 'the second match point of the match does not replay the cut');
+  ok(!g.matchPointCut, 'the second match point of the same game does not replay the cut');
+
+  // ゲームが替わったら戻す：凌がれてそのゲームを落とし、次のゲームで再びマッチポイントになれば出す
+  const g5 = new R.Game({ input: fakeInput, hooks });
+  g5.start(false, 'you');
+  g5.match.games = { you: 5, cpu: 0 };
+  g5.match.points = { you: 3, cpu: 4 }; // 40-AD から CPU が取ってこのゲームは CPU
+  g5.matchPointCutDone = true; // このゲームではもう出した扱い
+  g5.phase = 'rally';
+  g5.serveInFlight = false;
+  g5.endPoint('cpu', 'ツーバウンド');
+  ok(g5.match.games.cpu === 1, `precondition: the CPU took the game, games=${JSON.stringify(g5.match.games)}`);
+  ok(g5.matchPointCutDone === false, 'a new game re-arms the match point cut');
+  g5.match.points = { you: 3, cpu: 0 };
+  g5.beginServe();
+  ok(!!g5.matchPointCut && g5.matchPointCut.team === 'you',
+    'the first match point of the next game starts the cut again');
 
   // CPU のサーブで CPU のマッチポイント：演出の間は CPU もサーブしてこない。Space で切り上げられる
   const g2 = new R.Game({ input: fakeInput, hooks });
