@@ -92,6 +92,14 @@ canvas{display:block}
   animation:stakePulse 1.6s ease-in-out infinite;
 }
 #stakes:empty{display:none}
+/* タイブレーク中の札。#stakes（その1点の山場）と違い、タイブレークの間ずっと出ているので点滅させない */
+#tiebreakTag{
+  margin-top:6px;padding:4px 10px;
+  background:rgba(9,20,34,.85);border-radius:2px;
+  border-left:3px solid var(--ball);
+  font-size:12px;font-weight:700;letter-spacing:.1em;color:var(--ball);
+}
+#tiebreakTag[hidden]{display:none}
 #stakes.brk{color:#ff6b6b}
 #stakes.match{color:#ffc83d}
 /* 誰にかかっているか。見出しより一段落として、色は見出しから受け継ぐ */
@@ -177,6 +185,11 @@ canvas{display:block}
 }
 .staminaRow{display:contents}
 .staminaLabel{font-size:11px;letter-spacing:.04em;color:var(--dim);white-space:nowrap;min-width:52px}
+/* 枠の呼び名（YOU／CPU／パートナー／CPU2）の小札。スコアボードの名前欄（#bug .nm .side）と同じ見た目 */
+.staminaLabel .side{
+  display:inline-block;margin-right:6px;padding:0 4px;border-radius:2px;
+  font-size:9px;letter-spacing:.06em;border:1px solid rgba(232,238,245,.25)
+}
 .staminaBar{flex:1;height:5px;border-radius:3px;overflow:hidden;
   background:rgba(232,238,245,.12);
 }

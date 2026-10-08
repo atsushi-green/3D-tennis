@@ -10473,5 +10473,25 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   }
 }
 
+// --- タイブレーク入りのコールは、その試合形式の実際のゲーム数を言う ---
+// (退行テスト: 以前は「（6-6 タイブレーク！）」と固定の文言で、3ゲーム先取の 3-3 でも 6-6 と出ていた)
+{
+  const { RULES } = R.config;
+  const saved = { games: RULES.SET_GAMES, sets: RULES.SETS_TO_WIN };
+  R.config.applyMatchFormat(3, 1);
+  const calls = [];
+  const g = new R.Game({ input: fakeInput, hooks: { ...noHooks, call: (big, sub) => calls.push(sub) } });
+  g.start();
+  g.match.games = { you: 3, cpu: 2 };
+  g.match.points = { you: 0, cpu: 3 };
+  g.phase = 'rally';
+  g.endPoint('cpu', 'アウト'); // 3-3 → タイブレーク
+  ok(g.match.tiebreak === true, `3-3 enters a tiebreak in a 3-game set, got tiebreak=${g.match.tiebreak}`);
+  ok(calls.some((sub) => sub && sub.includes('3-3 タイブレーク')),
+    `the call names the real score (3-3), got ${JSON.stringify(calls)}`);
+  RULES.SET_GAMES = saved.games;
+  RULES.SETS_TO_WIN = saved.sets;
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);

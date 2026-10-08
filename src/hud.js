@@ -237,6 +237,7 @@
         aces: { you: $('ace1'), cpu: $('ace2') },
         doubleFaults: { you: $('df1'), cpu: $('df2') },
         stakes: $('stakes'),
+        tiebreakTag: $('tiebreakTag'),
         wind: $('wind'),
         serveSpeed: $('serveSpeed'),
         matchLevel: $('matchLevel'),
@@ -825,8 +826,19 @@
       const short = (name) => name.split('・')[0];
       // ハイライトの見出しで「誰のポイントか」を言うのに使う（スコアボードの名前と同じ考え方）
       this.teamNames = {};
+      // スタミナの行も、スコアボードと同じく枠の呼び名（YOU／CPU など）の小札を名前の前に付ける。
+      // カスタムの選手（名前なし）は呼び名だけ＝小札と同じ文字を2度並べない。
       ROSTER.forEach((r) => {
-        this.el.staminaLabels[r.key].textContent = nameOf(r.key) || r.label;
+        const label = this.el.staminaLabels[r.key];
+        const name = nameOf(r.key);
+        if (!name) {
+          label.textContent = r.label;
+          return;
+        }
+        const tag = document.createElement('span');
+        tag.className = 'side';
+        tag.textContent = r.label;
+        label.replaceChildren(tag, name);
       });
       ['you', 'cpu'].forEach((side) => {
         const members = doubles ? [side, `${side}Mate`] : [side];
@@ -977,6 +989,7 @@
       const {
         points, games, tiebreak, tiebreakPoints,
       } = match;
+      this.el.tiebreakTag.hidden = !tiebreak;
       if (tiebreak) {
         // タイブレーク中は 0/15/30/40 ではなく素点（1点刻み）で表示する
         this.el.points.you.textContent = tiebreakPoints.you;

@@ -57,6 +57,9 @@
     </div>
     <!-- 次の1点に何がかかっているか（ブレーク／ゲーム／マッチポイント）。かかっていない
          ポイントでは hud が中身を空にするので :empty で行ごと消える（風・サーブ速度と同じ作り）。 -->
+    <!-- タイブレーク中だけ出る札（hud.renderScore）。3／4／6ゲームどの形式でも、ゲーム数が
+         並んでタイブレークに入ってから、そのセットが決まるまで出しっぱなしにする。 -->
+    <div id="tiebreakTag" hidden>タイブレーク</div>
     <div id="stakes"></div>
     <div id="stats">A <span id="ace1">0</span>–<span id="ace2">0</span> · DF <span id="df1">0</span>–<span id="df2">0</span></div>
     <div id="wind"></div>

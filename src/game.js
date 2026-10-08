@@ -3897,7 +3897,7 @@
       // ブレークで取ったゲームはそう言う（サーブを持っていない側が取った＝試合が動く1ゲーム）。
       const broke = stakes && stakes.breakPoint && stakes.team === winner;
       const sub = result.type === 'game'
-        ? `ゲーム — ${mine ? 'YOU' : 'CPU'}${broke ? '（ブレーク！）' : ''}${result.tiebreak ? '（6-6 タイブレーク！）' : ''}`
+        ? `ゲーム — ${mine ? 'YOU' : 'CPU'}${broke ? '（ブレーク！）' : ''}${result.tiebreak ? `（${this.match.games.you}-${this.match.games.cpu} タイブレーク！）` : ''}`
         : reason === 'ツーバウンド' ? twoBounceCall : reason;
       // 取った側がこのポイントで最後に放ったショット（決め球、または相手のミスを誘った球）。
       // 相手のネット／アウトで決まった場合は「その1本前に自分が打った球」になる。
