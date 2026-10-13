@@ -4434,6 +4434,45 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     'the flat preset is multiplier 1 in both dimensions, matching the pre-spin behaviour exactly');
 }
 
+// --- 球種の性格づけ（SPIN.GROUND）：フラットは速く低く、トップスピンは高く越えて遅め、
+//     スライスはいちばん遅い。以前は重いぶん急に沈むトップスピンがネットぎりぎりを最短で
+//     通せて、フル溜めでいちばん速い上位互換になっていた（フラット114／トップ127km/h）。
+{
+  /** 人間がベースラインから1本打った直後の球速(km/h)と、ネット真上での高さ(m) */
+  const groundShot = (spin, charge) => {
+    const g = new R.Game({ input: { moveX: 0, moveZ: 0, lob: false }, hooks: noHooks });
+    g.start();
+    g.phase = 'rally';
+    g.serveInFlight = false;
+    g.you.x = 0.6; g.you.z = -HALF_L + 0.3;
+    Object.assign(g.ball, {
+      x: 0, y: 0.9, z: -HALF_L + 0.3, vx: 0, vy: 1, vz: -3,
+      bounces: 1, live: true, last: 'cpu', spin: 'flat', wind: 0, windZ: 0, curve: 0,
+    });
+    g.you.swingCharge = charge; g.you.chargeSpin = spin; g.you.chargeStroke = 'forehand';
+    g.hit('you');
+    const kmh = R.math.mpsToKmh(Math.hypot(g.ball.vx, g.ball.vz));
+    const tNet = -g.ball.z / g.ball.vz;
+    const b = { ...g.ball };
+    for (let t = 0; t < tNet; t += 1 / 240) R.physics.integrate(b, 1 / 240);
+    return { kmh, netY: b.y };
+  };
+  const median = (f) => {
+    const v = Array.from({ length: 9 }, f).sort((a, b) => a - b);
+    return v[4];
+  };
+  const kmh = (spin, charge) => median(() => groundShot(spin, charge).kmh);
+  const netY = (spin, charge) => median(() => groundShot(spin, charge).netY);
+  [0.3, 1].forEach((c) => {
+    ok(kmh('flat', c) > kmh('top', c) && kmh('top', c) > kmh('slice', c),
+      `charge ${c}: flat is the fastest, then topspin, then slice: ${kmh('flat', c).toFixed(0)} / ${kmh('top', c).toFixed(0)} / ${kmh('slice', c).toFixed(0)} km/h`);
+  });
+  ok(kmh('flat', 1) > kmh('top', 1) * 1.08,
+    `a full-charge flat is clearly faster than a full-charge topspin: ${kmh('flat', 1).toFixed(0)} vs ${kmh('top', 1).toFixed(0)} km/h`);
+  ok(netY('top', 1) > netY('flat', 1) + 0.2,
+    `a full-charge topspin clears the net much higher than a flat: ${netY('top', 1).toFixed(2)} vs ${netY('flat', 1).toFixed(2)} m`);
+}
+
 // --- スピン選択：B=フラット／V=トップスピン／C=スライス、それぞれ独立した溜め・スイングキー ---
 // chargeStart(spin) の引数（押されたキーに対応するスピン）をその瞬間に固定する。当たる瞬間
 // まで押し続ける必要はない（chargeStroke（フォア/バック）と同じ方式）。
@@ -5622,7 +5661,11 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
       spin: 'flat', wind: 0, windZ: 0, curve: 0, shotSpeed: 50,
     });
     const saved = { ...CPU };
-    Object.assign(CPU, { LOB_BASE: 0, LOB_VS_STRETCH: 0, OUT_LONG: 0, OUT_WIDE: 0, STRETCH_OUT_LONG: 0, STRETCH_OUT_WIDE: 0 });
+    // 球種で飛翔時間が変わる（SPIN.GROUND）ので、走らされた度合いだけを比べるようフラットに固定する
+    Object.assign(CPU, {
+      LOB_BASE: 0, LOB_VS_STRETCH: 0, OUT_LONG: 0, OUT_WIDE: 0, STRETCH_OUT_LONG: 0, STRETCH_OUT_WIDE: 0,
+      SPIN_FLAT_CHANCE: 1, CHANCE_FLAT_CHANCE: 1,
+    });
     g.hit('cpu');
     Object.assign(CPU, saved);
     return R.physics.predictLanding(g.ball).t;

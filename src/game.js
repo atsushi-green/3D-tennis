@@ -8,7 +8,7 @@
   const {
     ATTRS, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, EMOTION, FINALE, FX, HALF_L, HALF_W, HIGHLIGHT, LINE_CALL, MATCH_POINT,
     NET, PHYSICS, PLAYER, PRACTICE, RAIN, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, SWING,
-    TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND, shotSkill,
+    SPIN, TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND, shotSkill,
   } = RallyOne.config;
   const {
     approach2D, clamp, lerp, mpsToKmh, rand, signOr,
@@ -2963,6 +2963,14 @@
       const spin = shot.spin || (stroke === 'forehand' || stroke === 'backhand'
         ? (who === 'you' ? this.you.chargeSpin : aiSpin(false, attack))
         : 'flat');
+      // 球種ごとの性格づけ（SPIN.GROUND）が効くのは、通常のグラウンドストロークだけ。
+      // ロブ・ドロップ（shot.spin）・必殺技は、それぞれ専用の弾道で狙いが決まっている。
+      const shaped = !special && !shot.lob && !shot.spin && (stroke === 'forehand' || stroke === 'backhand');
+      const flight = shot.flight * (shaped ? SPIN.GROUND.T_MULT[spin] : 1);
+      const clearance = shaped
+        ? Math.max(SPIN.GROUND.CLEARANCE_MIN,
+          (shot.clearance === undefined ? PHYSICS.NET_CLEARANCE : shot.clearance) + SPIN.GROUND.CLEARANCE_ADD[spin])
+        : shot.clearance;
 
       // シングルスの cpu のネットへの詰め（moveSinglesCpu() 参照）。ダブルスは元々2人とも
       // ネット際が基本位置なのでボレーの機会が自然に生まれるが、シングルスの cpu は常に
@@ -2987,7 +2995,7 @@
       // shot.curve を返すのはバギーホイップだけ（飛翔中ずっと横に曲がる）。solveShot にも
       // 同じ値を渡して「曲がったうえで狙い通りに落ちる」初速を解かせる。
       const curve = shot.curve || 0;
-      Object.assign(ball, solveShot(from, shot.target, shot.flight, shot.clearance, spin, curve));
+      Object.assign(ball, solveShot(from, shot.target, flight, clearance, spin, curve));
       ball.spin = spin;
       ball.curve = curve;
       ball.shotSpeed = Math.hypot(ball.vx, ball.vz); // 相手が「ゆるい球か」を見るのに使う

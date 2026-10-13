@@ -834,11 +834,12 @@
    * @param {boolean} [second] セカンドサーブ。実際のテニスと同じく、ほとんど回転をかけて
    *   （しかも多くはトップスピン＝キック）確実に入れにいく比率へ差し替える。
    * @param {number} [attack] チャンスボールを叩きにいく度合い(0〜1。cpuShot() と同じ)。
-   *   その分だけスライス（遅く滑る、つなぎの球）をやめてトップスピンにする。既定0。
+   *   その分だけフラット（いちばん速い決め球。SPIN.GROUND 参照）を増やし、回転をかける
+   *   ときもスライス（遅く滑る、つなぎの球）をやめてトップスピンにする。既定0。
    * @returns {'flat'|'top'|'slice'}
    */
   function aiSpin(second, attack = 0) {
-    const flatChance = second ? SERVE.SECOND_FLAT_CHANCE : CPU.SPIN_FLAT_CHANCE;
+    const flatChance = lerp(second ? SERVE.SECOND_FLAT_CHANCE : CPU.SPIN_FLAT_CHANCE, CPU.CHANCE_FLAT_CHANCE, attack);
     const topShare = lerp(second ? SERVE.SECOND_TOP_SHARE : CPU.SPIN_TOP_SHARE, 1, attack);
     if (Math.random() < flatChance) return 'flat';
     return Math.random() < topShare ? 'top' : 'slice';
