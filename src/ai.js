@@ -836,10 +836,13 @@
    * @param {number} [attack] チャンスボールを叩きにいく度合い(0〜1。cpuShot() と同じ)。
    *   その分だけフラット（いちばん速い決め球。SPIN.GROUND 参照）を増やし、回転をかける
    *   ときもスライス（遅く滑る、つなぎの球）をやめてトップスピンにする。既定0。
+   * @param {boolean} [rally] ラリーのグラウンドストローク。フラットの確率を
+   *   CPU.RALLY_FLAT_CHANCE にする（サーブより回転をかけた球が多い）。既定 false。
    * @returns {'flat'|'top'|'slice'}
    */
-  function aiSpin(second, attack = 0) {
-    const flatChance = lerp(second ? SERVE.SECOND_FLAT_CHANCE : CPU.SPIN_FLAT_CHANCE, CPU.CHANCE_FLAT_CHANCE, attack);
+  function aiSpin(second, attack = 0, rally = false) {
+    const base = second ? SERVE.SECOND_FLAT_CHANCE : rally ? CPU.RALLY_FLAT_CHANCE : CPU.SPIN_FLAT_CHANCE;
+    const flatChance = lerp(base, CPU.CHANCE_FLAT_CHANCE, attack);
     const topShare = lerp(second ? SERVE.SECOND_TOP_SHARE : CPU.SPIN_TOP_SHARE, 1, attack);
     if (Math.random() < flatChance) return 'flat';
     return Math.random() < topShare ? 'top' : 'slice';

@@ -2926,6 +2926,14 @@
       // 球速は同じもの）。狙いが技そのもので決まっているので打点タイミング（引っ張り／
       // 流し）は効かず、常に素直なタイミングとして扱う。AI は ←→ を持たないので
       // aim=0＝常にクロス側、溜めの代わりに SPECIAL.AI.CHARGE を渡す。
+      // CPU/AI のグラウンドストロークの球種は、狙いを決める前に引いておく。球種でわざと
+      // ミスする確率が変わる（SPIN.GROUND.RISK_MULT。フラットは荒れ、トップスピンは安定）ので、
+      // cpuShot() に渡す能力（skill.out）へ先に織り込む必要がある。
+      const aiGroundSpin = who === 'you' ? null : aiSpin(false, attack, true);
+      const groundSkill = () => {
+        const skill = shotSkill(player.attr, baseStroke);
+        return { ...skill, out: skill.out * SPIN.GROUND.RISK_MULT[aiGroundSpin] };
+      };
       const shot = who === 'you'
         ? this.playerShot(stroke, special ? TIMING_AIM.NEUTRAL_WAIT_T : this.swingWaited(), false, special)
         : special
@@ -2945,8 +2953,8 @@
               // 「前衛を避けてクロス、隙があればストレートをパッシング」に切り替える。
               : foes && foes.front
                 ? doublesRallyShot(foes.front, foes.back, aimDir, stretch, lobScale, arcScale,
-                  shotSkill(player.attr, baseStroke), attack)
-                : cpuShot(aimAt, aimDir, stretch, lobScale, arcScale, shotSkill(player.attr, baseStroke), attack);
+                  groundSkill(), attack)
+                : cpuShot(aimAt, aimDir, stretch, lobScale, arcScale, groundSkill(), attack);
 
       // 必殺技はここで初めて回数を使う（空振りしただけでは減らない）。縮地はこの1打では
       // なく「跳んだ瞬間」に済ませてあるので、ここでは数えない。呼び名は技が決めた
@@ -2961,7 +2969,7 @@
       // ドロップショットだけは playerShot() が専用の spin('drop') を返す（弾道・バウンドとも
       // 通常のスライスとは別扱いにするため）。それ以外は上記のとおり。
       const spin = shot.spin || (stroke === 'forehand' || stroke === 'backhand'
-        ? (who === 'you' ? this.you.chargeSpin : aiSpin(false, attack))
+        ? (who === 'you' ? this.you.chargeSpin : aiGroundSpin)
         : 'flat');
       // 球種ごとの性格づけ（SPIN.GROUND）が効くのは、通常のグラウンドストロークだけ。
       // ロブ・ドロップ（shot.spin）・必殺技は、それぞれ専用の弾道で狙いが決まっている。
@@ -3490,13 +3498,16 @@
         ? baseX
         : aimWithTiming(baseX, stroke, swingTiming(waited), attr.timing);
       // ライン際まで狙いを振ったぶんだけ、狙い自体が荒れる（やりすぎるとアウトになる）。
-      const risk = lob ? 0 : aimRisk(aimed, attr.timing);
+      // 球種でも荒れ方が変わる（SPIN.GROUND.RISK_MULT。フラットは荒れ、トップスピンは安定）。
+      const spinRisk = SPIN.GROUND.RISK_MULT[this.you.chargeSpin];
+      const risk = lob ? 0 : aimRisk(aimed, attr.timing) * spinRisk;
 
       return {
         target: {
           x: aimed + spread(-risk, risk),
           y: BALL_R,
-          z: lob ? lerp(SHOT.LOB_Z, SHOT.LOB_ATTACK_Z, charge) : spread(depth, depth + SHOT.DRIVE_Z_SPREAD),
+          z: lob ? lerp(SHOT.LOB_Z, SHOT.LOB_ATTACK_Z, charge)
+            : spread(depth, depth + SHOT.DRIVE_Z_SPREAD * SPIN.GROUND.DEPTH_SPREAD_MULT[this.you.chargeSpin]),
         },
         flight,
         lob,

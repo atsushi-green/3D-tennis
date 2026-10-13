@@ -1564,9 +1564,10 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
 // --- 溜めの強弱が体感できる差になっている（初速・深さ・演出）---
 // 「溜めても変わった気がしない」という退行を防ぐため、最低限の差を数値で固定する。
 {
-  const hitWith = (charge) => {
+  const hitWith = (charge, spin = 'flat') => {
     const g = new R.Game({ input: fakeInput, hooks: noHooks });
     g.start();
+    g.you.chargeSpin = spin;
     // 溜めの差だけを見るので無風にする（滞空の長い溜めなしの球ほど追い風／向かい風で深さが変わる）
     g.windStrength = 0;
     g.setWindVector();
@@ -1588,17 +1589,33 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
 
   ok(fullShot.speed > tapShot.speed * 2.1,
     `full charge should be at least 110% faster: tap=${tapShot.speed.toFixed(1)} full=${fullShot.speed.toFixed(1)}`);
-  ok(fullShot.landing.z > tapShot.landing.z + 4.5,
-    `full charge should land clearly deeper: tap=${tapShot.landing.z.toFixed(1)} full=${fullShot.landing.z.toFixed(1)}`);
+  // 深さは1本ごとにばらつく（SHOT.DRIVE_Z_SPREAD。フラットはさらに荒れる）ので平均で比べる
+  const avgZ = (charge) => {
+    let sum = 0;
+    for (let i = 0; i < 20; i++) sum += hitWith(charge).landing.z;
+    return sum / 20;
+  };
+  const tapZ = avgZ(0);
+  const fullZ = avgZ(1);
+  ok(fullZ > tapZ + 4.5,
+    `full charge should land clearly deeper: tap=${tapZ.toFixed(1)} full=${fullZ.toFixed(1)}`);
   ok(fullShot.impact > tapShot.impact,
     `full charge should have a longer impact effect: tap=${tapShot.impact} full=${fullShot.impact}`);
   ok(fullShot.power === 1 && tapShot.power === 0,
     `impactPower carries the charge for the FX layer: tap=${tapShot.power} full=${fullShot.power}`);
 
-  // 深く打ってもコート内に収まること（アウトばかりになっていないか）
-  let out = 0;
-  for (let i = 0; i < 100; i++) if (hitWith(1).landing.z > HALF_L) out++;
-  ok(out === 0, `full-charge shots should still land in: ${out}/100 went long`);
+  // 深く打ってもコート内に収まること（アウトばかりになっていないか）。フラットだけは
+  // 深さが荒れる（SPIN.GROUND.DEPTH_SPREAD_MULT）ので、ときどきベースラインを越える。
+  const longRate = (spin) => {
+    let out = 0;
+    for (let i = 0; i < 300; i++) if (hitWith(1, spin).landing.z > HALF_L) out++;
+    return out / 300;
+  };
+  ok(longRate('top') === 0 && longRate('slice') === 0,
+    'full-charge topspin and slice shots always land in');
+  const flatLong = longRate('flat');
+  ok(flatLong > 0 && flatLong < 0.12,
+    `a full-charge flat goes long now and then, but not usually: ${(flatLong * 100).toFixed(1)}%`);
 }
 
 // --- 振り出すタイミングでコースがずれる（早い=引っ張る／遅い=流れる、フォアとバックで逆） ---
@@ -1807,7 +1824,8 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     `aiming with the arrow keys alone stays inside the safe zone: aim=${R.config.SHOT.AIM_X} risk from ${RISK_FROM_X}`);
   // 流し側（右利きのフォアなら world -x）へ振り切ったときの散らばり。符号は利き手で
   // 変わるので、ラインを割ったかどうかは絶対値で見る。
-  ok(Math.abs(full.max - full.min) <= RISK_SPREAD * 2 + 1e-9
+  // （何も押していなければフラット＝球種の荒れ方 SPIN.GROUND.RISK_MULT.flat が掛かる）
+  ok(Math.abs(full.max - full.min) <= RISK_SPREAD * R.config.SPIN.GROUND.RISK_MULT.flat * 2 + 1e-9
     && Math.max(Math.abs(full.min), Math.abs(full.max)) > HALF_W,
     `the spread at the edge is what puts it out: ${full.min.toFixed(2)}〜${full.max.toFixed(2)} (line ${HALF_W.toFixed(2)})`);
 
@@ -4473,6 +4491,63 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     `a full-charge topspin clears the net much higher than a flat: ${netY('top', 1).toFixed(2)} vs ${netY('flat', 1).toFixed(2)} m`);
 }
 
+// --- 球種の荒れ方（SPIN.GROUND.RISK_MULT / DEPTH_SPREAD_MULT）：フラットは速いぶん荒れ、
+//     トップスピンは回転で落ちるので安定する。人間も CPU も同じ規則。
+{
+  const { CPU, SPIN, TIMING_AIM } = R.config;
+  // 人間：目一杯引きつけてライン際を狙ったときの左右の散らばり（ガイドに出す risk と同じ値）
+  const edgeRisk = (spin) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.you.x = 0;
+    g.you.chargeSpin = spin;
+    g.you.swingCharge = 1; // 溜めなしのスライスはドロップショットになるので溜める
+    return g.playerShot('forehand', TIMING_AIM.NEUTRAL_WAIT_T - TIMING_AIM.FLOW_BAND_T, true).risk;
+  };
+  ok(edgeRisk('flat') > edgeRisk('slice') && edgeRisk('slice') > edgeRisk('top') && edgeRisk('top') > 0,
+    `going for the line, flat wanders most and topspin least: ${edgeRisk('flat').toFixed(2)} / ${edgeRisk('top').toFixed(2)} / ${edgeRisk('slice').toFixed(2)} m`);
+
+  // CPU：同じ1打を球種だけ変えて N 本打たせ、コートの外へ落ちた割合
+  const cpuOutRate = (spin, N = 600) => {
+    const saved = { ...CPU };
+    Object.assign(CPU, {
+      LOB_BASE: 0, LOB_VS_STRETCH: 0,
+      RALLY_FLAT_CHANCE: spin === 'flat' ? 1 : 0, CHANCE_FLAT_CHANCE: spin === 'flat' ? 1 : 0,
+      SPIN_TOP_SHARE: spin === 'top' ? 1 : 0,
+    });
+    let out = 0;
+    try {
+      for (let i = 0; i < N; i++) {
+        const g = new R.Game({ input: fakeInput, hooks: noHooks });
+        g.start();
+        g.phase = 'rally';
+        g.serveInFlight = false;
+        g.wind = 0; g.windZ = 0;
+        g.you.x = 0; g.you.z = -HALF_L;
+        g.cpu.x = 0; g.cpu.z = HALF_L - 0.5;
+        Object.assign(g.ball, {
+          x: 0.6, y: 0.9, z: HALF_L - 0.5, vx: 0, vy: 1, vz: 3,
+          bounces: 1, live: true, last: 'you', spin: 'flat', wind: 0, windZ: 0, curve: 0, shotSpeed: 20,
+        });
+        g.hit('cpu');
+        ok(g.ball.spin === spin, `precondition: the CPU hit a ${spin}, got ${g.ball.spin}`);
+        const land = R.physics.predictLanding(g.ball);
+        if (!land.net && (Math.abs(land.x) > HALF_W || Math.abs(land.z) > HALF_L)) out++;
+      }
+    } finally {
+      Object.assign(CPU, saved);
+    }
+    return out / N;
+  };
+  const outs = { flat: cpuOutRate('flat'), top: cpuOutRate('top'), slice: cpuOutRate('slice') };
+  ok(outs.flat > outs.top * 1.8 && outs.flat > outs.slice,
+    `the CPU misses more with flat than with spin: ${JSON.stringify(outs)}`);
+  // ラリーの球種の混ぜ方（RALLY_FLAT_CHANCE / SPIN_TOP_SHARE）で平均すると、荒れ方は以前（×1）と変わらない
+  const top = (1 - CPU.RALLY_FLAT_CHANCE) * CPU.SPIN_TOP_SHARE;
+  const mix = CPU.RALLY_FLAT_CHANCE * SPIN.GROUND.RISK_MULT.flat + top * SPIN.GROUND.RISK_MULT.top
+    + (1 - CPU.RALLY_FLAT_CHANCE - top) * SPIN.GROUND.RISK_MULT.slice;
+  ok(Math.abs(mix - 1) < 0.05, `averaged over the CPU's rally spin mix, its error rate stays as before: x${mix.toFixed(3)}`);
+}
+
 // --- スピン選択：B=フラット／V=トップスピン／C=スライス、それぞれ独立した溜め・スイングキー ---
 // chargeStart(spin) の引数（押されたキーに対応するスピン）をその瞬間に固定する。当たる瞬間
 // まで押し続ける必要はない（chargeStroke（フォア/バック）と同じ方式）。
@@ -5664,7 +5739,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     // 球種で飛翔時間が変わる（SPIN.GROUND）ので、走らされた度合いだけを比べるようフラットに固定する
     Object.assign(CPU, {
       LOB_BASE: 0, LOB_VS_STRETCH: 0, OUT_LONG: 0, OUT_WIDE: 0, STRETCH_OUT_LONG: 0, STRETCH_OUT_WIDE: 0,
-      SPIN_FLAT_CHANCE: 1, CHANCE_FLAT_CHANCE: 1,
+      SPIN_FLAT_CHANCE: 1, RALLY_FLAT_CHANCE: 1, CHANCE_FLAT_CHANCE: 1,
     });
     g.hit('cpu');
     Object.assign(CPU, saved);
