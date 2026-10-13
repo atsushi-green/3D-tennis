@@ -4548,6 +4548,91 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   ok(Math.abs(mix - 1) < 0.05, `averaged over the CPU's rally spin mix, its error rate stays as before: x${mix.toFixed(3)}`);
 }
 
+// --- 球種の角度（SPIN.GROUND.ANGLE）：トップスピンで横へ大きく狙うと、浅く鋭いショートクロスになる。
+//     フラット・スライスは同じ狙いでも深いまま（そのぶんライン際で荒れる＝RISK_MULT）。
+{
+  const { SPIN, TIMING_AIM, CPU } = R.config;
+  const { ANGLE } = SPIN.GROUND;
+  /** 目一杯流して（ライン際を）狙ったフル溜めの狙い。preview＝ばらつきを中央値に固定 */
+  const edgeShot = (spin, waited = TIMING_AIM.NEUTRAL_WAIT_T - TIMING_AIM.FLOW_BAND_T) => {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.you.x = 0;
+    g.you.chargeSpin = spin;
+    g.you.swingCharge = 1;
+    return g.playerShot('forehand', waited, true);
+  };
+  const flat = edgeShot('flat');
+  const top = edgeShot('top');
+  const slice = edgeShot('slice');
+  ok(Math.abs(top.target.x - flat.target.x) < 1e-9,
+    `the angle keeps the same sideways aim: top x=${top.target.x.toFixed(2)} flat x=${flat.target.x.toFixed(2)}`);
+  ok(Math.abs(top.target.z) <= ANGLE.Z + 1e-9 && Math.abs(flat.target.z) > ANGLE.Z + 3
+    && Math.abs(slice.target.z) > ANGLE.Z + 3,
+    `a topspin at the edge lands short (short angle), flat and slice stay deep: top z=${top.target.z.toFixed(2)} flat z=${flat.target.z.toFixed(2)} slice z=${slice.target.z.toFixed(2)}`);
+  ok(top.flight < flat.flight * SPIN.GROUND.T_MULT.top && top.angle === 1,
+    `and it is struck sooner so it keeps its pace: top ${top.flight.toFixed(2)}s vs flat ${flat.flight.toFixed(2)}s`);
+  // 素直に打つ（狙いが中央寄り）ならトップスピンでも浅くならない
+  const straight = edgeShot('top', TIMING_AIM.NEUTRAL_WAIT_T);
+  ok(Math.abs(straight.target.x) <= ANGLE.FROM_X && straight.angle === 0
+    && Math.abs(straight.target.z) > ANGLE.Z + 3,
+    `a topspin aimed near the middle stays deep: x=${straight.target.x.toFixed(2)} z=${straight.target.z.toFixed(2)}`);
+
+  // 実際に打つと、ショートクロスはコートに入り（アウトはほぼ無い）、フラットで同じ角度を
+  // 狙うよりずっと外れにくい
+  const edgeOut = (spin, N = 200) => {
+    let out = 0;
+    for (let i = 0; i < N; i++) {
+      const g = new R.Game({ input: fakeInput, hooks: noHooks });
+      g.start();
+      g.phase = 'rally';
+      g.serveInFlight = false;
+      g.wind = 0; g.windZ = 0;
+      g.you.x = 0.6; g.you.z = -HALF_L + 0.3;
+      Object.assign(g.ball, {
+        x: 0, y: 0.9, z: -HALF_L + 0.3, vx: 0, vy: 1, vz: -3,
+        bounces: 1, live: true, last: 'cpu', spin: 'flat', wind: 0, windZ: 0, curve: 0,
+      });
+      g.you.swingCharge = 1; g.you.chargeSpin = spin; g.you.chargeStroke = 'forehand';
+      g.swingWaited = () => TIMING_AIM.NEUTRAL_WAIT_T - TIMING_AIM.FLOW_BAND_T;
+      g.hit('you');
+      const land = R.physics.predictLanding(g.ball);
+      if (land.net || Math.abs(land.x) > HALF_W || Math.abs(land.z) > HALF_L) out++;
+    }
+    return out / N;
+  };
+  const outs = { flat: edgeOut('flat'), top: edgeOut('top') };
+  ok(outs.top < 0.03 && outs.flat > outs.top + 0.1,
+    `going for the angle, topspin stays in while flat often misses: ${JSON.stringify(outs)}`);
+
+  // CPU も同じ（シングルスで横へ振るトップスピンの一部＝ANGLE_CHANCE）
+  {
+    const saved = { ...CPU };
+    Object.assign(CPU, {
+      LOB_BASE: 0, LOB_VS_STRETCH: 0, OUT_LONG: 0, OUT_WIDE: 0, STRETCH_OUT_LONG: 0, STRETCH_OUT_WIDE: 0,
+      RALLY_FLAT_CHANCE: 0, CHANCE_FLAT_CHANCE: 0, SPIN_TOP_SHARE: 1, ANGLE_CHANCE: 1,
+      AIM_X_MIN: ANGLE.FULL_X, AIM_X_MAX: ANGLE.FULL_X,
+    });
+    try {
+      const g = new R.Game({ input: fakeInput, hooks: noHooks });
+      g.start();
+      g.phase = 'rally';
+      g.serveInFlight = false;
+      g.you.x = 0; g.you.z = -HALF_L;
+      g.cpu.x = 0; g.cpu.z = HALF_L - 0.5;
+      Object.assign(g.ball, {
+        x: 0.6, y: 0.9, z: HALF_L - 0.5, vx: 0, vy: 1, vz: 3,
+        bounces: 1, live: true, last: 'you', spin: 'flat', wind: 0, windZ: 0, curve: 0, shotSpeed: 20,
+      });
+      g.hit('cpu');
+      const land = R.physics.predictLanding(g.ball);
+      ok(g.ball.spin === 'top' && Math.abs(land.z) < ANGLE.Z + 0.5 && Math.abs(land.x) > 3,
+        `the CPU's wide topspin becomes a short angle too: x=${land.x.toFixed(2)} z=${land.z.toFixed(2)}`);
+    } finally {
+      Object.assign(CPU, saved);
+    }
+  }
+}
+
 // --- スピン選択：B=フラット／V=トップスピン／C=スライス、それぞれ独立した溜め・スイングキー ---
 // chargeStart(spin) の引数（押されたキーに対応するスピン）をその瞬間に固定する。当たる瞬間
 // まで押し続ける必要はない（chargeStroke（フォア/バック）と同じ方式）。

@@ -148,6 +148,28 @@
   }
 
   /**
+   * 球種の角度（SPIN.GROUND.ANGLE）。トップスピンで横へ大きく狙うほど、着地を浅く
+   * （サービスライン付近へ）寄せたショートクロスにする。横の狙いはそのままで前後だけ短くなる
+   * ので、角度が鋭くなる。距離が縮むぶん飛翔時間も縮めて（tMult）球威を保つ。ネットの余裕も
+   * 浅いほど ANGLE.CLEARANCE_ADD へ寄せる（hit() が short を見て決める）。
+   * 浅くならない球種・横へ狙っていない1打はそのまま（short=0, tMult=1）。
+   * @param {{x:number, y:number, z:number}} target
+   * @param {'flat'|'top'|'slice'} spin
+   * @returns {{target:{x:number, y:number, z:number}, tMult:number, short:number}}
+   */
+  function spinAngle(target, spin) {
+    const A = SPIN.GROUND.ANGLE;
+    const short = A.SHORT[spin] * clamp((Math.abs(target.x) - A.FROM_X) / (A.FULL_X - A.FROM_X), 0, 1);
+    if (!(short > 0)) return { target, tMult: 1, short: 0 };
+    const z = Math.abs(target.z);
+    return {
+      target: { ...target, z: Math.sign(target.z) * lerp(z, Math.min(z, A.Z), short) },
+      tMult: lerp(1, A.T_MULT, short),
+      short,
+    };
+  }
+
+  /**
    * ボールが今の速度のまま直進した場合、プレイヤーの奥行き(z)まで届く瞬間の x 座標（仮想延長線）。
    * バウンドは vx/vz を同じ係数で減速させるだけで比（＝軌道の向き）は変えないので、
    * バウンドをまたいでもこの直線予測はそのまま成立する。まだボールが遠いうちに判定しても、
@@ -2974,10 +2996,21 @@
       // 球種ごとの性格づけ（SPIN.GROUND）が効くのは、通常のグラウンドストロークだけ。
       // ロブ・ドロップ（shot.spin）・必殺技は、それぞれ専用の弾道で狙いが決まっている。
       const shaped = !special && !shot.lob && !shot.spin && (stroke === 'forehand' || stroke === 'backhand');
-      const flight = shot.flight * (shaped ? SPIN.GROUND.T_MULT[spin] : 1);
+      let flight = shot.flight * (shaped ? SPIN.GROUND.T_MULT[spin] : 1);
+      // トップスピンのショートクロス（spinAngle）。人間は playerShot() で済ませてある（ガイドの
+      // 着地点と一致させるため。浅くした度合いは shot.angle）。CPU/AI は横へ振る球のうち
+      // ANGLE_CHANCE の割合だけ。
+      let angle = shot.angle || 0;
+      if (shaped && who !== 'you' && !this.doubles && Math.random() < CPU.ANGLE_CHANCE) {
+        const angled = spinAngle(shot.target, spin);
+        shot.target = angled.target;
+        flight *= angled.tMult;
+        angle = angled.short;
+      }
       const clearance = shaped
         ? Math.max(SPIN.GROUND.CLEARANCE_MIN,
-          (shot.clearance === undefined ? PHYSICS.NET_CLEARANCE : shot.clearance) + SPIN.GROUND.CLEARANCE_ADD[spin])
+          (shot.clearance === undefined ? PHYSICS.NET_CLEARANCE : shot.clearance)
+          + lerp(SPIN.GROUND.CLEARANCE_ADD[spin], SPIN.GROUND.ANGLE.CLEARANCE_ADD, angle))
         : shot.clearance;
 
       // シングルスの cpu のネットへの詰め（moveSinglesCpu() 参照）。ダブルスは元々2人とも
@@ -3502,14 +3535,17 @@
       const spinRisk = SPIN.GROUND.RISK_MULT[this.you.chargeSpin];
       const risk = lob ? 0 : aimRisk(aimed, attr.timing) * spinRisk;
 
+      // トップスピンで横へ大きく狙うとショートクロス（spinAngle）。ロブは対象外。
+      const angled = spinAngle({
+        x: aimed + spread(-risk, risk),
+        y: BALL_R,
+        z: lob ? lerp(SHOT.LOB_Z, SHOT.LOB_ATTACK_Z, charge)
+          : spread(depth, depth + SHOT.DRIVE_Z_SPREAD * SPIN.GROUND.DEPTH_SPREAD_MULT[this.you.chargeSpin]),
+      }, lob ? 'flat' : this.you.chargeSpin);
       return {
-        target: {
-          x: aimed + spread(-risk, risk),
-          y: BALL_R,
-          z: lob ? lerp(SHOT.LOB_Z, SHOT.LOB_ATTACK_Z, charge)
-            : spread(depth, depth + SHOT.DRIVE_Z_SPREAD * SPIN.GROUND.DEPTH_SPREAD_MULT[this.you.chargeSpin]),
-        },
-        flight,
+        target: angled.target,
+        flight: flight * angled.tMult,
+        angle: angled.short, // ショートクロスにした度合い（hit() がネットの余裕を決めるのに使う）
         lob,
         // ガイド表示用（この狙いがどれだけ荒れるか）。実際の打球には上で反映済み。
         risk,
