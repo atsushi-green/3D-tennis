@@ -2388,21 +2388,24 @@
         },
         {
           key: 'flat', group: 'basic', title: 'フラット', kind: 'feed', goal: 3,
-          text: 'B を押しっぱなしで溜め、球が届くところで離す。足を止めて溜めるほど速く深い球になる',
+          text: 'B を押しっぱなしで溜め、球が届くところで離す。足を止めて溜めるほど速く深い球になる。'
+            + 'いちばん速いが、ライン際や低い球では荒れやすい',
           hint: 'B（フラット）で打とう',
           start: RALLY_START, feeds: RALLY_FEEDS,
           need: { strokes: GROUND, spin: 'flat', lob: false },
         },
         {
           key: 'top', group: 'basic', title: 'トップスピン', kind: 'feed', goal: 3,
-          text: 'V で打つと、山なりに越えて沈み、高く弾む安全な球になる',
+          text: 'V で打つと、山なりに越えて沈み、高く弾む安全な球になる。'
+            + '横へ大きく狙うと浅く鋭いショートクロスになる',
           hint: 'V（トップスピン）で打とう',
           start: RALLY_START, feeds: RALLY_FEEDS,
           need: { strokes: GROUND, spin: 'top', lob: false },
         },
         {
           key: 'slice', group: 'basic', title: 'スライス', kind: 'feed', goal: 3,
-          text: 'C を少し溜めてから離すと、低く滑るスライスになる（溜めずに離すとドロップショット）',
+          text: 'C を少し溜めてから離すと、低く滑るスライスになる。遅いが叩かれにくい守りの球'
+            + '（溜めずに離すとドロップショット）',
           hint: 'C を少し溜めてから離そう',
           start: RALLY_START, feeds: RALLY_FEEDS,
           need: { strokes: GROUND, spin: 'slice', lob: false },
