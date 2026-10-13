@@ -2951,7 +2951,10 @@
       // CPU/AI のグラウンドストロークの球種は、狙いを決める前に引いておく。球種でわざと
       // ミスする確率が変わる（SPIN.GROUND.RISK_MULT。フラットは荒れ、トップスピンは安定）ので、
       // cpuShot() に渡す能力（skill.out）へ先に織り込む必要がある。
-      const aiGroundSpin = who === 'you' ? null : aiSpin(false, attack, true);
+      // 走らされた1打ほど守りのスライスを選びやすく、スライスなら苦しさが和らぐ
+      // （SPIN.GROUND.SLICE）。ロブに逃げる確率・狙いの浅さ・ミス率はすべてこの値で決まる。
+      const aiGroundSpin = who === 'you' ? null : aiSpin(false, attack, true, stretch);
+      const groundStretch = aiGroundSpin === 'slice' ? stretch * SPIN.GROUND.SLICE.STRETCH_MULT : stretch;
       const groundSkill = () => {
         const skill = shotSkill(player.attr, baseStroke);
         return { ...skill, out: skill.out * SPIN.GROUND.RISK_MULT[aiGroundSpin] };
@@ -2974,9 +2977,9 @@
               // ダブルスで相手が雁行（前衛がネット際・後衛が深く）なら、後衛の配球は
               // 「前衛を避けてクロス、隙があればストレートをパッシング」に切り替える。
               : foes && foes.front
-                ? doublesRallyShot(foes.front, foes.back, aimDir, stretch, lobScale, arcScale,
+                ? doublesRallyShot(foes.front, foes.back, aimDir, groundStretch, lobScale, arcScale,
                   groundSkill(), attack)
-                : cpuShot(aimAt, aimDir, stretch, lobScale, arcScale, groundSkill(), attack);
+                : cpuShot(aimAt, aimDir, groundStretch, lobScale, arcScale, groundSkill(), attack);
 
       // 必殺技はここで初めて回数を使う（空振りしただけでは減らない）。縮地はこの1打では
       // なく「跳んだ瞬間」に済ませてあるので、ここでは数えない。呼び名は技が決めた
@@ -3011,6 +3014,8 @@
         ? Math.max(SPIN.GROUND.CLEARANCE_MIN,
           (shot.clearance === undefined ? PHYSICS.NET_CLEARANCE : shot.clearance)
           + lerp(SPIN.GROUND.CLEARANCE_ADD[spin], SPIN.GROUND.ANGLE.CLEARANCE_ADD, angle))
+          // 低い打点を持ち上げられる球種（SPIN.GROUND.LOW_LIFT）
+          + Math.max(0, SHOT.SOLVE_MIN_Y - ball.y) * SPIN.GROUND.LOW_LIFT[spin]
         : shot.clearance;
 
       // シングルスの cpu のネットへの詰め（moveSinglesCpu() 参照）。ダブルスは元々2人とも
@@ -3522,9 +3527,15 @@
       // （頂点の高さ ∝ 重力×飛翔時間²）。トップスピンは速く、スライスはゆっくり落ちてくる。
       const lobFlight = lerp(SHOT.LOB_T, SHOT.LOB_ATTACK_T, charge)
         * Math.sqrt(spinGravity('flat') / spinGravity(this.you.chargeSpin));
-      const flight = lob ? lobFlight : lerp(SHOT.TAP_T, SHOT.CHARGE_T, charge) * strokeAttr;
       // 溜めるほど深く。速さと深さの両方が変わるので「強い球を打った」感が出る。
-      const depth = lerp(SHOT.TAP_Z, SHOT.CHARGE_Z, charge);
+      const chargedDepth = lerp(SHOT.TAP_Z, SHOT.CHARGE_Z, charge);
+      // スライスは溜めが浅くても深く滑る守りの球（SPIN.GROUND.SLICE.MIN_Z）。深くしたぶん
+      // 飛翔時間も延ばして（打点からの距離の比）、球速は溜め量どおり（遅いまま）にする＝時間を稼ぐ球。
+      const depth = Math.max(chargedDepth,
+        !lob && this.you.chargeSpin === 'slice' ? SPIN.GROUND.SLICE.MIN_Z : 0);
+      const fromNet = Math.abs(this.ball.z);
+      const flight = lob ? lobFlight
+        : lerp(SHOT.TAP_T, SHOT.CHARGE_T, charge) * strokeAttr * ((fromNet + depth) / (fromNet + chargedDepth));
 
       // 能力値「安定感」が高いほど、タイミングがずれてもコースが曲がりにくい（attr.timing）。
       const aimed = lob
@@ -5042,7 +5053,9 @@
       const slow = clamp((CPU.CHANCE_SPEED_FAST - this.ball.shotSpeed)
         / (CPU.CHANCE_SPEED_FAST - CPU.CHANCE_SPEED_SLOW), 0, 1);
       const ready = clamp(player.settleT / CPU.CHANCE_SETTLE_T, 0, 1);
-      return slow * ready * CPU.CHANCE_ATTACK;
+      // 低く滑るスライスは遅くても叩きにくい（SPIN.GROUND.SLICE.CHANCE_MULT）
+      const spin = this.ball.spin === 'slice' ? SPIN.GROUND.SLICE.CHANCE_MULT : 1;
+      return slow * ready * spin * CPU.CHANCE_ATTACK;
     }
 
     /**

@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    CPU, DOUBLES, HALF_L, HALF_W, NEUTRAL_ATTR, PHYSICS, PLAYER, SERVE,
+    CPU, DOUBLES, HALF_L, HALF_W, NEUTRAL_ATTR, PHYSICS, PLAYER, SERVE, SPIN,
   } = RallyOne.config;
   const {
     clamp, lerp, rand, signOr,
@@ -838,9 +838,12 @@
    *   ときもスライス（遅く滑る、つなぎの球）をやめてトップスピンにする。既定0。
    * @param {boolean} [rally] ラリーのグラウンドストローク。フラットの確率を
    *   CPU.RALLY_FLAT_CHANCE にする（サーブより回転をかけた球が多い）。既定 false。
+   * @param {number} [stretch] 走らされた度合い(0〜1)。その分だけ守りのスライス
+   *   （SPIN.GROUND.SLICE.STRETCH_PICK）を選びやすい。既定0。
    * @returns {'flat'|'top'|'slice'}
    */
-  function aiSpin(second, attack = 0, rally = false) {
+  function aiSpin(second, attack = 0, rally = false, stretch = 0) {
+    if (Math.random() < stretch * SPIN.GROUND.SLICE.STRETCH_PICK) return 'slice';
     const base = second ? SERVE.SECOND_FLAT_CHANCE : rally ? CPU.RALLY_FLAT_CHANCE : CPU.SPIN_FLAT_CHANCE;
     const flatChance = lerp(base, CPU.CHANCE_FLAT_CHANCE, attack);
     const topShare = lerp(second ? SERVE.SECOND_TOP_SHARE : CPU.SPIN_TOP_SHARE, 1, attack);

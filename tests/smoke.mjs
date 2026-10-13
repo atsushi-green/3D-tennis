@@ -3242,11 +3242,15 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   let minUses = Infinity;
   let maxUses = -Infinity;
   let maxTimers = 0;
+  // 試合が決まると次の試合でスタッツが0に戻るので、最後の1フレームではなく途中の最大で見る
+  // （600秒の区切りが試合と試合の合間に重なると、最後だけ見たら0になる）
+  let progressed = 0;
   const counts = () => R.config.SPECIAL_MOVES.map((m) => g.usesLeft(m.key));
   for (let i = 0; i < 60 * 600; i++) {
     if (g.phase === 'serve' && g.server === 'you') tap(g);
     if (g.phase === 'rally' && i % 6 === 0) tap(g);
     g.update(1 / 60);
+    progressed = Math.max(progressed, g.stats.you.specials + g.matchStats.points);
     maxTimers = Math.max(maxTimers, g.timers.length);
     counts().forEach((n) => {
       minUses = Math.min(minUses, n);
@@ -3259,7 +3263,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   // 「セット決着の2本」に加えて3本までは正常。
   ok(maxTimers <= 3, `timers do not leak with specials on: at most ${maxTimers} pending at once`);
   ok(minUses >= 0, `the per-move use count never goes negative: ${minUses}`);
-  ok(g.stats.you.specials + g.matchStats.points > 0, 'the match actually progressed');
+  ok(progressed > 0, 'the match actually progressed');
   ok(maxUses <= R.config.SPECIAL.USES_PER_GAME,
     `and never exceeds the per-game cap: ${maxUses}`);
 }
@@ -4630,6 +4634,117 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     } finally {
       Object.assign(CPU, saved);
     }
+  }
+}
+
+// --- 守りのスライス（SPIN.GROUND.SLICE）：遅いが低く滑るので叩かれにくく、走らされても崩れにくい ---
+{
+  const { CPU, SPIN, DROP } = R.config;
+  const { SLICE } = SPIN.GROUND;
+
+  // 相手が遅い球をチャンスボールとして叩きにくる度合いは、スライスなら小さい
+  {
+    const g = new R.Game({ input: fakeInput, hooks: noHooks });
+    g.cpu.settleT = CPU.CHANCE_SETTLE_T;
+    g.ball.shotSpeed = CPU.CHANCE_SPEED_SLOW;
+    g.ball.spin = 'flat';
+    const flat = g.chanceAttack(g.cpu);
+    g.ball.spin = 'slice';
+    const slice = g.chanceAttack(g.cpu);
+    ok(flat > 0 && Math.abs(slice - flat * SLICE.CHANCE_MULT) < 1e-9,
+      `a slow slice is much less of a chance ball than a slow flat: ${slice.toFixed(2)} vs ${flat.toFixed(2)}`);
+  }
+
+  // 人間：溜めが浅くても（ドロップにならない範囲で）スライスは深く、しかも遅いまま
+  {
+    const shotOf = (spin) => {
+      const g = new R.Game({ input: fakeInput, hooks: noHooks });
+      g.you.x = 0; g.ball.z = -HALF_L + 0.3;
+      g.you.chargeSpin = spin;
+      g.you.swingCharge = DROP.MAX_CHARGE + 0.05;
+      return g.playerShot('forehand', R.config.TIMING_AIM.NEUTRAL_WAIT_T, true);
+    };
+    const flat = shotOf('flat');
+    const slice = shotOf('slice');
+    const dist = (sh) => HALF_L - 0.3 + Math.abs(sh.target.z);
+    ok(Math.abs(slice.target.z) >= SLICE.MIN_Z && Math.abs(flat.target.z) < SLICE.MIN_Z,
+      `a lightly charged slice still lands deep: slice z=${slice.target.z.toFixed(2)} flat z=${flat.target.z.toFixed(2)}`);
+    ok(dist(slice) / slice.flight <= dist(flat) / flat.flight + 1e-9,
+      `and it is no faster than a flat of the same charge: ${(dist(slice) / slice.flight).toFixed(1)} vs ${(dist(flat) / flat.flight).toFixed(1)} m/s`);
+  }
+
+  // CPU：走らされた1打ほどスライスを選び、スライスなら苦しさが和らぐ（深く返り、ロブに逃げにくい）
+  {
+    let slices = 0;
+    for (let i = 0; i < 2000; i++) if (R.ai.aiSpin(false, 0, true, 1) === 'slice') slices++;
+    ok(slices / 2000 > SLICE.STRETCH_PICK,
+      `fully stretched, the CPU mostly defends with a slice: ${(slices / 20).toFixed(0)}%`);
+
+    const stretchedReturn = (spin, N = 300) => {
+      const saved = { ...CPU };
+      Object.assign(CPU, {
+        OUT_LONG: 0, OUT_WIDE: 0, STRETCH_OUT_LONG: 0, STRETCH_OUT_WIDE: 0, ANGLE_CHANCE: 0,
+        RALLY_FLAT_CHANCE: spin === 'flat' ? 1 : 0, CHANCE_FLAT_CHANCE: spin === 'flat' ? 1 : 0, SPIN_TOP_SHARE: 0,
+      });
+      const pick = SLICE.STRETCH_PICK;
+      SLICE.STRETCH_PICK = spin === 'slice' ? 1 : 0;
+      let depth = 0;
+      let lobs = 0;
+      try {
+        for (let i = 0; i < N; i++) {
+          const g = new R.Game({ input: fakeInput, hooks: noHooks });
+          g.start();
+          g.phase = 'rally';
+          g.serveInFlight = false;
+          g.wind = 0; g.windZ = 0;
+          g.you.x = 0; g.you.z = -HALF_L;
+          g.cpu.x = 0; g.cpu.z = HALF_L - 0.5;
+          g.cpu.chaseDist = CPU.STRETCH_DIST_MAX; // 目一杯走らされた
+          Object.assign(g.ball, {
+            x: 0.6, y: 0.9, z: HALF_L - 0.5, vx: 0, vy: 1, vz: 3,
+            bounces: 1, live: true, last: 'you', spin: 'flat', wind: 0, windZ: 0, curve: 0, shotSpeed: 30,
+          });
+          g.hit('cpu');
+          if (/ロブ/.test(g.lastShotBy.cpu)) lobs++;
+          else depth += Math.abs(R.physics.predictLanding(g.ball).z);
+        }
+      } finally {
+        Object.assign(CPU, saved);
+        SLICE.STRETCH_PICK = pick;
+      }
+      return { depth: depth / Math.max(1, N - lobs), lobs: lobs / N };
+    };
+    const flat = stretchedReturn('flat');
+    const slice = stretchedReturn('slice');
+    ok(slice.depth > flat.depth + 0.5 && slice.lobs < flat.lobs,
+      `a stretched slice comes back deeper and lobs less than a stretched flat: slice ${JSON.stringify(slice)} flat ${JSON.stringify(flat)}`);
+  }
+
+  // 低い打点（SHOT.SOLVE_MIN_Y より下）から：トップスピン・スライスは持ち上げられる（LOW_LIFT）が、
+  // フラットで叩くとネットに掛かりやすい
+  {
+    const netRate = (spin, N = 40) => {
+      let net = 0;
+      for (let i = 0; i < N; i++) {
+        const g = new R.Game({ input: fakeInput, hooks: noHooks });
+        g.start();
+        g.phase = 'rally';
+        g.serveInFlight = false;
+        g.wind = 0; g.windZ = 0;
+        g.you.x = 0.6; g.you.z = -HALF_L + 0.3;
+        Object.assign(g.ball, {
+          x: 0, y: 0.2, z: -HALF_L + 0.3, vx: 0, vy: 1, vz: -3,
+          bounces: 1, live: true, last: 'cpu', spin: 'flat', wind: 0, windZ: 0, curve: 0,
+        });
+        g.you.swingCharge = 1; g.you.chargeSpin = spin; g.you.chargeStroke = 'forehand';
+        g.hit('you');
+        if (R.physics.predictLanding(g.ball).net) net++;
+      }
+      return net / N;
+    };
+    const nets = { flat: netRate('flat'), top: netRate('top'), slice: netRate('slice') };
+    ok(nets.top === 0 && nets.slice === 0 && nets.flat > 0.2,
+      `from a 0.2m contact, topspin and slice lift it over while flat often nets: ${JSON.stringify(nets)}`);
   }
 }
 
