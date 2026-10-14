@@ -819,6 +819,43 @@
     return S[spin] || S.flat;
   }
 
+  /* ------------------------------------------------------------ 主審のスコアコール */
+
+  let umpireTimer = null;
+  let umpireVoice; // undefined＝まだ選んでいない（声の一覧は非同期に揃うので、読むたびに選び直す）
+
+  /** AUDIO.UMPIRE.LANG の声、無ければ英語の声（無ければ null＝既定の声）。 */
+  function pickUmpireVoice(synth) {
+    const voices = synth.getVoices();
+    if (!voices.length) return null;
+    const lang = AUDIO.UMPIRE.LANG.toLowerCase();
+    const match = (v) => v.lang.toLowerCase().replace('_', '-');
+    return voices.find((v) => match(v) === lang)
+      || voices.find((v) => match(v).startsWith('en')) || null;
+  }
+
+  /**
+   * AUDIO.UMPIRE.DELAY 置いてから text を読み上げる。前のコールがまだ待っている・読んでいる
+   * なら打ち切る（次のポイントのコールと重ねない）。speechSynthesis が無い環境では何もしない。
+   */
+  function umpireSay(text) {
+    const synth = window.speechSynthesis;
+    if (!synth || !window.SpeechSynthesisUtterance || !text) return;
+    clearTimeout(umpireTimer);
+    umpireTimer = setTimeout(() => {
+      const U = AUDIO.UMPIRE;
+      synth.cancel();
+      if (!umpireVoice) umpireVoice = pickUmpireVoice(synth);
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = umpireVoice ? umpireVoice.lang : U.LANG;
+      if (umpireVoice) utter.voice = umpireVoice;
+      utter.rate = U.RATE;
+      utter.pitch = U.PITCH;
+      utter.volume = U.VOL;
+      synth.speak(utter);
+    }, AUDIO.UMPIRE.DELAY * 1000);
+  }
+
   const sfx = {
     /**
      * サーブ。フラット／スピン（キック）／スライスで音色そのものを変え、
@@ -906,6 +943,8 @@
     ovation: (team) => tickOvation(team),
     /** ネットコードに当たる鈍い音（低く長め＝テープ/ガットの damped な振動）。 */
     netIn: () => layered(AUDIO.NET_IN),
+    /** 主審のスコアコール（英語の文。scoring.js#umpireCall）。一拍置いてから読み上げる。 */
+    umpire: (text) => umpireSay(text),
     /** 雨音の強さ（0〜1）。毎フレーム呼ぶ（main.js が scene/weather.js の雨の強さを渡す）。 */
     rain: (level) => rain(level),
     /** 選手がラケットを地面に叩きつけた（割れる音）。観客は「おぉ…」とどよめく。 */

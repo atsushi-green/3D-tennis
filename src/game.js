@@ -22,7 +22,7 @@
     pairResponder, poachRun, frontPosition, backPosition,
     doublesRallyShot, doublesVolleyShot, doublesSmashShot,
   } = RallyOne.ai;
-  const { Match, pointStakes, changeoverAfter } = RallyOne.scoring;
+  const { Match, pointStakes, changeoverAfter, umpireCall } = RallyOne.scoring;
 
   const { BALL_R, STEP } = PHYSICS;
 
@@ -3929,8 +3929,11 @@
       // サーブ権が移る前に（ブレークされたサーバー）。タイブレークにはブレークがない
       const server = this.servingPlayer();
       const inTiebreak = this.match.tiebreak;
+      const serveTeam = this.server;
       const result = this.match.awardPoint(winner);
       const mine = winner === 'you';
+      // 主審のスコアコール（読み上げる間は audio.js が置く）。サーブ権が移る前のサーバーで読む
+      this.hooks.sound('umpire', umpireCall(this.match, result, serveTeam));
       this.setMoods(winner, outcome, stakes, server,
         result.type !== 'point' && !inTiebreak && winner !== this.server);
       // この1点でコートを入れ替わるか（チェンジエンズ）。決まった直後のスコアで判定する

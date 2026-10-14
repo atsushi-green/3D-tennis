@@ -37,6 +37,34 @@ ok(pointLabel(3, 3) === '40' && pointLabel(4, 3) === 'Ad' && pointLabel(3, 4) ==
   ok(m.awardPoint('you').type === 'set', 'set at 6');
 }
 
+// --- 主審のスコアコール：サーバーの得点が先、並べば all、40-40 以降は Deuce／Advantage ---
+{
+  const { umpireCall } = R.scoring;
+  const m = new Match();
+  const say = (w, server = 'cpu') => umpireCall(m, m.awardPoint(w), server);
+  ok(say('you') === 'Love Fifteen', 'receiver wins the first point: Love Fifteen');
+  ok(say('cpu') === 'Fifteen all', 'Fifteen all');
+  ok(say('cpu') === 'Thirty Fifteen', 'server score first: Thirty Fifteen');
+  ok(say('you') === 'Thirty all' && say('you') === 'Thirty Forty', 'Thirty all, Thirty Forty');
+  ok(say('cpu') === 'Deuce', '40-40 is Deuce');
+  ok(say('cpu') === 'Advantage server' && say('you') === 'Deuce', 'Advantage server, back to Deuce');
+  ok(say('you') === 'Advantage receiver', 'Advantage receiver');
+  ok(say('you') === 'Game. One game to love', 'game call with the game count: One game to love');
+  for (let p = 0; p < 3; p++) m.awardPoint('cpu');
+  ok(say('cpu') === 'Game. One game all', 'One game all');
+  for (let p = 0; p < 3; p++) m.awardPoint('cpu');
+  ok(say('cpu') === 'Game. Two games to one', 'Two games to one');
+  m.games.you = m.games.cpu = R.config.RULES.SET_GAMES - 1;
+  for (let p = 0; p < 3; p++) m.awardPoint('you');
+  say('you');
+  for (let p = 0; p < 3; p++) m.awardPoint('cpu');
+  const tb = say('cpu');
+  ok(/games all\. Tiebreak$/.test(tb), `entering the tiebreak is called, got ${tb}`);
+  ok(say('you') === 'One, Zero' && say('cpu') === 'One all', 'tiebreak points: leader first, then all');
+  ok(umpireCall(m, { type: 'set', matchOver: false }, 'you') === 'Game and set', 'Game and set');
+  ok(umpireCall(m, { type: 'set', matchOver: true }, 'you') === 'Game, set and match', 'Game, set and match');
+}
+
 // --- タイブレーク：6-6でゲーム数が並んだら、通常ゲームの代わりにタイブレークに入る ---
 {
   const m = new Match();

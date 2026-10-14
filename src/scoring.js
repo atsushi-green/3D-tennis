@@ -19,6 +19,53 @@
     return POINT_LABELS[Math.min(mine, 3)];
   }
 
+  /** 主審のコールでのポイントの読み方（0〜3点）。 */
+  const CALL_POINTS = ['Love', 'Fifteen', 'Thirty', 'Forty'];
+  /** タイブレークのポイント・ゲーム数の読み方（0は Zero。テニスの主審もタイブレークでは Zero と読む）。 */
+  const CALL_NUMBERS = ['Zero', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
+    'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+  const callNumber = (n) => CALL_NUMBERS[n] || String(n);
+
+  /**
+   * 主審のスコアコール（英語。audio.js が読み上げる）。awardPoint() の直後に、その戻り値と
+   * そのポイントをサーブしたチームを渡す。実際の主審と同じく、通常のゲームはサーバーの得点が先
+   * （"Fifteen Love"／"Love Fifteen"）、並べば "Thirty all"、40-40 以降は "Deuce"／
+   * "Advantage server"。タイブレークはリードしている側の得点が先（並べば "Three all"）。
+   * ゲームが決まれば "Game" とゲーム数（"Two games to one"）、セットは "Game and set"、試合は "Game, set and match"。
+   * @param {Match} match awardPoint() を済ませた後のスコア
+   * @param {{type:string, winner:string, tiebreak?:boolean, matchOver?:boolean}} result awardPoint() の戻り値
+   * @param {'you'|'cpu'} server そのポイントをサーブしたチーム
+   * @returns {string}
+   */
+  function umpireCall(match, result, server) {
+    if (result.type === 'set') return result.matchOver ? 'Game, set and match' : 'Game and set';
+    const receiver = server === 'you' ? 'cpu' : 'you';
+    if (result.type === 'game') {
+      const { games } = match;
+      const hi = Math.max(games.you, games.cpu);
+      const lo = Math.min(games.you, games.cpu);
+      const unit = hi === 1 ? 'game' : 'games';
+      // ゲーム数の 0 は（ポイントと同じく）love と読む
+      const count = hi === lo ? `${callNumber(hi)} ${unit} all`
+        : `${callNumber(hi)} ${unit} to ${lo === 0 ? 'love' : callNumber(lo).toLowerCase()}`;
+      return result.tiebreak ? `Game. ${count}. Tiebreak` : `Game. ${count}`;
+    }
+    if (result.tiebreak) {
+      const p = match.tiebreakPoints;
+      const hi = Math.max(p.you, p.cpu);
+      const lo = Math.min(p.you, p.cpu);
+      return hi === lo ? `${callNumber(hi)} all` : `${callNumber(hi)}, ${callNumber(lo)}`;
+    }
+    const s = match.points[server];
+    const r = match.points[receiver];
+    if (s >= 3 && r >= 3) {
+      if (s === r) return 'Deuce';
+      return s > r ? 'Advantage server' : 'Advantage receiver';
+    }
+    if (s === r) return `${CALL_POINTS[s]} all`;
+    return `${CALL_POINTS[s]} ${CALL_POINTS[r]}`;
+  }
+
   /** target 以上かつ MARGIN 差がついたら決着 */
   function won(mine, theirs, target) {
     return mine >= target && mine - theirs >= RULES.MARGIN;
@@ -214,6 +261,6 @@
   }
 
   RallyOne.scoring = {
-    POINT_LABELS, pointLabel, Match, pointStakes, STAKE_LABELS, changeoverAfter,
+    POINT_LABELS, pointLabel, Match, pointStakes, STAKE_LABELS, changeoverAfter, umpireCall,
   };
 })(window.RallyOne = window.RallyOne || {});
