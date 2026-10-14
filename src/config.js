@@ -309,6 +309,26 @@
   };
 
   /**
+   * 選手の足音（game.js#tickFootsteps が hooks.sound('step'/'squeak') で知らせ、音は audio.js が
+   * サーフェスごとに鳴らす）。速さは前のフレームからの移動で測る（actor.speed は経路によって
+   * 0 のまま動くことがあるため）。
+   */
+  const FOOTSTEP = {
+    STRIDE: 1.1,        // 1歩の長さ(m)。この距離を進むごとに1回鳴らす
+    MIN_SPEED: 0.6,     // これより遅い（ほぼ止まっている）ときは鳴らさない(m/s)
+    // 急停止・切り返し。走り込んで止まる・逆へ蹴り出すとシューズがきしむ。ブレーキ（進んでいた
+    // 向きと逆の加速度）と横への加速度を合わせて SQUEAK_DECEL(m/s²)以上、直前の速さが
+    // SQUEAK_FROM 以上のとき1回。人間が全力から止まるときのブレーキは約34m/s²。
+    // SQUEAK_FROM はレシーブ位置への自動の移動（最高5m/s強）の止まり際では鳴りにくい高さ
+    SQUEAK_DECEL: 28,
+    SQUEAK_FROM: 4.5,
+    SQUEAK_FULL: 6,     // この速さから止まったら最大の強さ
+    SQUEAK_COOLDOWN: 0.45, // 連続して鳴らさない間(秒)
+    // 1フレームでこれより速く動いた＝瞬間移動（サーブの構え・縮地・チェンジエンズ）。足音にしない
+    TELEPORT_SPEED: 14,
+  };
+
+  /**
    * ボレー（サービスラインより前で、ノーバウンドの球を打ち返すとき）。
    * 溜め時間ではなく、ボールとプレイヤーの左右距離で威力・角度が決まる：真正面（距離0）や
    * 伸びきり（距離が SWEET_DIST+WINDOW を超える）は普通のブロック返球に、フォア/バック側に
@@ -1960,6 +1980,53 @@
           FRIC: 0.07,
           VOWELS: [[0, 600, 950, 2500], [0.13, 580, 900, 2450], [0.21, 380, 1050, 2700]],
         },
+      },
+    },
+
+    /**
+     * 打つときの掛け声（audio.js#grunt）。強打（溜め CHARGE_MIN 以上）・スマッシュ・強いサーブで、
+     * CHANCE の確率で打った瞬間に短く「ハッ」と息を吐く。のこぎり波（声帯）を「ア」のフォルマント
+     * 3本に通し、息のノイズを重ねる。相手側（TEAM）は遠いので小さく、少し高い別人の声にする。
+     */
+    GRUNT: {
+      CHARGE_MIN: 0.7,
+      CHANCE: 0.55,       // 毎回だとくどいので、強打でもときどき
+      SMASH_CHANCE: 0.85,
+      // AI のサーブの力の入り具合 [1本目, 2本目]（AI は溜めを持たないので、game.js がこれを渡す）。
+      // 1本目は CHARGE_MIN を超えて声が出うる、確実に入れる2本目は出ない
+      AI_SERVE: [0.85, 0.4],
+      // フォルマントの細いバンドパスで声帯のエネルギーの大半が落ちるので、線審の声と同じく大きめ
+      VOL: 0.45,
+      DUR: 0.24,          // 声の長さ(秒)
+      ATTACK: 0.015,
+      HOLD: 0.4,          // 長さのうち、この割合まで音量を保ってから下ろす
+      PITCH_HZ: 150,      // 出だしの高さ（息を詰めて吐く低い声）
+      PITCH_END: 0.7,     // 言い終わりの高さ（出だしに対する比）
+      FORMANTS: [[750, 1], [1150, 0.6], [2500, 0.25]], // 「ア」寄りの母音 [Hz, 強さ]
+      FORMANT_Q: 7,
+      BREATH_VOL: 0.05,   // 息の音（バンドパスのノイズ）
+      BREATH_HZ: 1600,
+      TEAM: { you: { VOL: 1, PITCH: 1 }, cpu: { VOL: 0.45, PITCH: 1.12 } },
+    },
+
+    /**
+     * 足音とシューズのきしみ（audio.js#step/squeak。いつ鳴らすかは FOOTSTEP）。サーフェスで音が違う：
+     * ハードは硬い「タッ」と高い「キュッ」、クレーは砂を踏む「ザッ」と滑る擦過音、芝は鈍く小さい。
+     * 相手側（TEAM_VOL）は遠いので小さく。打球音より十分小さく、ラリーの邪魔をしない程度。
+     */
+    FEET: {
+      TEAM_VOL: { you: 1, cpu: 0.35 },
+      SPEED_VOL: [0.6, 1.2], // 歩き〜全力疾走で音量に掛ける倍率
+      STEP: {
+        hard: { NOISE: { type: 'bandpass', hz: 2400, q: 1.1, vol: 0.035, dur: 0.045 }, BODY: { hz: 140, drop: 0.5, vol: 0.05, dur: 0.05 } },
+        clay: { NOISE: { type: 'bandpass', hz: 1300, q: 0.7, vol: 0.05, dur: 0.09 }, BODY: { hz: 110, drop: 0.5, vol: 0.03, dur: 0.05 } },
+        grass: { NOISE: { type: 'lowpass', hz: 700, q: 0.7, vol: 0.03, dur: 0.06 }, BODY: { hz: 95, drop: 0.5, vol: 0.035, dur: 0.06 } },
+      },
+      // きしみ。CHIRP は高い音が揺れながら上がる「キュッ」（ハードのゴムと床）、SLIDE は擦る音
+      SQUEAK: {
+        hard: { CHIRP: { from: 1900, to: 3100, vibHz: 38, vibDepth: 140, vol: 0.05, dur: 0.13 } },
+        clay: { SLIDE: { type: 'bandpass', hz: 1500, q: 0.6, vol: 0.07, dur: 0.32 } },
+        grass: { SLIDE: { type: 'lowpass', hz: 900, q: 0.5, vol: 0.03, dur: 0.18 } },
       },
     },
 
@@ -4537,7 +4604,7 @@
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, MATCH_FORMATS, applyMatchFormat, TIMING, CHANGEOVER, MATCH_POINT, FINALE, PRACTICE, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
-    CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT, GUIDE,
+    FOOTSTEP, CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT, GUIDE,
     SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, HIGHLIGHT, EMOTION, RAIN, SESSIONS, NIGHT, STAMINA, TOSS, OFFICIALS, LINE_CALL, BALL_MARK,
     STANDS, SPECTATORS, FLAG, MOTION,
     SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET,

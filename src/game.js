@@ -6,7 +6,8 @@
   'use strict';
 
   const {
-    ATTRS, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, EMOTION, FINALE, FX, HALF_L, HALF_W, HIGHLIGHT, LINE_CALL, MATCH_POINT,
+    ATTRS, AUDIO, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, EMOTION, FINALE, FOOTSTEP, FX, HALF_L, HALF_W,
+    HIGHLIGHT, LINE_CALL, MATCH_POINT,
     NET, PHYSICS, PLAYER, PRACTICE, RAIN, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, SWING,
     SPIN, TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND, shotSkill,
   } = RallyOne.config;
@@ -2737,7 +2738,10 @@
       const serveCharge = kick ? SPECIAL.IMPACT_POWER : (who === 'you' ? this.you.swingCharge : 0);
       ball.impact = FX.IMPACT_DURATION * lerp(1, FX.CHARGE_TIME_BOOST, serveCharge);
       ball.impactPower = serveCharge;
-      this.hooks.sound('serve', serveCharge, spin); // 球種で音色が変わる（audio.js#sfx.serve）
+      // 球種で音色が変わる（audio.js#sfx.serve）。最後の2つは掛け声用：打ったチームと力の入り具合
+      // （人間は溜め量、AI は溜めを持たないので1本目／2本目で決まった値）
+      const effort = who === 'you' ? serveCharge : AUDIO.GRUNT.AI_SERVE[this.serveNumber === 1 ? 0 : 1];
+      this.hooks.sound('serve', serveCharge, spin, TEAM_OF[who], effort);
       this.hooks.clearCall();
     }
 
@@ -4182,6 +4186,62 @@
 
     /* -------------------------------------------------------- 毎フレーム */
 
+    /**
+     * 足音とシューズのきしみ（音は hooks.sound('step'/'squeak') で表示側へ。FOOTSTEP 参照）。
+     * 速さは前のフレームからの移動で測る。走った距離が STRIDE に達するごとに1歩、速度ベクトルが
+     * 急に変わった（走り込んで止まる・切り返す）ら1回きしむ。1フレームで TELEPORT_SPEED を超えて
+     * 動いたのは瞬間移動なので、足音にせず位置だけ取り直す。
+     */
+    tickFootsteps(dt) {
+      if (!(dt > 0)) return;
+      ACTORS.forEach((who) => {
+        if (!this.doubles && (who === 'youMate' || who === 'cpuMate')) return;
+        const a = this.actor(who);
+        const feet = a.feet;
+        if (!feet) {
+          a.feet = { x: a.x, z: a.z, vx: 0, vz: 0, dist: 0, cool: 0 };
+          return;
+        }
+        const vx = (a.x - feet.x) / dt;
+        const vz = (a.z - feet.z) / dt;
+        feet.x = a.x;
+        feet.z = a.z;
+        feet.cool = Math.max(0, feet.cool - dt);
+        const speed = Math.hypot(vx, vz);
+        if (speed > FOOTSTEP.TELEPORT_SPEED) {
+          feet.vx = feet.vz = feet.dist = 0;
+          return;
+        }
+        // 速度の変化を、それまで進んでいた向き（u）とその横に分ける。前向きの加速（走り出し）は
+        // 数えず、ブレーキ（u と逆向き）と横への切り返しだけを見る
+        const before = Math.hypot(feet.vx, feet.vz);
+        const ux = before > 0 ? feet.vx / before : 0;
+        const uz = before > 0 ? feet.vz / before : 0;
+        const dvx = vx - feet.vx;
+        const dvz = vz - feet.vz;
+        const brake = Math.max(0, -(dvx * ux + dvz * uz));
+        const turn = Math.abs(dvx * uz - dvz * ux);
+        const decel = Math.hypot(brake, turn) / dt;
+        feet.vx = vx;
+        feet.vz = vz;
+        if (before >= FOOTSTEP.SQUEAK_FROM && decel >= FOOTSTEP.SQUEAK_DECEL && feet.cool === 0) {
+          this.hooks.sound('squeak', TEAM_OF[who], Math.min(1, before / FOOTSTEP.SQUEAK_FULL));
+          feet.cool = FOOTSTEP.SQUEAK_COOLDOWN;
+          feet.dist = 0; // 止まった足で次の1歩を数え直す
+          return;
+        }
+        if (speed < FOOTSTEP.MIN_SPEED) {
+          feet.dist = 0;
+          return;
+        }
+        feet.dist += speed * dt;
+        if (feet.dist >= FOOTSTEP.STRIDE) {
+          feet.dist -= FOOTSTEP.STRIDE;
+          this.hooks.sound('step', TEAM_OF[who], Math.min(1, speed / PLAYER.SPEED));
+        }
+      });
+    }
+
     update(dt) {
       // マッチポイントの演出の間は、試合そのもの（タイマー・選手・球・溜め）を止める。
       // チェンジエンズの明転だけは進める（タイブレークの入れ替わりの直後に演出が始まると、
@@ -4216,6 +4276,7 @@
       this.ball.impact = Math.max(0, this.ball.impact - dt);
 
       this.movePlayers(dt);
+      this.tickFootsteps(dt);
       this.tickPractice();
 
       // 物理は固定ステップで刻む（フレームレート非依存）

@@ -819,6 +819,126 @@
     return S[spin] || S.flat;
   }
 
+  /* ------------------------------------------------------------ 掛け声・足音 */
+
+  /**
+   * 打つときの掛け声（AUDIO.GRUNT）。のこぎり波を「ア」のフォルマントに通し、語尾へ向けて
+   * 音程と音量を落とす。息のノイズを重ねて、声というより吐く息に聞こえるようにする。
+   * @param {'you'|'cpu'} team
+   * @param {number} power 0〜1（強いほど少し大きく長い）
+   */
+  function grunt(team, power) {
+    const ac = context();
+    if (!ac) return;
+    const G = AUDIO.GRUNT;
+    const T = G.TEAM[team] || G.TEAM.you;
+    try {
+      const t0 = ac.currentTime;
+      const dur = jDur(G.DUR) * (0.85 + 0.3 * power);
+      const vol = jVol(G.VOL) * T.VOL * (0.8 + 0.4 * power);
+      const pitch = jHz(G.PITCH_HZ) * T.PITCH;
+      const src = ac.createOscillator();
+      src.type = 'sawtooth';
+      src.frequency.setValueAtTime(pitch, t0);
+      src.frequency.exponentialRampToValueAtTime(pitch * G.PITCH_END, t0 + dur);
+      const amp = ac.createGain();
+      amp.gain.setValueAtTime(SILENCE, t0);
+      amp.gain.linearRampToValueAtTime(vol, t0 + G.ATTACK);
+      // 指数で落とすと出た直後に萎んで「プチッ」としか聞こえないので、保ってから下ろす
+      amp.gain.setValueAtTime(vol, t0 + dur * G.HOLD);
+      amp.gain.linearRampToValueAtTime(SILENCE, t0 + dur);
+      amp.connect(ac.destination);
+      G.FORMANTS.forEach(([hz, g]) => {
+        const bp = ac.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.value = hz * T.PITCH;
+        bp.Q.value = G.FORMANT_Q;
+        const level = ac.createGain();
+        level.gain.value = g;
+        src.connect(bp).connect(level).connect(amp);
+      });
+      src.start(t0);
+      src.stop(t0 + dur + 0.02);
+      noiseVoice(ac, { type: 'bandpass', vol: G.BREATH_VOL * T.VOL, hz: G.BREATH_HZ, q: 0.8, dur });
+    } catch (e) {
+      /* 音が出ないだけなのでゲームは続行 */
+    }
+  }
+
+  /** 強打・スマッシュならときどき掛け声を出す（AUDIO.GRUNT.CHANCE）。 */
+  function maybeGrunt(team, stroke, charge) {
+    const G = AUDIO.GRUNT;
+    const smash = stroke === 'smash' || stroke === 'jackknife';
+    if (!smash && charge < G.CHARGE_MIN) return;
+    if (Math.random() < (smash ? G.SMASH_CHANCE : G.CHANCE)) grunt(team, smash ? 1 : charge);
+  }
+
+  /** 足音の音量（相手側は遠いので小さく、速く走るほど大きく）。 */
+  function feetVol(team, speed) {
+    const F = AUDIO.FEET;
+    return (F.TEAM_VOL[team] || F.TEAM_VOL.you) * lerp(F.SPEED_VOL[0], F.SPEED_VOL[1], clamp(speed, 0, 1));
+  }
+
+  /**
+   * 1歩の足音（AUDIO.FEET.STEP のいまのサーフェス）。
+   * @param {number} speed 0〜1（PLAYER.SPEED に対する速さ）
+   */
+  function step(team, speed) {
+    const ac = context();
+    if (!ac) return;
+    const S = AUDIO.FEET.STEP[SURFACE.NAME] || AUDIO.FEET.STEP.hard;
+    const k = feetVol(team, speed);
+    try {
+      noiseVoice(ac, { ...S.NOISE, vol: S.NOISE.vol * k });
+      bodyVoice(ac, { ...S.BODY, vol: S.BODY.vol * k });
+    } catch (e) {
+      /* 音が出ないだけなのでゲームは続行 */
+    }
+  }
+
+  /**
+   * 急停止・切り返しのシューズの音（AUDIO.FEET.SQUEAK のいまのサーフェス）。ハードはゴムが
+   * 床に擦れる高い「キュッ」（揺れながら上がる正弦波）、クレー・芝は擦過音。
+   * @param {number} power 0〜1（止まる前の速さ）
+   */
+  function squeak(team, power) {
+    const ac = context();
+    if (!ac) return;
+    const S = AUDIO.FEET.SQUEAK[SURFACE.NAME] || AUDIO.FEET.SQUEAK.hard;
+    const k = feetVol(team, power);
+    try {
+      if (S.SLIDE) {
+        noiseVoice(ac, { ...S.SLIDE, vol: S.SLIDE.vol * k, dur: S.SLIDE.dur * (0.6 + 0.4 * power) });
+        return;
+      }
+      const C = S.CHIRP;
+      const t0 = ac.currentTime;
+      const dur = jDur(C.dur);
+      const vol = jVol(C.vol) * k;
+      const osc = ac.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(jHz(C.from), t0);
+      osc.frequency.linearRampToValueAtTime(jHz(C.to), t0 + dur);
+      // 細かく震わせる（ゴムが床に引っかかっては離れる）
+      const vib = ac.createOscillator();
+      vib.frequency.value = C.vibHz;
+      const depth = ac.createGain();
+      depth.gain.value = C.vibDepth;
+      vib.connect(depth).connect(osc.frequency);
+      const amp = ac.createGain();
+      amp.gain.setValueAtTime(SILENCE, t0);
+      amp.gain.linearRampToValueAtTime(vol, t0 + dur * 0.2);
+      amp.gain.linearRampToValueAtTime(SILENCE, t0 + dur);
+      osc.connect(amp).connect(ac.destination);
+      osc.start(t0);
+      vib.start(t0);
+      osc.stop(t0 + dur + 0.01);
+      vib.stop(t0 + dur + 0.01);
+    } catch (e) {
+      /* 音が出ないだけなのでゲームは続行 */
+    }
+  }
+
   /* ------------------------------------------------------------ 主審のスコアコール */
 
   let umpireTimer = null;
@@ -863,7 +983,8 @@
      * @param {number} charge 溜め量 0〜1
      * @param {'flat'|'top'|'slice'} spin
      */
-    serve: (charge = 0, spin = 'flat') => {
+    serve: (charge = 0, spin = 'flat', team = 'you', effort = charge) => {
+      maybeGrunt(team, 'serve', effort);
       const I = AUDIO.IMPACT;
       const voice = spin === 'top' ? I.STROKE.serveTop
         : spin === 'slice' ? I.STROKE.serveSlice
@@ -883,6 +1004,7 @@
      * @param {'flat'|'top'|'slice'|'drop'} spin
      */
     hit: (who, stroke, charge = 0, spin = 'flat') => {
+      maybeGrunt(who, stroke, charge);
       const I = AUDIO.IMPACT;
       const backhand = stroke.includes('backhand'); // 'backhand' と 'volley-backhand' の両方を拾う
       const pitch = (I.TEAM_PITCH[who] || 1)
@@ -943,6 +1065,10 @@
     ovation: (team) => tickOvation(team),
     /** ネットコードに当たる鈍い音（低く長め＝テープ/ガットの damped な振動）。 */
     netIn: () => layered(AUDIO.NET_IN),
+    /** 1歩の足音（game.js#tickFootsteps）。speed は 0〜1。 */
+    step: (team, speed) => step(team, speed),
+    /** 急停止・切り返しのシューズの音（game.js#tickFootsteps）。power は 0〜1。 */
+    squeak: (team, power) => squeak(team, power),
     /** 主審のスコアコール（英語の文。scoring.js#umpireCall）。一拍置いてから読み上げる。 */
     umpire: (text) => umpireSay(text),
     /** 雨音の強さ（0〜1）。毎フレーム呼ぶ（main.js が scene/weather.js の雨の強さを渡す）。 */

@@ -6049,6 +6049,27 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   applyCpuLevel('normal');
 }
 
+// --- 足音：走ると STRIDE ごとに1歩、全力から急に止まるときしむ、瞬間移動は足音にしない ---
+{
+  const F = R.config.FOOTSTEP;
+  const sounds = [];
+  const g = new R.Game({ input: fakeInput, hooks: { ...noHooks, sound: (name, ...a) => sounds.push([name, ...a]) } });
+  const dt = 1 / 60;
+  g.you.x = 0;
+  g.tickFootsteps(dt); // 最初の1回は位置を覚えるだけ
+  const run = (v, frames) => { for (let i = 0; i < frames; i++) { g.you.x += v * dt; g.tickFootsteps(dt); } };
+  run(6, 60); // 6m/s で1秒＝6m
+  const steps = sounds.filter((s) => s[0] === 'step' && s[1] === 'you').length;
+  ok(steps === Math.floor(6 / F.STRIDE), `running 6m makes one step per stride, got ${steps}`);
+  ok(!sounds.some((s) => s[0] === 'squeak'), 'speeding up does not squeak');
+  run(0, 1); // 全力から止まる
+  ok(sounds.filter((s) => s[0] === 'squeak').length === 1, 'a hard stop squeaks once');
+  sounds.length = 0;
+  g.you.x += 5; g.tickFootsteps(dt); // 1フレームで5m＝瞬間移動
+  run(0, 10);
+  ok(sounds.length === 0, `a teleport makes no footstep or squeak, got ${JSON.stringify(sounds)}`);
+}
+
 // --- CPU/AI の返球の強さ（stretch）は「その球を追って走った距離」で決まる ---
 {
   const CPU = R.config.CPU;
