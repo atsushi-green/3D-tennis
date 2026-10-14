@@ -14,7 +14,7 @@
     approach2D, clamp, lerp, mpsToKmh, rand, signOr,
   } = RallyOne.math;
   const {
-    hitsNet, integrate, predictLanding, predictWindow, reflectBounce, setWetness, solveShot, spinGravity,
+    hitsNet, integrate, netCrossing, predictLanding, predictWindow, reflectBounce, setWetness, solveShot, spinGravity,
   } = RallyOne.physics;
   const {
     chasePosition, homePosition, netRushPosition, cpuShot, cpuVolleyShot, cpuSmashShot,
@@ -1020,6 +1020,12 @@
        * （newPoint()）。
        */
       this.lineCall = null;
+      /**
+       * 直近のネットへの当たり（stepBall()）。当たった点 x・y と、当たる直前の z 方向の速度 vz
+       * （符号つき＝網を押した向き）。当たるたびに新しいオブジェクトに替わり、表示側はそれを
+       * 見てネットを揺らす（scene/net.js）。ネットインも含む。
+       */
+      this.netHit = null;
       /**
        * 直近のバウンド（bounce()）。接地点と、弾む直前の速度。コールが出たバウンドなら call に
        * その lineCall が入る。バウンドのたびに新しいオブジェクトに替わり、表示側はそれを見て
@@ -5195,6 +5201,7 @@
       ball.sinceBounce += dt;
 
       if (hitsNet(ball)) {
+        this.netHit = { ...netCrossing(ball), vz: ball.vz };
         // サーブは対象外（実際のルールのレットと混同しないよう常にフォールトのまま。
         // config.js の NET のコメント参照）。ラリー中だけ、ごく低い確率でネットコードに
         // 救われてそのまま相手コートへ入り続ける＝ネットイン。

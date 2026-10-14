@@ -38,7 +38,9 @@
     // 観客（マッチポイントの演出・試合が決まった後に沸く。updateCrowd() に盛り上がりの度合いを渡す）
     const crowd = scene3d.createCrowd();
     venue.add(officials, ballMarks.group, crowd, flags, stage.sun);
-    scene.add(court, scene3d.createNet(), venue);
+    // ネットはコートと同じく点対称なので会場の側に入れない（ゲームの座標のまま揺らせる）
+    const net = scene3d.createNet();
+    scene.add(court, net, venue);
     // 時間帯と天候（照明塔・星・雨粒・コートのシート・濡れたコート）
     const weather = scene3d.createWeather(stage);
 
@@ -322,6 +324,24 @@
       };
     }
 
+    // --- ネットの揺れ（game.netHit が変わったら、当たった点から網を揺らす） ---
+    let lastNetHit = null; // 最後に見た game.netHit（当たるたびに新しいオブジェクトになるので参照で比べる）
+    let netShake = null;   // { hit, recT }：揺らしている当たりと、当たった録画時刻
+
+    function watchNetHit(state) {
+      if (!state.netHit || state.netHit === lastNetHit) return;
+      lastNetHit = state.netHit;
+      netShake = { hit: state.netHit, recT: recClock };
+    }
+
+    /**
+     * 網を、録画の時計 clock の時点の形にする。shake はそのコマで最後に起きた当たり
+     * （録画のコマにも添えてある＝試合後のハイライトでも、その1点の当たりで揺れる）。
+     */
+    function poseNet(shake, clock) {
+      scene3d.shakeNet(net, shake && shake.hit, shake ? clock - shake.recT : 0);
+    }
+
     // --- クレーのボールマーク（game.lastBounce が変わったら跡を1つ足す） ---
     let lastBounceSeen = null;
     let lastMark = null;     // 最後に残した跡 { bounce, shape }（リプレイの最後で映すかの判定に使う）
@@ -436,6 +456,7 @@
         cpuMate: snapshotPlayer(state.cpuMate),
         doubles: state.doubles,
         stages: serveStages(state),
+        netShake,
       });
       while (history.length > 1 && recClock - history[0].t > REPLAY.WINDOW_SEC) history.shift();
     }
@@ -639,6 +660,7 @@
       // 足りず（history.length<2）、そのポイントのリプレイだけ出せなくなってしまう。
       recordFrame(state, dt);
       watchLineCall(state);
+      watchNetHit(state);
       watchBallMarks(state);
       if (pendingReplay) {
         pendingReplay.wait -= dt;
@@ -663,6 +685,7 @@
           applyFrame(frame, dt, frame.stages);
           // 静止している間（HOLD_SEC）も線審の時計だけは進める＝決着の瞬間のコールが見える
           poseLineJudges(reel[0].t + replayClock);
+          poseNet(frame.netShake, reel[0].t + replayClock);
           scene3d.updateTrail(trail, NO_TRAIL); // 再生そのものが「振り返り」なので軌跡は隠す
           scene3d.placeSmashHint(smashHint, null);
           scene3d.placeSwingGuide(swingGuide, null, state.you);
@@ -696,6 +719,7 @@
       }
       ballMesh.visible = shadows.ball.visible = !away;
       poseLineJudges(recClock);
+      poseNet(netShake, recClock);
       // 軌跡はラリーの決着がついた後（ポイント間の 'serve' 待ち・'over'）だけ見せる。
       // ラリー中に出しっぱなしだと本来の目的（アウトの結果を振り返る）を超えて
       // 「次にどこへ来るか」の手がかりになってしまうため。観客席や勝者を映す演出のカットでも
