@@ -1377,6 +1377,13 @@
     const offArm = createArm(-HAND, shirt, false);
     torso.add(body, head, racketArm.shoulder, offArm.shoulder);
 
+    // 一人称視点で隠す部位：頭・胴・腰・脚と、肩口（肩の球・袖・上腕）。目の位置から見ると
+    // 首や胴の内側・肩の付け根が画面の下に入って違和感があるので、前腕・手・ラケットだけ残す
+    // （肘から先は elbow の Group の子なので、肩の直下の Mesh だけ隠せば前腕は残る）。
+    const ownView = [head, body, pelvis, rightLeg.hip, leftLeg.hip].concat(
+      [racketArm, offArm].flatMap((arm) => arm.shoulder.children.filter((o) => o.isMesh)),
+    );
+
     // legs[0] がローカル -x 側、legs[1] が +x 側（apply* が左右の向きを決めるのに使う）
     const legs = HAND < 0 ? [rightLeg, leftLeg] : [leftLeg, rightLeg];
     group.userData = {
@@ -1387,7 +1394,7 @@
       // 体ごと反転させたあと、確実に元の向きへ戻すために基準として持っておく。
       facing: 0,
       rig: {
-        torso, head, hips, racket: racketArm, off: offArm,
+        torso, head, hips, racket: racketArm, off: offArm, ownView,
       },
       gait: {
         torso, hips, phase: 0, blend: 0,
@@ -1414,6 +1421,14 @@
     // 一度もポーズを当てないメッシュ（縮地の残像）でも、腕が付け根から垂れた形にしておく
     scene3d.finishPose(group, null);
     return group;
+  };
+
+  /**
+   * 一人称視点のとき、自分の目から見えると不自然な部位（rig.ownView）を隠す／戻す。
+   * 前腕・手・ラケットは残る。影は別のメッシュ（world.js）なので消えない。
+   */
+  scene3d.setOwnView = function setOwnView(player, hidden) {
+    player.userData.rig.ownView.forEach((o) => { o.visible = !hidden; });
   };
 
   /* ------------------------------------------------------------ 跳躍・飛び込み（体の側） */

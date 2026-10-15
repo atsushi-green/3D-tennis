@@ -72,10 +72,11 @@
   const SESSION_KEYS = ['KeyN'];
   const RAIN_KEYS = ['KeyR'];
   /**
-   * スタート画面でのみ有効。視点（三人称⇔一人称）を切り替える。F（First person）は試合中だけ
-   * ダブルスの立ち位置の指示（後ろへ）に使うが、スタート画面では空いている。
+   * 視点（三人称⇔一人称）を切り替える。スタート画面でも試合中（シングルス・ダブルスとも）でも
+   * 同じキー。文字キーは試合中のどこかで埋まっている（F はダブルスの立ち位置の指示）ので、
+   * どの局面でも空いている Tab にする（ブラウザのフォーカス移動は SWALLOW で止める）。
    */
-  const VIEW_KEYS = ['KeyF'];
+  const VIEW_KEYS = ['Tab'];
   /** スタート画面でのみ有効。試合の長さ：L（Length）＝ゲーム数、M（Match）＝セット数を順に切り替える。 */
   const GAMES_KEYS = ['KeyL'];
   const SETS_KEYS = ['KeyM'];
@@ -110,7 +111,7 @@
   const NEXT_LESSON = ['KeyN'];
   const BACK_TO_MENU = ['Escape'];
   /** ブラウザのスクロールを止めたいキー */
-  const SWALLOW = MOVE_LEFT.concat(MOVE_RIGHT, MOVE_UP, MOVE_DOWN, SWING_CODES, SKIP_REPLAY);
+  const SWALLOW = MOVE_LEFT.concat(MOVE_RIGHT, MOVE_UP, MOVE_DOWN, SWING_CODES, SKIP_REPLAY, VIEW_KEYS);
 
   class Input {
     constructor() {
@@ -191,6 +192,10 @@
             handlers.onBackToMenu();
             return;
           }
+        }
+        if (VIEW_KEYS.indexOf(e.code) !== -1) {
+          handlers.onToggleView();
+          return;
         }
         // ポイント間のリプレイをスキップする合図。リプレイ中でなければ何もしない
         // （world.js#skipReplay() 参照）。Space は試合中この用途にしか使わない。

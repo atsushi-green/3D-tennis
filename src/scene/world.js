@@ -745,7 +745,7 @@
         // 通常カメラへ lerp で戻る途中に映り込み、「戻りながら次が始まって見える」
         // 落ち着かない切り替わりになってしまう。
         if (replayClock <= playEnd + replayHold) {
-          you.userData.rig.head.visible = true; // 一人称でもリプレイは外から映すので頭を戻す
+          scene3d.setOwnView(you, false); // 一人称でもリプレイは外から映すので体を戻す
           const frame = frameAt(Math.min(replayClock, playEnd));
           applyFrame(frame, dt, frame.stages);
           // 静止している間（HOLD_SEC）も線審の時計だけは進める＝決着の瞬間のコールが見える
@@ -802,10 +802,10 @@
       // 練習モードの移動のレッスンの目印（それ以外は出さない）
       scene3d.placePracticeTarget(practiceTarget, state.practice && state.practice.target);
 
-      // 一人称の間は、自分の頭を隠す（目の位置にカメラがあるので、頭の内側が画面を塞ぐ）。
-      // 外から映すカット（マッチポイントの演出・締めのカット）では戻す。
+      // 一人称の間は、自分の体（前腕・手・ラケット以外）を隠す（目の位置から見ると頭の内側や
+      // 首・胴が画面に入る）。外から映すカット（マッチポイントの演出・締めのカット）では戻す。
       const cutCamera = !!(cut || (finale && finale.cut));
-      you.userData.rig.head.visible = view !== 'first' || cutCamera;
+      scene3d.setOwnView(you, view === 'first' && !cutCamera);
       if (cut) {
         placeMatchPointCamera(cut);
         cutShown = true;
