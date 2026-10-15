@@ -56,6 +56,7 @@
       return shoulder;
     });
     group.userData.arms = arms;
+    group.userData.parts = { torso, head, legs: [] }; // ボールボーイの走る・かがむ動き（ballkid.js）が組み直す
 
     if (!seated) {
       [-1, 1].forEach((side) => {
@@ -65,6 +66,7 @@
         );
         leg.position.set(side * 0.08 * scale, 0.35 * scale, 0);
         group.add(leg);
+        group.userData.parts.legs.push(leg);
       });
     } else {
       // 座った脚：太ももは股関節から前（+z）へ水平に、すねは膝から真下へ。足は靴の箱を置く
@@ -231,27 +233,41 @@
   }
   scene3d.setLineJudgePose = setLineJudgePose;
 
+  /**
+   * ボールボーイ。userData.netKids にネット際の2人（ネットに掛かった球を拾いに行く）、
+   * userData.cornerKids にコーナーの4人（決まった後に転がった球を拾いに行く）の人型と持ち場を
+   * 並べておく（ballkid.js が動かす）。
+   */
   function createBallKids() {
     const { BALLKID } = OFFICIALS;
     const group = new THREE.Group();
-    [...BALLKID.NET, ...BALLKID.CORNER].forEach(({ x, z }) => {
+    const netKids = [];
+    const cornerKids = [];
+    [...BALLKID.NET, ...BALLKID.CORNER].forEach(({ x, z }, i) => {
       const kid = createFigure({ uniform: THEME.BALLKID_SHIRT, scale: BALLKID.SCALE });
       kid.position.set(x, 0, z);
       kid.rotation.y = faceInward(x, z);
       group.add(kid);
+      (i < BALLKID.NET.length ? netKids : cornerKids).push({ mesh: kid, x, z, facing: kid.rotation.y });
     });
+    group.userData.netKids = netKids;
+    group.userData.cornerKids = cornerKids;
     return group;
   }
 
   /**
    * @returns {THREE.Group} 審判台＋主審＋線審＋ボールボーイ一式。world.js が1回だけシーンへ追加する。
-   *   userData.lineJudges に線審の一覧（createLineJudges() 参照）。
+   *   userData.lineJudges に線審の一覧（createLineJudges() 参照）、userData.netKids・cornerKids に
+   *   ボールボーイ（createBallKids() 参照）。
    */
   scene3d.createOfficials = function createOfficials() {
     const group = new THREE.Group();
     const lineJudges = createLineJudges();
-    group.add(createUmpireChair(), lineJudges, createBallKids());
+    const ballKids = createBallKids();
+    group.add(createUmpireChair(), lineJudges, ballKids);
     group.userData.lineJudges = lineJudges.userData.lineJudges;
+    group.userData.netKids = ballKids.userData.netKids;
+    group.userData.cornerKids = ballKids.userData.cornerKids;
     return group;
   };
 })(window.RallyOne = window.RallyOne || {});

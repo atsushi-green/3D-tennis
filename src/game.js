@@ -8,8 +8,8 @@
   const {
     ATTRS, AUDIO, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, EMOTION, FINALE, FOOTSTEP, FX, HALF_L, HALF_W,
     HIGHLIGHT, LINE_CALL, MATCH_POINT,
-    NET, PHYSICS, PLAYER, PRACTICE, RAIN, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, SWING,
-    SPIN, TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND, shotSkill,
+    NET, OFFICIALS, PHYSICS, PLAYER, PRACTICE, RAIN, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, SWING,
+    SPECTATORS, SPIN, STANDS, TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND, shotSkill,
   } = RallyOne.config;
   const {
     approach2D, clamp, lerp, mpsToKmh, rand, signOr,
@@ -28,6 +28,47 @@
   const { BALL_R, STEP } = PHYSICS;
 
   const opponent = (who) => (who === 'you' ? 'cpu' : 'you');
+
+  /**
+   * スタンドの壁の内側の面（|x|・|z|。壁は点対称なのでゲームの座標でも会場の座標でも同じ）。
+   * ラリー中の球はここに届いたら決まり（stepBall()）、片付け前の球はここで跳ね返る。
+   */
+  function standWalls() {
+    const face = (axis) => Math.min(...STANDS.WALLS.filter((w) => w.axis === axis)
+      .map((w) => Math.abs(w.fixed) - STANDS.THICKNESS / 2));
+    return { x: face('z'), z: face('x') };
+  }
+
+  /**
+   * 壁の内側の面から外へ d(m) の所の、スタンドの床の高さ（壁の上面、その奥は観客席の段。
+   * 観客の座る位置は scene/crowd.js と同じ STANDS・SPECTATORS から決まる）。
+   */
+  function standFloor(d) {
+    if (d <= STANDS.THICKNESS) return STANDS.HEIGHT;
+    const row = clamp(Math.round((d - STANDS.THICKNESS) / SPECTATORS.ROW_GAP - 1), 0, SPECTATORS.ROWS - 1);
+    return STANDS.HEIGHT + SPECTATORS.ROW_RISE * row;
+  }
+
+  /** 観客席のいちばん後ろ（壁の内側の面からの距離）。客席へ飛び込んだ球はここで跳ね返される。 */
+  const STAND_DEPTH = STANDS.THICKNESS + SPECTATORS.ROW_GAP * (SPECTATORS.ROWS + 0.5);
+
+  /** 選手が動き回る範囲（PLAYER.X_LIMIT・ベースラインの後ろ Z_FAR_MARGIN まで）の中か。 */
+  function inPlayArea(p) {
+    return Math.abs(p.x) < PLAYER.X_LIMIT && Math.abs(p.z) < HALF_L + PLAYER.Z_FAR_MARGIN;
+  }
+
+  /**
+   * ボールボーイが持ち場 home から立ち位置 stand へ走って行き、かがんで拾って戻る段取り。
+   * times は [走り出す, 着く, かがみきる, 起き上がり始める, 起き上がる, 戻りきる]（秒）、
+   * picked は球を手に取る時刻。
+   */
+  function pickupTimes(home, stand, delay) {
+    const P = OFFICIALS.BALLKID.PICKUP;
+    const run = Math.hypot(stand.x - home.x, stand.z - home.z) / P.SPEED;
+    const times = [delay];
+    [run, P.DOWN, P.HOLD, P.UP, run].forEach((d) => times.push(times[times.length - 1] + d));
+    return { stand, times, picked: times[2] + P.HOLD / 2 };
+  }
 
   /**
    * サーブが狙う対角の符号（targetSign）と、打ち込む方向（dir、+1＝you→cpu向き）。
@@ -697,6 +738,9 @@
         bounces: 0, last: 'you', live: false,
         netFall: false, // ネットに掛かって決まった後、1バウンドするまで落ち続けている間（stepBall() 参照）
         netFallT: 0,
+        // 決まった後、球の動きを片付け前の球（this.looseBalls）へ引き継いだ印。表示側は本物の球を
+        // 隠す（同じ球が2つに見えないように）。次のサーブの構え（placeServeBall()）で戻す。
+        parked: false,
         impact: 0,      // 打った瞬間の演出（着弾フラッシュ・膨張）の残り時間
         impactPower: 0, // その打球の溜め量(0〜1)。演出の派手さに使う
         spin: 'flat',   // 'flat'|'top'|'slice'。飛翔中の実効重力とバウンドの弾み方に効く
@@ -1027,6 +1071,22 @@
        * 見てネットを揺らす（scene/net.js）。ネットインも含む。
        */
       this.netHit = null;
+      /**
+       * ネットに掛かって決まった球を、ボールボーイが拾いに行く段取り（planBallKid()）。球が床で
+       * 止まるたびに新しいオブジェクトに替わり、表示側はそれを見てボールボーイを動かす
+       * （scene/ballkid.js。left が段取りの残り秒数）。ballKidLeft は、コートの中へ出た
+       * ボールボーイ（ネット際の子、選手の範囲で止まった球を拾うコーナーの子）がみな持ち場へ
+       * 戻りきるまでの残り秒数で、0 になるまで次のポイント・セカンドサーブを待たせる（whenCourtClear()）。
+       */
+      this.netBallRest = null;
+      this.ballKidLeft = 0;
+      /**
+       * アウト・ツーバウンドなどで決まった後も転がり続ける、片付け前の球（releaseBall()）。
+       * 会場の座標（チェンジエンズで回る側）で持つ。止まったらコーナーのボールボーイが拾いに行き
+       * （plan・left は netBallRest と同じ形の段取りと残り秒数）、持ち場へ戻ったら消える。
+       */
+      this.looseBalls = [];
+      this.looseSeq = 0;
       /**
        * 直近のバウンド（bounce()）。接地点と、弾む直前の速度。コールが出たバウンドなら call に
        * その lineCall が入る。バウンドのたびに新しいオブジェクトに替わり、表示側はそれを見て
@@ -2577,6 +2637,7 @@
       const front = TEAM_OF[serverKey] === 'you' ? 0.4 : -0.4;
       const ball = this.ball;
       ball.netFall = false; // サーブの構えに入ったら、ネット後の落下は打ち切って手元へ戻す
+      ball.parked = false;  // 新しい球を手に持つ（前の球は looseBalls が片付ける）
       ball.x = ball.px = server.x;
       ball.z = ball.pz = server.z + front;
       ball.y = ball.py = SERVE.BALL_Y;
@@ -3895,6 +3956,7 @@
       }
       this.phase = 'over';
       this.ball.live = false;
+      this.releaseBall();
       // 飛びつきボレーで飛び込んでいる最中に決まった（めったにない）なら、当てずにそこで止める
       ACTORS.forEach((w) => { this.actor(w).dive = null; });
       // 観客の歓声（sfx.point）用の決まり方。エース／ウィナーは相手の非（凡ミス）とは
@@ -3978,7 +4040,7 @@
         this.hooks.call(`セット — ${mine ? 'YOU' : 'CPU'}`,
           `第${n}セット ${games.you}-${games.cpu} ／ セットカウント ${sets.you}-${sets.cpu}`);
         this.hooks.score();
-        this.after(TIMING.NEXT_POINT, () => this.startNextSet(changeover));
+        this.after(TIMING.NEXT_POINT, () => this.whenCourtClear(() => this.startNextSet(changeover)));
         return;
       }
 
@@ -4004,11 +4066,11 @@
       // 濡れたコートは1ポイントごとに乾いていく（小雨が降っている間は小雨の濡れ具合までしか乾かない）
       const dryFloor = this.rain ? RAIN.DRIZZLE_WET : 0;
       if (this.wet > dryFloor) this.setWet(Math.max(dryFloor, this.wet - 1 / RAIN.WET_POINTS));
-      this.after(TIMING.NEXT_POINT, () => {
+      this.after(TIMING.NEXT_POINT, () => this.whenCourtClear(() => {
         if (this.rainDue()) this.beginRainDelay(changeover);
         else if (changeover) this.beginChangeover(changeover);
         else this.newPoint();
-      });
+      }));
     }
 
     /* ---------------------------------------------------------- 練習モード */
@@ -4236,6 +4298,9 @@
         return;
       }
       this.tickRain(dt);
+      this.ballKidLeft = Math.max(0, this.ballKidLeft - dt);
+      if (this.netBallRest) this.netBallRest.left = Math.max(0, this.netBallRest.left - dt);
+      this.tickLooseBalls(dt);
       this.tickTimers(dt);
       this.tickChangeover(dt);
       this.tickMoods(dt);
@@ -5222,6 +5287,7 @@
           ball.y = Math.max(ball.y, BALL_R);
           ball.vx = ball.vy = ball.vz = 0;
           ball.netFall = false;
+          if (!this.practice && OFFICIALS.BALLKID.PICKUP.ENABLED) this.planBallKid(ball.x, ball.z);
           if (this.trail.length < TRAIL.MAX_POINTS) {
             this.trail.push({ x: ball.x, y: ball.y, z: ball.z });
           }
@@ -5266,7 +5332,12 @@
 
       if (this.phase === 'rally') this.checkSwings();
 
-      if (Math.abs(ball.z) > BOUNDS.Z || Math.abs(ball.x) > BOUNDS.X) {
+      // スタンドの壁に届いた（壁の上を越えて客席へ向かう球も含む）。以前は BOUNDS（z=±24）まで
+      // 飛ばしてから決めていたため、深い球が壁（z=±19）をすり抜けて見えていた。壁の手前は
+      // 選手の届く範囲（PLAYER.Z_FAR_MARGIN）より十分外なので、ここで決めても結果は変わらない
+      const W = standWalls();
+      const atWall = Math.abs(ball.z) > W.z - BALL_R || Math.abs(ball.x) > W.x - BALL_R;
+      if (atWall || Math.abs(ball.z) > BOUNDS.Z || Math.abs(ball.x) > BOUNDS.X) {
         // bounces>=1 ＝ bounce() が1バウンド目をイン（サーブならサービスボックス内）と
         // 認めたということ。つまりこの球は「アウト」ではなく、インで弾んだ後レシーバーが
         // 返せず、2バウンド目より先にこの範囲まで転がり出ただけ。ベースライン際に落ちた
@@ -5451,9 +5522,10 @@
       // 止めておく（サーブ待ちの 'serve' のままにすると、そのまま次のトスが上がる）。
       this.phase = 'fault';
       this.serveInFlight = false;
-      this.ball.live = false; // 転がり続けずにその場で止める（ポイントが決まったときと同じ扱い）
+      this.ball.live = false; // 本物の球はその場で止め、動きは片付け前の球へ引き継ぐ
+      this.releaseBall();
       this.hooks.call('フォールト', reason);
-      this.after(TIMING.FAULT_CALL, () => this.retryServe(reason));
+      this.after(TIMING.FAULT_CALL, () => this.whenCourtClear(() => this.retryServe(reason)));
     }
 
     checkSwings() {
@@ -5706,6 +5778,211 @@
       actor.z = dive.z1;
       this.hit(who); // 打ち方の向きは dive.stroke（hit() が見る）
       actor.dive = null;
+    }
+
+    /* ---------------------------------------------------------- ボールボーイ */
+
+    /**
+     * ネットに掛かって床で止まった球（ゲームの座標 x, z）を拾いに行く段取りを決め、
+     * this.netBallRest に置く。ボールボーイの持ち場（OFFICIALS.BALLKID.NET）は会場の座標なので、
+     * 段取りも会場の座標で持つ（チェンジエンズは戻りきるまで待たせるので、途中で回らない）。
+     * 行くのは球と同じ側（ネットのこちら側／向こう側）の子。球の横 REACH の所に立ってかがむ。
+     * times は [走り出す, 着く, かがみきる, 起き上がり始める, 起き上がる, 戻りきる]（秒）。
+     */
+    planBallKid(x, z) {
+      const P = OFFICIALS.BALLKID.PICKUP;
+      const kids = OFFICIALS.BALLKID.NET;
+      const k = this.endsSwapped ? -1 : 1;
+      const ball = { x: x * k, z: z * k };
+      const dist = (c) => Math.hypot(c.x - ball.x, c.z - ball.z);
+      let kid = kids.findIndex((c) => Math.sign(c.z) === Math.sign(ball.z));
+      if (kid < 0) kid = dist(kids[0]) <= dist(kids[1]) ? 0 : 1;
+      const home = kids[kid];
+      const side = Math.sign(home.x - ball.x) || Math.sign(home.x) || 1;
+      const stand = {
+        x: ball.x + side * P.REACH,
+        z: (Math.sign(home.z) || 1) * Math.max(Math.abs(ball.z), P.NET_GAP),
+      };
+      this.netBallRest = { kid, ball, ...pickupTimes(home, stand, P.DELAY) };
+      this.netBallRest.left = this.netBallRest.times[5]; // 段取りの残り秒数（表示側の時計）
+      this.ballKidLeft = Math.max(this.ballKidLeft, this.netBallRest.left);
+    }
+
+    /**
+     * 決まった球の動きを、片付け前の球（this.looseBalls）へ引き継ぐ。本物の球はその場で止めて
+     * 隠し（ball.parked）、次のサーブでは新しい球をサーバーが持つ。ネットに掛かった球は
+     * 別の段取り（planBallKid()）、練習モードは今まで通り止めるだけ。壁の上を越えていく球は
+     * 客席へ飛んで行って消える（tickLooseBalls() の crowd）。
+     */
+    releaseBall() {
+      const b = this.ball;
+      if (this.practice || b.netFall || b.parked || !OFFICIALS.BALLKID.PICKUP.ENABLED) return;
+      b.parked = true;
+      const W = standWalls();
+      const k = this.endsSwapped ? -1 : 1;
+      const x = b.x * k;
+      const z = b.z * k;
+      if (Math.abs(x) > W.x || Math.abs(z) > W.z) return; // 保険（壁の外まで出てしまった球）
+      const y = Math.max(b.y, BALL_R);
+      this.looseBalls.push({
+        id: ++this.looseSeq, x, y, z, px: x, py: y, pz: z,
+        vx: b.vx * k, vy: b.vy, vz: b.vz * k, spin: b.spin || 'flat',
+        rolling: false, rest: false, plan: null, left: 0, crowd: null,
+      });
+    }
+
+    /**
+     * 片付け前の球を1フレーム進める。弾む（reflectBounce）→ 弾みが小さくなったら転がる →
+     * 止まる。スタンドの壁では跳ね返り、壁より高く越えたら客席へ消える。止まったら、試合が
+     * 止まっている間（ポイント間・フォールトの後。壁際の球はサーブの構えの間も）にコーナーの
+     * ボールボーイを向かわせる。ラリー中は拾いに出ない。
+     */
+    tickLooseBalls(dt) {
+      if (!this.looseBalls.length) return;
+      const L = OFFICIALS.BALLKID.LOOSE;
+      const W = standWalls();
+      const idle = this.phase === 'over' || this.phase === 'fault';
+      this.looseBalls = this.looseBalls.filter((b) => {
+        if (b.plan) {
+          b.left -= dt;
+          return b.left > 0;
+        }
+        if (b.crowd) return this.tickCrowdBall(b, dt, W);
+        if (!b.rest) {
+          if (!b.rolling) {
+            integrate(b, dt);
+            if (b.y <= BALL_R && b.vy < 0) {
+              const impact = Math.hypot(b.vx, b.vy, b.vz);
+              reflectBounce(b);
+              if (impact >= L.SOUND_MIN) this.hooks.sound('bounce', b.spin, impact);
+              if (b.vy < L.ROLL_VY) {
+                b.rolling = true;
+                b.y = BALL_R;
+                b.vy = 0;
+              }
+            }
+          } else {
+            b.px = b.x;
+            b.py = b.y;
+            b.pz = b.z;
+            const speed = Math.hypot(b.vx, b.vz);
+            const slow = Math.max(0, speed - L.ROLL_DECEL * dt);
+            if (slow < L.STOP_SPEED) {
+              b.vx = b.vz = 0;
+              b.rest = true;
+            } else {
+              b.vx *= slow / speed;
+              b.vz *= slow / speed;
+              b.x += b.vx * dt;
+              b.z += b.vz * dt;
+            }
+          }
+          // ネットは越えずに網で止まる（白帯より上を越えた球はそのまま向こうへ）
+          if (hitsNet(b)) {
+            b.z = b.pz;
+            b.vz = -b.vz * L.NET_RESTITUTION;
+            b.vx *= L.NET_RESTITUTION;
+          }
+          for (const axis of ['x', 'z']) {
+            const lim = W[axis] - BALL_R;
+            if (Math.abs(b[axis]) <= lim) continue;
+            if (b.y > STANDS.HEIGHT) { // 壁の上を越えて客席へ（跳ね返らずにそのまま飛んで行く）
+              b.crowd = { axis, t: 0, keep: null };
+              break;
+            }
+            const v = 'v' + axis;
+            const impact = Math.abs(b[v]);
+            b[axis] = Math.sign(b[axis]) * lim;
+            b[v] = -b[v] * L.WALL_RESTITUTION;
+            if (impact >= L.SOUND_MIN) this.hooks.sound('bounce', 'flat', impact);
+          }
+        }
+        // サーブの構えの間も、選手の範囲の外（壁際）の球なら拾いに行ける（行き帰りも範囲の外）
+        if (b.rest && (idle || (this.phase === 'serve' && !inPlayArea(b)))) this.planCornerPickup(b);
+        return true;
+      });
+    }
+
+    /**
+     * 壁の上を越えて客席へ飛び込んだ球。スタンドの床（standFloor()：壁の上面と観客席の段）で
+     * 弾み、段の蹴上げや観客席のいちばん後ろ（STAND_DEPTH。観客に当たる）には跳ね返されて、
+     * 観客の間で止まる。止まってから CROWD_KEEP 秒は見せておき（観客が拾って持って帰る）、
+     * ボールボーイは拾いに行かない。
+     * @returns {boolean} まだ残しておくか
+     */
+    tickCrowdBall(b, dt, W) {
+      const L = OFFICIALS.BALLKID.LOOSE;
+      const c = b.crowd;
+      c.t += dt;
+      if (c.keep !== null) {
+        c.keep += dt;
+        return c.keep < L.CROWD_KEEP;
+      }
+      if (c.t > L.CROWD_SEC) return false; // 保険（どこにも落ち着かない球）
+      integrate(b, dt);
+      const ax = c.axis;
+      if (Math.abs(b[ax]) - W[ax] > STAND_DEPTH) {
+        b[ax] = Math.sign(b[ax]) * (W[ax] + STAND_DEPTH);
+        b['v' + ax] = -b['v' + ax] * L.WALL_RESTITUTION;
+      }
+      const floor = standFloor(Math.abs(b[ax]) - W[ax]);
+      if (b.y >= floor + BALL_R) return true;
+      const before = standFloor(Math.abs(b['p' + ax]) - W[ax]);
+      if (before !== floor && b.py < floor + BALL_R) {
+        // 1段上の段の蹴上げに当たった：外へ向かう速さを跳ね返して元の段へ戻す
+        b[ax] = b['p' + ax];
+        b['v' + ax] = -b['v' + ax] * L.WALL_RESTITUTION;
+        return true;
+      }
+      const impact = Math.hypot(b.vx, b.vy, b.vz);
+      b.y = floor + BALL_R;
+      if (-b.vy < L.ROLL_VY) {
+        b.vx = b.vy = b.vz = 0;
+        c.keep = 0;
+        return true;
+      }
+      b.vy = -b.vy * L.CROWD_RESTITUTION;
+      b.vx *= L.CROWD_FRICTION;
+      b.vz *= L.CROWD_FRICTION;
+      if (impact >= L.SOUND_MIN) this.hooks.sound('bounce', 'flat', impact);
+      return true;
+    }
+
+    /**
+     * 止まった片付け前の球 b を、いちばん近いコーナーのボールボーイに拾わせる（その子が別の球を
+     * 拾いに出ていたら、戻るまで次のフレームでまた見る）。選手の動き回る範囲（PLAYER.X_LIMIT・
+     * Z_FAR_MARGIN）の中で止まった球は、拾って戻りきるまで次のポイントを待たせる。
+     */
+    planCornerPickup(b) {
+      const P = OFFICIALS.BALLKID.PICKUP;
+      const kids = OFFICIALS.BALLKID.CORNER;
+      const busy = new Set(this.looseBalls.filter((o) => o.plan).map((o) => o.plan.kid));
+      // いちばん近い子が行く。出払っていたら、遠くの子を走らせずに戻ってくるのを待つ
+      const near = (i) => Math.hypot(kids[i].x - b.x, kids[i].z - b.z);
+      const kid = kids.reduce((best, _, i) => (near(i) < near(best) ? i : best), 0);
+      if (busy.has(kid)) return;
+      const home = kids[kid];
+      const dx = home.x - b.x;
+      const dz = home.z - b.z;
+      const d = Math.hypot(dx, dz);
+      const stand = d > P.REACH ? { x: b.x + (dx / d) * P.REACH, z: b.z + (dz / d) * P.REACH } : { x: home.x, z: home.z };
+      b.plan = { kid, ball: { x: b.x, z: b.z }, ...pickupTimes(home, stand, P.CORNER_DELAY) };
+      b.left = b.plan.times[5];
+      if (inPlayArea(b)) this.ballKidLeft = Math.max(this.ballKidLeft, b.left);
+    }
+
+    /**
+     * ボールボーイがコートから戻りきってから fn を呼ぶ（まだ途中なら、戻りきる時刻まで待つ）。
+     * 選手の動き回る範囲で片付け前の球がまだ転がっている間も、止まって拾われるまで待つ。
+     */
+    whenCourtClear(fn) {
+      if (this.ballKidLeft > 0) {
+        this.after(this.ballKidLeft, () => this.whenCourtClear(fn));
+      } else if (this.looseBalls.some((b) => !b.plan && inPlayArea(b))) {
+        this.after(OFFICIALS.BALLKID.LOOSE.RECHECK, () => this.whenCourtClear(fn));
+      } else {
+        fn();
+      }
     }
 
     /* ---------------------------------------------------------- タイマー */

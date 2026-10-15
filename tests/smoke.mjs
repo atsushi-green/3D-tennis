@@ -17,6 +17,9 @@ for (const f of FILES) {
   vm.runInContext(fs.readFileSync(path.join(SRC, f), 'utf8'), sandbox, { filename: f });
 }
 const R = sandbox.window.RallyOne;
+// ボールボーイの片付け（決まった球を拾い終えるまで次のポイントを待たせる）は、ほかのテストが前提に
+// している「ポイント間は TIMING.NEXT_POINT」を崩すので、既定では切っておく。ボールボーイのテストでだけ入れる
+R.config.OFFICIALS.BALLKID.PICKUP.ENABLED = false;
 
 let fail = 0;
 const ok = (cond, msg) => { if (!cond) { console.log('  FAIL:', msg); fail++; } };
@@ -6047,6 +6050,99 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     ok(kmh > 110 && drives.length >= 18, `${name}: and hits it hard, ${kmh.toFixed(0)} km/h, ${rs.length - drives.length}/20 lobs`);
   });
   applyCpuLevel('normal');
+}
+
+// --- ボールボーイ：ネットの球は同じ側の子が拾いに行き、戻りきるまで次の支度を待たせる ---
+{
+  const B = R.config.OFFICIALS.BALLKID;
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.planBallKid(1.5, -0.25);
+  const plan = g.netBallRest;
+  ok(Math.sign(B.NET[plan.kid].z) === -1, `the kid on the ball's side of the net goes, got ${plan.kid}`);
+  ok(Math.abs(plan.stand.z) >= B.PICKUP.NET_GAP && Math.sign(plan.stand.z) === -1, 'and stands clear of the net on its own side');
+  ok(g.ballKidLeft === plan.times[5] && plan.times[5] > plan.picked, 'the court is busy until the kid is back');
+  let calledAt = null;
+  const dt = 1 / 60;
+  let t = 0;
+  g.whenCourtClear(() => { calledAt = t; });
+  while (t < 10 && calledAt === null) { t += dt; g.ballKidLeft = Math.max(0, g.ballKidLeft - dt); g.tickTimers(dt); }
+  ok(calledAt !== null && calledAt >= plan.times[5] - 1e-9 && calledAt < plan.times[5] + 2 * dt,
+    `the next point waits for the kid, ${calledAt} vs ${plan.times[5]}`);
+  g.endsSwapped = true;
+  g.planBallKid(1.5, -0.25);
+  ok(Math.sign(B.NET[g.netBallRest.kid].z) === 1, 'after changing ends the other kid (same side in the venue) goes');
+}
+
+// --- 片付け前の球：決まった後も弾んで転がり、壁で止まり、コーナーのボールボーイが拾って消える ---
+{
+  const B = R.config.OFFICIALS.BALLKID;
+  B.PICKUP.ENABLED = true;
+  const W = { x: 25, z: 19 }; // STANDS.WALLS の内側の面
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(false, 'you');
+  const ball = g.ball;
+  Object.assign(ball, { x: 2, y: 0.3, z: -13, vx: 1, vy: 3, vz: -22, live: false, spin: 'flat' });
+  g.phase = 'over';
+  g.releaseBall();
+  ok(ball.parked && g.looseBalls.length === 1, 'the decided ball is handed over to a loose ball');
+  const lb = g.looseBalls[0];
+  let rested = false;
+  let maxZ = 0;
+  for (let i = 0; i < 60 * 20 && g.looseBalls.length; i++) {
+    g.tickLooseBalls(1 / 60);
+    maxZ = Math.max(maxZ, Math.abs(lb.z));
+    if (lb.rest) rested = true;
+  }
+  ok(rested && maxZ <= W.z, `it rolls, stays inside the stands and comes to rest (max |z| ${maxZ.toFixed(2)})`);
+  ok(lb.plan && Math.sign(B.CORNER[lb.plan.kid].z) === Math.sign(lb.z), `a corner kid on its end of the court picks it up, ${JSON.stringify(lb.plan && lb.plan.ball)}`);
+  ok(g.looseBalls.length === 0, 'and once the kid is back the ball is gone');
+
+  // インで弾んだ深い球が奥の壁へ勢いよく飛んでも、壁で決まって跳ね返り、消えずに残る
+  // （以前は BOUNDS まで壁をすり抜けて飛んでから決まり、片付け前の球にならずに消えていた）
+  const g4 = new R.Game({ input: fakeInput, hooks: noHooks });
+  g4.start(false, 'you');
+  g4.phase = 'rally';
+  Object.assign(g4.ball, { x: 1, y: 0.8, z: -12, vx: 0, vy: 1.5, vz: -25, live: true, bounces: 1, last: 'you', spin: 'flat' });
+  g4.ball.px = g4.ball.x; g4.ball.py = g4.ball.y; g4.ball.pz = g4.ball.z;
+  for (let i = 0; i < 240 && g4.phase === 'rally'; i++) g4.stepBall(1 / 240);
+  ok(g4.phase === 'over' && Math.abs(g4.ball.z) <= W.z, `a deep winner is decided at the wall, z=${g4.ball.z.toFixed(2)}`);
+  ok(g4.looseBalls.length === 1, 'and the ball stays on court as a loose ball instead of vanishing');
+  for (let i = 0; i < 60 * 3; i++) g4.tickLooseBalls(1 / 60);
+  ok(g4.looseBalls.length === 1 && Math.abs(g4.looseBalls[0].z) <= W.z, 'it bounces off the wall and stays inside');
+
+  // スマッシュのように高く弾んで壁の上を越えた球は、消えずに客席の段で弾んで止まり、
+  // しばらく見えてから消える（観客が持って帰る）。ボールボーイは拾いに行かない
+  const g2 = new R.Game({ input: fakeInput, hooks: noHooks });
+  g2.start(false, 'you');
+  g2.phase = 'over';
+  Object.assign(g2.ball, { x: 0, y: 1, z: -15, vx: 0, vy: 9, vz: -12, live: false });
+  g2.releaseBall();
+  const cb = g2.looseBalls[0];
+  for (let i = 0; i < 60 * 3; i++) g2.tickLooseBalls(1 / 60);
+  ok(g2.looseBalls.length === 1 && cb.crowd && Math.abs(cb.z) > W.z && cb.y >= R.config.STANDS.HEIGHT,
+    `a ball over the wall lands in the stands and stays visible, at z=${cb.z.toFixed(2)} y=${cb.y.toFixed(2)}`);
+  ok(cb.crowd.keep !== null && !cb.plan, 'it comes to rest among the crowd and no ball kid goes for it');
+  for (let i = 0; i < 60 * 10; i++) g2.tickLooseBalls(1 / 60);
+  ok(g2.looseBalls.length === 0, 'after a while a spectator has taken it home');
+
+  // 片付けを入れたままのフルマッチ：止まらずに進み、球が溜まり続けない
+  const events = [];
+  const g3 = new R.Game({ input: fakeInput, hooks: { ...noHooks, call: (big, sub) => events.push(`${big}|${sub}`) } });
+  g3.start();
+  let maxLoose = 0;
+  let maxTimers = 0;
+  for (let i = 0; i < 60 * 600; i++) {
+    if (g3.phase === 'serve' && g3.server === 'you') tap(g3);
+    if (g3.phase === 'rally' && i % 6 === 0) tap(g3);
+    g3.update(1 / 60);
+    maxLoose = Math.max(maxLoose, g3.looseBalls.length);
+    maxTimers = Math.max(maxTimers, g3.timers.length);
+  }
+  ok(events.length > 20, `with the ball kids tidying up the match still moves on: ${events.length} calls`);
+  ok(maxLoose <= 5, `loose balls do not pile up: at most ${maxLoose}`); // フォールト続きで一時的に2〜3個は残る
+  ok(maxTimers <= 2, `timers do not leak with the ball kids: at most ${maxTimers}`);
+  ok(g3.looseBalls.every((b) => Number.isFinite(b.x) && Number.isFinite(b.z)), 'loose balls stay finite');
+  B.PICKUP.ENABLED = false;
 }
 
 // --- 足音：走ると STRIDE ごとに1歩、止まると鳴らない、瞬間移動は足音にしない ---

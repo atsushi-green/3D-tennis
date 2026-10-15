@@ -342,6 +342,9 @@
       scene3d.shakeNet(net, shake && shake.hit, shake ? clock - shake.recT : 0);
     }
 
+    // --- 決まった後の球（転がる・ボールボーイが拾う。game.netBallRest・looseBalls どおり。ballkid.js） ---
+    const ballPickup = scene3d.createBallPickup(officials.userData, venue);
+
     // --- クレーのボールマーク（game.lastBounce が変わったら跡を1つ足す） ---
     let lastBounceSeen = null;
     let lastMark = null;     // 最後に残した跡 { bounce, shape }（リプレイの最後で映すかの判定に使う）
@@ -686,6 +689,7 @@
           // 静止している間（HOLD_SEC）も線審の時計だけは進める＝決着の瞬間のコールが見える
           poseLineJudges(reel[0].t + replayClock);
           poseNet(frame.netShake, reel[0].t + replayClock);
+          ballPickup.update(state, dt, true);
           scene3d.updateTrail(trail, NO_TRAIL); // 再生そのものが「振り返り」なので軌跡は隠す
           scene3d.placeSmashHint(smashHint, null);
           scene3d.placeSwingGuide(swingGuide, null, state.you);
@@ -717,9 +721,12 @@
         youMate.visible = cpuMate.visible = shadows.youMate.visible = shadows.cpuMate.visible = false;
         Object.keys(nightShadows).forEach((key) => nightShadows[key].forEach((m) => { m.visible = false; }));
       }
-      ballMesh.visible = shadows.ball.visible = !away;
+      // 決まった後の球は、本物の球の代わりに ballkid.js の見た目だけの球を見せる（ネットに掛かって
+      // 拾われるのを待つ球、片付け前の球へ動きを引き継いだ球 ball.parked）
+      ballMesh.visible = shadows.ball.visible = !away && !ballPickup.active(state) && !state.ball.parked;
       poseLineJudges(recClock);
       poseNet(netShake, recClock);
+      ballPickup.update(state, dt, false);
       // 軌跡はラリーの決着がついた後（ポイント間の 'serve' 待ち・'over'）だけ見せる。
       // ラリー中に出しっぱなしだと本来の目的（アウトの結果を振り返る）を超えて
       // 「次にどこへ来るか」の手がかりになってしまうため。観客席や勝者を映す演出のカットでも
