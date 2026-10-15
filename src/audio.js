@@ -896,49 +896,6 @@
     }
   }
 
-  /**
-   * 急停止・切り返しのシューズの音（AUDIO.FEET.SQUEAK のいまのサーフェス）。ハードはゴムが
-   * 床に擦れる高い「キュッ」（揺れながら上がる正弦波）、クレー・芝は擦過音。
-   * @param {number} power 0〜1（止まる前の速さ）
-   */
-  function squeak(team, power) {
-    const ac = context();
-    if (!ac) return;
-    const S = AUDIO.FEET.SQUEAK[SURFACE.NAME] || AUDIO.FEET.SQUEAK.hard;
-    const k = feetVol(team, power);
-    try {
-      if (S.SLIDE) {
-        noiseVoice(ac, { ...S.SLIDE, vol: S.SLIDE.vol * k, dur: S.SLIDE.dur * (0.6 + 0.4 * power) });
-        return;
-      }
-      const C = S.CHIRP;
-      const t0 = ac.currentTime;
-      const dur = jDur(C.dur);
-      const vol = jVol(C.vol) * k;
-      const osc = ac.createOscillator();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(jHz(C.from), t0);
-      osc.frequency.linearRampToValueAtTime(jHz(C.to), t0 + dur);
-      // 細かく震わせる（ゴムが床に引っかかっては離れる）
-      const vib = ac.createOscillator();
-      vib.frequency.value = C.vibHz;
-      const depth = ac.createGain();
-      depth.gain.value = C.vibDepth;
-      vib.connect(depth).connect(osc.frequency);
-      const amp = ac.createGain();
-      amp.gain.setValueAtTime(SILENCE, t0);
-      amp.gain.linearRampToValueAtTime(vol, t0 + dur * 0.2);
-      amp.gain.linearRampToValueAtTime(SILENCE, t0 + dur);
-      osc.connect(amp).connect(ac.destination);
-      osc.start(t0);
-      vib.start(t0);
-      osc.stop(t0 + dur + 0.01);
-      vib.stop(t0 + dur + 0.01);
-    } catch (e) {
-      /* 音が出ないだけなのでゲームは続行 */
-    }
-  }
-
   /* ------------------------------------------------------------ 主審のスコアコール */
 
   let umpireTimer = null;
@@ -1067,8 +1024,6 @@
     netIn: () => layered(AUDIO.NET_IN),
     /** 1歩の足音（game.js#tickFootsteps）。speed は 0〜1。 */
     step: (team, speed) => step(team, speed),
-    /** 急停止・切り返しのシューズの音（game.js#tickFootsteps）。power は 0〜1。 */
-    squeak: (team, power) => squeak(team, power),
     /** 主審のスコアコール（英語の文。scoring.js#umpireCall）。一拍置いてから読み上げる。 */
     umpire: (text) => umpireSay(text),
     /** 雨音の強さ（0〜1）。毎フレーム呼ぶ（main.js が scene/weather.js の雨の強さを渡す）。 */

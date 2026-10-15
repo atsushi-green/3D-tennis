@@ -4187,10 +4187,9 @@
     /* -------------------------------------------------------- 毎フレーム */
 
     /**
-     * 足音とシューズのきしみ（音は hooks.sound('step'/'squeak') で表示側へ。FOOTSTEP 参照）。
-     * 速さは前のフレームからの移動で測る。走った距離が STRIDE に達するごとに1歩、速度ベクトルが
-     * 急に変わった（走り込んで止まる・切り返す）ら1回きしむ。1フレームで TELEPORT_SPEED を超えて
-     * 動いたのは瞬間移動なので、足音にせず位置だけ取り直す。
+     * 足音（音は hooks.sound('step') で表示側へ。FOOTSTEP 参照）。速さは前のフレームからの移動で
+     * 測り、走った距離が STRIDE に達するごとに1歩。1フレームで TELEPORT_SPEED を超えて動いたのは
+     * 瞬間移動なので、足音にせず位置だけ取り直す。
      */
     tickFootsteps(dt) {
       if (!(dt > 0)) return;
@@ -4199,38 +4198,13 @@
         const a = this.actor(who);
         const feet = a.feet;
         if (!feet) {
-          a.feet = { x: a.x, z: a.z, vx: 0, vz: 0, dist: 0, cool: 0 };
+          a.feet = { x: a.x, z: a.z, dist: 0 };
           return;
         }
-        const vx = (a.x - feet.x) / dt;
-        const vz = (a.z - feet.z) / dt;
+        const speed = Math.hypot(a.x - feet.x, a.z - feet.z) / dt;
         feet.x = a.x;
         feet.z = a.z;
-        feet.cool = Math.max(0, feet.cool - dt);
-        const speed = Math.hypot(vx, vz);
-        if (speed > FOOTSTEP.TELEPORT_SPEED) {
-          feet.vx = feet.vz = feet.dist = 0;
-          return;
-        }
-        // 速度の変化を、それまで進んでいた向き（u）とその横に分ける。前向きの加速（走り出し）は
-        // 数えず、ブレーキ（u と逆向き）と横への切り返しだけを見る
-        const before = Math.hypot(feet.vx, feet.vz);
-        const ux = before > 0 ? feet.vx / before : 0;
-        const uz = before > 0 ? feet.vz / before : 0;
-        const dvx = vx - feet.vx;
-        const dvz = vz - feet.vz;
-        const brake = Math.max(0, -(dvx * ux + dvz * uz));
-        const turn = Math.abs(dvx * uz - dvz * ux);
-        const decel = Math.hypot(brake, turn) / dt;
-        feet.vx = vx;
-        feet.vz = vz;
-        if (before >= FOOTSTEP.SQUEAK_FROM && decel >= FOOTSTEP.SQUEAK_DECEL && feet.cool === 0) {
-          this.hooks.sound('squeak', TEAM_OF[who], Math.min(1, before / FOOTSTEP.SQUEAK_FULL));
-          feet.cool = FOOTSTEP.SQUEAK_COOLDOWN;
-          feet.dist = 0; // 止まった足で次の1歩を数え直す
-          return;
-        }
-        if (speed < FOOTSTEP.MIN_SPEED) {
+        if (speed > FOOTSTEP.TELEPORT_SPEED || speed < FOOTSTEP.MIN_SPEED) {
           feet.dist = 0;
           return;
         }
