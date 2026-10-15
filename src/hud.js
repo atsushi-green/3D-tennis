@@ -316,6 +316,7 @@
         surfaceOpts: segs('surfaceRow'),
         sessionOpts: segs('sessionRow'),
         weatherOpts: segs('weatherRow'),
+        viewOpts: segs('viewRow'),
         styleOpts: segs('styleRow'),
         firstServeOpts: segs('firstServeRow'),
         guideOpts: segs('guideRow'),
@@ -362,6 +363,7 @@
       bind(this.el.surfaceOpts, handlers.onSelectSurface);
       bind(this.el.sessionOpts, handlers.onSelectSession);
       bind(this.el.weatherOpts, (level) => handlers.onSelectRain(level === 'rain'));
+      bind(this.el.viewOpts, handlers.onSelectView);
       bind(this.el.styleOpts, handlers.onSelectStyle);
       bind(this.el.firstServeOpts, handlers.onSelectFirstServe);
       bind(this.el.guideOpts, (level) => handlers.onSelectGuide(level === 'on'));
@@ -910,6 +912,11 @@
     /** スタート画面の時間帯（'day'｜'night'）の表示。 */
     setSession(level) {
       this.el.sessionOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === level));
+    }
+
+    /** スタート画面の視点（'third'｜'first'）の表示。 */
+    setView(level) {
+      this.el.viewOpts.forEach((el) => el.classList.toggle('on', el.dataset.level === level));
     }
 
     /** スタート画面の天候（にわか雨あり／なし）の表示。 */

@@ -125,7 +125,48 @@
 
     const NO_TRAIL = []; // ラリー中は軌跡を隠す（毎フレーム確保しないよう使い回す）
 
-    function syncCamera(player, dt) {
+    // 視点（スタート画面の「視点」）。'first' の間、いつもの画面だけ自分の選手の目から映す
+    let view = 'third';
+    let viewChanged = false; // 切り替えた直後の1フレームは寄せずに瞬時に置く
+    const fpEye = new THREE.Vector3();
+    const fpLook = new THREE.Vector3();    // いま見ている点（寄せた後）
+    const fpTarget = new THREE.Vector3();  // このフレームで見たい点
+
+    /** 一人称の目の位置（自分の選手の頭の少し後ろ。跳んだぶんだけ上がる）を fpEye に入れる。 */
+    function firstPersonEye(state) {
+      const F = CAMERA.FIRST_PERSON;
+      fpEye.set(state.you.x, F.EYE_Y + you.position.y, state.you.z - F.BACK);
+      return fpEye;
+    }
+
+    /**
+     * 一人称の注視点。普段は相手コートの前方を見ていて、自分より前にある球は BALL_TRACK の
+     * 割合だけ目で追う（背後へ抜けた球・トスで真上にある球では振り向かない）。
+     */
+    function firstPersonLook(state, out) {
+      const F = CAMERA.FIRST_PERSON;
+      const p = state.you;
+      const b = state.ball;
+      out.set(p.x * (1 - F.LOOK_X), F.LOOK_Y, p.z + F.LOOK_AHEAD);
+      if (b && ballMesh.visible && b.z > p.z + F.TRACK_MIN_Z) {
+        out.x = lerp(out.x, b.x, F.BALL_TRACK);
+        out.y = lerp(out.y, b.y, F.BALL_TRACK);
+        out.z = lerp(out.z, b.z, F.BALL_TRACK);
+      }
+      return out;
+    }
+
+    function syncCamera(state, dt) {
+      if (view === 'first') {
+        const F = CAMERA.FIRST_PERSON;
+        setFov(F.FOV, F.NEAR);
+        camera.position.lerp(firstPersonEye(state), Math.min(1, dt * F.LERP));
+        fpLook.lerp(firstPersonLook(state, fpTarget), Math.min(1, dt * F.LOOK_LERP));
+        camera.lookAt(fpLook);
+        return;
+      }
+      setFov(CAMERA.FOV);
+      const player = state.you;
       const t = Math.min(1, dt * CAMERA.LERP);
       const follow = cameraFollowX(player.x);
       camera.position.x = lerp(camera.position.x, follow.pos, t);
@@ -138,16 +179,36 @@
      * 別のカット（リプレイ・マッチポイントの演出）から、いつもの画面へ瞬時に切り戻す
      * （lerp だと数フレームかけて振れながら戻り、その途中が見えてしまうため）。
      */
-    function snapCamera(player) {
+    function snapCamera(state) {
+      if (view === 'first') {
+        setFov(CAMERA.FIRST_PERSON.FOV, CAMERA.FIRST_PERSON.NEAR);
+        camera.position.copy(firstPersonEye(state));
+        fpLook.copy(firstPersonLook(state, fpTarget));
+        camera.lookAt(fpLook);
+        return;
+      }
       setFov(CAMERA.FOV);
-      const follow = cameraFollowX(player.x);
+      const follow = cameraFollowX(state.you.x);
       camera.position.set(follow.pos, CAMERA.HEIGHT, -CAMERA.BACK);
       camera.lookAt(follow.look, CAMERA.LOOK_AT.y, CAMERA.LOOK_AT.z);
     }
 
-    function setFov(fov) {
-      if (camera.fov === fov) return;
+    /**
+     * 視点を切り替える（'third'｜'first'）。次の sync() でいつもの画面へ瞬時に切り替わる
+     * （三人称の高い位置から目の高さへ lerp で降りてくる途中を見せない）。
+     */
+    function setView(name) {
+      if (view === name) return;
+      view = name;
+      viewChanged = true;
+    }
+
+    const BASE_NEAR = camera.near;
+    /** 画角と近クリップ面（一人称だけ遠ざける。それ以外のカメラは作ったときの値に戻す）。 */
+    function setFov(fov, near = BASE_NEAR) {
+      if (camera.fov === fov && camera.near === near) return;
       camera.fov = fov;
+      camera.near = near;
       camera.updateProjectionMatrix();
     }
 
@@ -684,6 +745,7 @@
         // 通常カメラへ lerp で戻る途中に映り込み、「戻りながら次が始まって見える」
         // 落ち着かない切り替わりになってしまう。
         if (replayClock <= playEnd + replayHold) {
+          you.userData.rig.head.visible = true; // 一人称でもリプレイは外から映すので頭を戻す
           const frame = frameAt(Math.min(replayClock, playEnd));
           applyFrame(frame, dt, frame.stages);
           // 静止している間（HOLD_SEC）も線審の時計だけは進める＝決着の瞬間のコールが見える
@@ -709,7 +771,7 @@
         highlight = null;
         replaying = false; // 再生し終わったら通常表示へ戻る
         // 横視点で静止していた状態から通常カメラへは lerp させず瞬時に切り替える
-        snapCamera(state.you);
+        snapCamera(state);
       }
 
       // 雨天中断でシートが掛かっている間は、選手はコートを離れている（球も片付けてある）。
@@ -740,17 +802,22 @@
       // 練習モードの移動のレッスンの目印（それ以外は出さない）
       scene3d.placePracticeTarget(practiceTarget, state.practice && state.practice.target);
 
+      // 一人称の間は、自分の頭を隠す（目の位置にカメラがあるので、頭の内側が画面を塞ぐ）。
+      // 外から映すカット（マッチポイントの演出・締めのカット）では戻す。
+      const cutCamera = !!(cut || (finale && finale.cut));
+      you.userData.rig.head.visible = view !== 'first' || cutCamera;
       if (cut) {
         placeMatchPointCamera(cut);
         cutShown = true;
       } else if (finale && finale.cut) {
         placeFinaleCamera(finale, state);
         cutShown = true;
-      } else if (cutShown) {
+      } else if (cutShown || viewChanged) {
         cutShown = false;
-        snapCamera(state.you);
+        viewChanged = false;
+        snapCamera(state);
       } else {
-        syncCamera(state.you, dt);
+        syncCamera(state, dt);
       }
     }
 
@@ -767,7 +834,7 @@
     return {
       sync, render: stage.render, scene, camera, setSurface, startReplay, skipReplay, isReplaying,
       isCheckingMark, captureClip, pruneClips, resetClips, playHighlights, highlightInfo,
-      setSession, rainLevel: () => weather.rainLevel(),
+      setSession, setView, rainLevel: () => weather.rainLevel(),
     };
   };
 })(window.RallyOne = window.RallyOne || {});

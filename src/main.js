@@ -34,6 +34,8 @@
   /** スタート画面で選んだ時間帯（'day'｜'night'）と天候（true＝にわか雨が降りうる）。既定は晴れたデー。 */
   let session = 'day';
   let rainOn = false;
+  /** スタート画面で選んだ視点（'third'＝後ろの中継カメラ｜'first'＝自分の選手の目）。既定は三人称。 */
+  let view = 'third';
   /** スタート画面で選んだ試合の長さ（1セットのゲーム数と、何セットマッチか）。config.MATCH_FORMATS */
   let formatGames = MATCH_FORMATS.DEFAULT.games;
   let formatSets = MATCH_FORMATS.DEFAULT.sets;
@@ -259,6 +261,13 @@
       hud.setRainOption(on);
     },
     onToggleRain: () => menu.onSelectRain(!rainOn),
+    // 視点は見え方だけ（ゲームの仕組みは同じ）なので、選んだ時点でそのまま world へ渡す
+    onSelectView: (name) => {
+      view = name;
+      hud.setView(name);
+      world.setView(name);
+    },
+    onToggleView: () => menu.onSelectView(view === 'third' ? 'first' : 'third'),
     onSelectFirstServe: (choice) => {
       firstServe = choice;
       hud.setFirstServe(choice);
@@ -394,6 +403,7 @@
     onCycleFirstServe: () => menu.onCycleFirstServe(),
     onToggleSession: () => menu.onToggleSession(),
     onToggleRain: () => menu.onToggleRain(),
+    onToggleView: () => menu.onToggleView(),
     onCycleGames: () => menu.onCycleGames(),
     onCycleSets: () => menu.onCycleSets(),
     // リプレイのスキップは Space だけ（以前はどのキーでも飛んでしまい、ラリー用の

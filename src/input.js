@@ -71,6 +71,11 @@
    */
   const SESSION_KEYS = ['KeyN'];
   const RAIN_KEYS = ['KeyR'];
+  /**
+   * スタート画面でのみ有効。視点（三人称⇔一人称）を切り替える。F（First person）は試合中だけ
+   * ダブルスの立ち位置の指示（後ろへ）に使うが、スタート画面では空いている。
+   */
+  const VIEW_KEYS = ['KeyF'];
   /** スタート画面でのみ有効。試合の長さ：L（Length）＝ゲーム数、M（Match）＝セット数を順に切り替える。 */
   const GAMES_KEYS = ['KeyL'];
   const SETS_KEYS = ['KeyM'];
@@ -122,7 +127,7 @@
      *   onStandNet:Function, onStandBack:Function,
      *   onSelectDifficulty:Function, onSelectSurface:Function, onSelectStyle:Function,
      *   onToggleGuide:Function, onCycleSpecials:Function, onCycleFirstServe:Function,
-     *   onToggleSession:Function, onToggleRain:Function, onCycleGames:Function, onCycleSets:Function,
+     *   onToggleSession:Function, onToggleRain:Function, onToggleView:Function, onCycleGames:Function, onCycleSets:Function,
      *   onSelectToss:Function, isAwaitingToss:Function,
      *   onSkipReplay:Function, isStarted:Function,
      *   isMatchStatsOpen:Function, onCloseMatchStats:Function,
@@ -166,6 +171,7 @@
           else if (FIRST_SERVE_KEYS.indexOf(e.code) !== -1) handlers.onCycleFirstServe();
           else if (SESSION_KEYS.indexOf(e.code) !== -1) handlers.onToggleSession();
           else if (RAIN_KEYS.indexOf(e.code) !== -1) handlers.onToggleRain();
+          else if (VIEW_KEYS.indexOf(e.code) !== -1) handlers.onToggleView();
           else if (GAMES_KEYS.indexOf(e.code) !== -1) handlers.onCycleGames();
           else if (SETS_KEYS.indexOf(e.code) !== -1) handlers.onCycleSets();
           else handlers.onStart();
