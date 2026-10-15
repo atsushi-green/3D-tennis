@@ -58,16 +58,43 @@
   }
 
   /**
-   * ボールボーイが持ち場 home から立ち位置 stand へ走って行き、かがんで拾って戻る段取り。
-   * times は [走り出す, 着く, かがみきる, 起き上がり始める, 起き上がる, 戻りきる]（秒）、
-   * picked は球を手に取る時刻。
+   * ボールボーイの道のり。持ち場 home から、球ごとの立ち位置へ順に走って行ってはかがんで拾い、
+   * 最後に持ち場へ戻る。stops は [{ball:{x,z}, stand:{x,z}}]（会場の座標）。
+   * segments は時刻順の区間 —— {kind:'run', from, to, t0, t1} と {kind:'pick', stand, ball, t0, t1}
+   * （かがむ DOWN・拾う HOLD・起き上がる UP）。picks[i] は i 番目の球を手に取る時刻、end は
+   * 持ち場へ戻りきる時刻（秒。走り出しの delay を含む）。
    */
-  function pickupTimes(home, stand, delay) {
+  function planRoute(home, stops, delay, speed) {
     const P = OFFICIALS.BALLKID.PICKUP;
-    const run = Math.hypot(stand.x - home.x, stand.z - home.z) / P.SPEED;
-    const times = [delay];
-    [run, P.DOWN, P.HOLD, P.UP, run].forEach((d) => times.push(times[times.length - 1] + d));
-    return { stand, times, picked: times[2] + P.HOLD / 2 };
+    const segments = [];
+    const picks = [];
+    let t = delay;
+    let at = { x: home.x, z: home.z };
+    const runTo = (to) => {
+      const t1 = t + Math.hypot(to.x - at.x, to.z - at.z) / speed;
+      segments.push({ kind: 'run', from: at, to, t0: t, t1 });
+      t = t1;
+      at = to;
+    };
+    stops.forEach(({ ball, stand }) => {
+      runTo(stand);
+      const t1 = t + P.DOWN + P.HOLD + P.UP;
+      segments.push({ kind: 'pick', stand, ball, t0: t, t1 });
+      picks.push(t + P.DOWN + P.HOLD / 2);
+      t = t1;
+    });
+    runTo({ x: home.x, z: home.z });
+    return { segments, picks, end: t, speed };
+  }
+
+  /** 球 ball を拾うとき、from の側から近づいて REACH だけ手前に立つ位置。 */
+  function standBeside(ball, from) {
+    const P = OFFICIALS.BALLKID.PICKUP;
+    const dx = from.x - ball.x;
+    const dz = from.z - ball.z;
+    const d = Math.hypot(dx, dz);
+    if (d <= P.REACH) return { x: from.x, z: from.z };
+    return { x: ball.x + (dx / d) * P.REACH, z: ball.z + (dz / d) * P.REACH };
   }
 
   /**
@@ -5787,7 +5814,7 @@
      * this.netBallRest に置く。ボールボーイの持ち場（OFFICIALS.BALLKID.NET）は会場の座標なので、
      * 段取りも会場の座標で持つ（チェンジエンズは戻りきるまで待たせるので、途中で回らない）。
      * 行くのは球と同じ側（ネットのこちら側／向こう側）の子。球の横 REACH の所に立ってかがむ。
-     * times は [走り出す, 着く, かがみきる, 起き上がり始める, 起き上がる, 戻りきる]（秒）。
+     * 道のりの形は planRoute()。ネット際は次のポイントを待たせるので NET_SPEED で全力で走る。
      */
     planBallKid(x, z) {
       const P = OFFICIALS.BALLKID.PICKUP;
@@ -5803,8 +5830,8 @@
         x: ball.x + side * P.REACH,
         z: (Math.sign(home.z) || 1) * Math.max(Math.abs(ball.z), P.NET_GAP),
       };
-      this.netBallRest = { kid, ball, ...pickupTimes(home, stand, P.DELAY) };
-      this.netBallRest.left = this.netBallRest.times[5]; // 段取りの残り秒数（表示側の時計）
+      this.netBallRest = { kid, ball, ...planRoute(home, [{ ball, stand }], P.DELAY, P.NET_SPEED) };
+      this.netBallRest.left = this.netBallRest.end; // 段取りの残り秒数（表示側の時計）
       this.ballKidLeft = Math.max(this.ballKidLeft, this.netBallRest.left);
     }
 
@@ -5897,10 +5924,9 @@
             if (impact >= L.SOUND_MIN) this.hooks.sound('bounce', 'flat', impact);
           }
         }
-        // サーブの構えの間も、選手の範囲の外（壁際）の球なら拾いに行ける（行き帰りも範囲の外）
-        if (b.rest && (idle || (this.phase === 'serve' && !inPlayArea(b)))) this.planCornerPickup(b);
         return true;
       });
+      this.planCornerTrips(idle);
     }
 
     /**
@@ -5949,26 +5975,50 @@
     }
 
     /**
-     * 止まった片付け前の球 b を、いちばん近いコーナーのボールボーイに拾わせる（その子が別の球を
-     * 拾いに出ていたら、戻るまで次のフレームでまた見る）。選手の動き回る範囲（PLAYER.X_LIMIT・
-     * Z_FAR_MARGIN）の中で止まった球は、拾って戻りきるまで次のポイントを待たせる。
+     * 止まった片付け前の球を、コーナーのボールボーイに拾わせる。球はそれぞれいちばん近い子の
+     * 受け持ちで、受け持ちの球がみな止まったら、1回の道のりで近い順に全部拾ってから持ち場へ
+     * 戻る（1つずつ往復しない）。その子が拾いに出ている間に止まった球は、戻ってから次の道のりで。
+     * ポイント間・フォールトの後（idle）に出る。サーブの構えの間は、受け持ちの球がみな選手の
+     * 動き回る範囲の外（壁際）なら出る（行き帰りも範囲の外）。範囲の中の球を拾う道のりは、
+     * 戻りきるまで次のポイントを待たせる。客席に飛び込んだ球（crowd）は拾わない。
      */
-    planCornerPickup(b) {
+    planCornerTrips(idle) {
       const P = OFFICIALS.BALLKID.PICKUP;
       const kids = OFFICIALS.BALLKID.CORNER;
-      const busy = new Set(this.looseBalls.filter((o) => o.plan).map((o) => o.plan.kid));
-      // いちばん近い子が行く。出払っていたら、遠くの子を走らせずに戻ってくるのを待つ
-      const near = (i) => Math.hypot(kids[i].x - b.x, kids[i].z - b.z);
-      const kid = kids.reduce((best, _, i) => (near(i) < near(best) ? i : best), 0);
-      if (busy.has(kid)) return;
-      const home = kids[kid];
-      const dx = home.x - b.x;
-      const dz = home.z - b.z;
-      const d = Math.hypot(dx, dz);
-      const stand = d > P.REACH ? { x: b.x + (dx / d) * P.REACH, z: b.z + (dz / d) * P.REACH } : { x: home.x, z: home.z };
-      b.plan = { kid, ball: { x: b.x, z: b.z }, ...pickupTimes(home, stand, P.CORNER_DELAY) };
-      b.left = b.plan.times[5];
-      if (inPlayArea(b)) this.ballKidLeft = Math.max(this.ballKidLeft, b.left);
+      const busy = new Set(this.looseBalls.filter((b) => b.plan).map((b) => b.plan.kid));
+      const near = (i, b) => Math.hypot(kids[i].x - b.x, kids[i].z - b.z);
+      const mine = kids.map(() => []);
+      this.looseBalls.forEach((b) => {
+        if (b.plan || b.crowd) return;
+        mine[kids.reduce((best, _, i) => (near(i, b) < near(best, b) ? i : best), 0)].push(b);
+      });
+      mine.forEach((balls, kid) => {
+        if (!balls.length || busy.has(kid) || balls.some((b) => !b.rest)) return;
+        const inside = balls.some(inPlayArea);
+        if (!idle && !(this.phase === 'serve' && !inside)) return;
+        // 近い順にたどる（いまいる所からいちばん近い球へ、を繰り返す）
+        const home = kids[kid];
+        const order = [];
+        const left = balls.slice();
+        let at = home;
+        while (left.length) {
+          let i = 0;
+          left.forEach((b, j) => {
+            if (Math.hypot(b.x - at.x, b.z - at.z) < Math.hypot(left[i].x - at.x, left[i].z - at.z)) i = j;
+          });
+          const b = left.splice(i, 1)[0];
+          const stand = standBeside(b, at);
+          order.push({ b, ball: { x: b.x, z: b.z }, stand });
+          at = stand;
+        }
+        const trip = { kid, ...planRoute(home, order, P.CORNER_DELAY, P.SPEED) };
+        order.forEach(({ b }, i) => {
+          b.plan = trip;
+          b.pickAt = trip.picks[i];
+          b.left = trip.end;
+        });
+        if (inside) this.ballKidLeft = Math.max(this.ballKidLeft, trip.end);
+      });
     }
 
     /**

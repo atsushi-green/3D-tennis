@@ -62,7 +62,7 @@
     const hip = kid.hipY * lerp(1, P.HIP, c);
     const bob = run ? Math.abs(Math.sin(phase)) * P.BOB : 0;
     kid.waist.position.y = hip + bob;
-    kid.waist.rotation.x = P.BEND * c;
+    kid.waist.rotation.x = P.BEND * c + (run ? P.RUN_LEAN : 0);
     const swing = run ? Math.sin(phase) : 0;
     kid.hips.forEach((h, i) => {
       h.position.y = hip + bob;
@@ -125,54 +125,62 @@
     }
 
     /**
-     * 段取り plan の時刻 t の位置へ kid を置いて姿勢を決め、球を拾っていればその手の位置を返す
-     * （まだなら null）。
+     * 道のり plan（game.js#planRoute）の時刻 t の位置へ kid を置いて姿勢を決める。最初の球を
+     * 拾ってからは、+x 側の腕を前へ出して持ったまま走る。
      */
     function act(kid, plan, t, dt) {
-      const { ball, stand, picked } = plan;
-      const [t0, t1, t2, t3, t4, t5] = plan.times;
-      const home = { x: kid.x, z: kid.z };
-      let pos = home;
+      const seg = plan.segments.find((s) => t < s.t1) || plan.segments[plan.segments.length - 1];
+      let pos = { x: kid.x, z: kid.z };
       let target = kid.facing;
       let crouch = 0;
       let run = false;
       let phase = 0;
-      const carry = t >= picked ? (t - picked) / (t4 - picked) : 0;
-      if (t >= t0 && t < t1) {
-        const u = (t - t0) / (t1 - t0);
-        pos = { x: lerp(home.x, stand.x, u), z: lerp(home.z, stand.z, u) };
-        target = Math.atan2(stand.x - home.x, stand.z - home.z);
+      if (t >= seg.t0 && seg.kind === 'run') {
+        const u = clamp((t - seg.t0) / Math.max(1e-6, seg.t1 - seg.t0), 0, 1);
+        pos = { x: lerp(seg.from.x, seg.to.x, u), z: lerp(seg.from.z, seg.to.z, u) };
+        target = Math.atan2(seg.to.x - seg.from.x, seg.to.z - seg.from.z);
         run = true;
-        phase = (u * (t1 - t0) * P.SPEED / P.STRIDE) * Math.PI;
-      } else if (t >= t1 && t < t4) {
-        pos = stand;
-        target = Math.atan2(ball.x - stand.x, ball.z - stand.z);
-        crouch = t < t2 ? (t - t1) / P.DOWN : t < t3 ? 1 : 1 - (t - t3) / P.UP;
-      } else if (t >= t4 && t < t5) {
-        const u = (t - t4) / (t5 - t4);
-        pos = { x: lerp(stand.x, home.x, u), z: lerp(stand.z, home.z, u) };
-        target = Math.atan2(home.x - stand.x, home.z - stand.z);
-        run = true;
-        phase = (u * (t5 - t4) * P.SPEED / P.STRIDE) * Math.PI;
+        phase = ((t - seg.t0) * plan.speed / P.STRIDE) * Math.PI;
+      } else if (t >= seg.t0) {
+        const u = t - seg.t0;
+        pos = seg.stand;
+        target = Math.atan2(seg.ball.x - seg.stand.x, seg.ball.z - seg.stand.z);
+        crouch = u < P.DOWN ? u / P.DOWN : u < P.DOWN + P.HOLD ? 1 : 1 - (u - P.DOWN - P.HOLD) / P.UP;
       }
+      const first = plan.picks[0];
+      const carry = t >= first ? (t - first) / (P.HOLD / 2 + P.UP) : 0;
       kid.yaw += angleDiff(target, kid.yaw) * Math.min(1, P.TURN * dt);
       kid.mesh.position.set(pos.x, 0, pos.z);
       kid.mesh.rotation.y = kid.yaw;
       pose(kid, crouch, phase, run, carry);
-      if (t < picked) return null;
-      // 拾ってからは、球を持った手（+x 側の腕の先）に付けて運ぶ
+    }
+
+    /** 球を持つ手（+x 側の腕の先）の位置（会場の座標）。 */
+    function handOf(kid) {
       kid.mesh.updateMatrixWorld(true);
       hand.set(0, -kid.armLen - PHYSICS.BALL_R, 0);
       kid.arms[1].localToWorld(hand);
       return venue.worldToLocal(hand);
     }
 
-    /** ボールボーイ1人ぶんの段取りを進め、その球を置く。 */
-    function fetch(key, kid, plan, left, dt) {
-      const p = prop(key);
-      const held = act(kid, plan, plan.times[5] - left, dt);
-      if (held) place(p, held.x, held.y, held.z);
-      else place(p, plan.ball.x, PHYSICS.BALL_R, plan.ball.z);
+    /**
+     * ボールボーイ1人ぶんの道のりを進め、拾いに行く球を置く。balls は [{key, ball:{x,z}, pickAt}]。
+     * 拾った球は手に持ち、2つ目からはその上に重ねて持つ。
+     */
+    function fetch(kid, plan, left, balls, dt) {
+      const t = plan.end - left;
+      act(kid, plan, t, dt);
+      const held = handOf(kid);
+      let k = 0;
+      balls.slice().sort((a, b) => a.pickAt - b.pickAt).forEach(({ key, ball, pickAt }) => {
+        const p = prop(key);
+        if (t < pickAt) {
+          place(p, ball.x, PHYSICS.BALL_R, ball.z);
+          return;
+        }
+        place(p, held.x, held.y + k * PHYSICS.BALL_R * 1.8, held.z);
+        k++;
+      });
       return kid;
     }
 
@@ -186,16 +194,21 @@
       const busy = new Set();
       if (!replaying) {
         const plan = state.netBallRest;
-        if (active(state)) busy.add(fetch('net', net[plan.kid], plan, plan.left, dt));
+        if (active(state)) {
+          busy.add(fetch(net[plan.kid], plan, plan.left, [{ key: 'net', ball: plan.ball, pickAt: plan.picks[0] }], dt));
+        }
+        const trips = new Map(); // 道のり → その道のりで拾う球
         (state.looseBalls || []).forEach((b) => {
           if (b.plan) {
-            busy.add(fetch(b.id, corner[b.plan.kid], b.plan, b.left, dt));
+            if (!trips.has(b.plan)) trips.set(b.plan, { left: b.left, balls: [] });
+            trips.get(b.plan).balls.push({ key: b.id, ball: { x: b.x, z: b.z }, pickAt: b.pickAt });
           } else {
             const p = prop(b.id);
             place(p, b.x, b.y, b.z);
             if (b.crowd) p.shadow.visible = false; // 客席の段の上（地面の影は壁の裏に落ちる）
           }
         });
+        trips.forEach(({ left, balls }, trip) => busy.add(fetch(corner[trip.kid], trip, left, balls, dt)));
       }
       all.forEach((kid) => { if (!busy.has(kid)) goHome(kid); });
       props.forEach((p, key) => {

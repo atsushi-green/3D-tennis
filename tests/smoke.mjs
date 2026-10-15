@@ -6059,15 +6059,16 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   g.planBallKid(1.5, -0.25);
   const plan = g.netBallRest;
   ok(Math.sign(B.NET[plan.kid].z) === -1, `the kid on the ball's side of the net goes, got ${plan.kid}`);
-  ok(Math.abs(plan.stand.z) >= B.PICKUP.NET_GAP && Math.sign(plan.stand.z) === -1, 'and stands clear of the net on its own side');
-  ok(g.ballKidLeft === plan.times[5] && plan.times[5] > plan.picked, 'the court is busy until the kid is back');
+  const stand = plan.segments.find((s) => s.kind === 'pick').stand;
+  ok(Math.abs(stand.z) >= B.PICKUP.NET_GAP && Math.sign(stand.z) === -1, 'and stands clear of the net on its own side');
+  ok(g.ballKidLeft === plan.end && plan.end > plan.picks[0], 'the court is busy until the kid is back');
   let calledAt = null;
   const dt = 1 / 60;
   let t = 0;
   g.whenCourtClear(() => { calledAt = t; });
   while (t < 10 && calledAt === null) { t += dt; g.ballKidLeft = Math.max(0, g.ballKidLeft - dt); g.tickTimers(dt); }
-  ok(calledAt !== null && calledAt >= plan.times[5] - 1e-9 && calledAt < plan.times[5] + 2 * dt,
-    `the next point waits for the kid, ${calledAt} vs ${plan.times[5]}`);
+  ok(calledAt !== null && calledAt >= plan.end - 1e-9 && calledAt < plan.end + 2 * dt,
+    `the next point waits for the kid, ${calledAt} vs ${plan.end}`);
   g.endsSwapped = true;
   g.planBallKid(1.5, -0.25);
   ok(Math.sign(B.NET[g.netBallRest.kid].z) === 1, 'after changing ends the other kid (same side in the venue) goes');
@@ -6142,6 +6143,33 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   ok(maxLoose <= 5, `loose balls do not pile up: at most ${maxLoose}`); // フォールト続きで一時的に2〜3個は残る
   ok(maxTimers <= 2, `timers do not leak with the ball kids: at most ${maxTimers}`);
   ok(g3.looseBalls.every((b) => Number.isFinite(b.x) && Number.isFinite(b.z)), 'loose balls stay finite');
+  B.PICKUP.ENABLED = false;
+}
+
+// --- コーナーのボールボーイは、受け持ちの球が何個あっても1回の道のりで全部拾って戻る ---
+{
+  const B = R.config.OFFICIALS.BALLKID;
+  B.PICKUP.ENABLED = true;
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(false, 'you');
+  g.phase = 'over';
+  [[2, -18.5], [5, -18.3], [8, -18.6]].forEach(([x, z]) => {
+    Object.assign(g.ball, { x, y: R.config.PHYSICS.BALL_R, z, vx: 0, vy: 0, vz: 0, live: false, parked: false });
+    g.releaseBall();
+  });
+  for (let i = 0; i < 30; i++) g.tickLooseBalls(1 / 60);
+  const trips = new Set(g.looseBalls.map((b) => b.plan));
+  ok(g.looseBalls.length === 3 && trips.size === 1 && !trips.has(null), `one kid goes for all three in one trip, ${trips.size} trips`);
+  const trip = [...trips][0];
+  ok(trip.segments.filter((s) => s.kind === 'pick').length === 3 && trip.segments.filter((s) => s.kind === 'run').length === 4,
+    'running ball to ball and back home only once');
+  const picks = g.looseBalls.map((b) => b.pickAt).sort((a, b) => a - b);
+  ok(picks[0] < picks[1] && picks[1] < picks[2] && picks[2] < trip.end, 'picking them up one after another');
+  let n = 0;
+  while (g.looseBalls.length && n++ < 60 * 30) g.tickLooseBalls(1 / 60);
+  ok(g.looseBalls.length === 0, 'all three are gone once the kid is back');
+  // ネット際の子はコーナーの子より速く走る
+  ok(B.PICKUP.NET_SPEED > B.PICKUP.SPEED, 'the net kid sprints');
   B.PICKUP.ENABLED = false;
 }
 
