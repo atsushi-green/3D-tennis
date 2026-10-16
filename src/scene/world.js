@@ -142,17 +142,25 @@
     /**
      * 一人称の注視点。普段は相手コートの前方を見ていて、自分より前にある球は BALL_TRACK の
      * 割合だけ目で追う（背後へ抜けた球・トスで真上にある球では振り向かない）。
+     * 高く上がった球だけは HIGH_TRACK の高さに応じて強く追い、ロブを見上げる。相手の打った
+     * 高い球は頭上を少し越えても（HIGH_BEHIND まで）真上を見上げて追う（後ろへは振り向かない）。
      */
     function firstPersonLook(state, out) {
       const F = CAMERA.FIRST_PERSON;
       const p = state.you;
       const b = state.ball;
       out.set(p.x * (1 - F.LOOK_X), F.LOOK_Y, p.z + F.LOOK_AHEAD);
-      if (b && ballMesh.visible && b.z > p.z + F.TRACK_MIN_Z) {
-        out.x = lerp(out.x, b.x, F.BALL_TRACK);
-        out.y = lerp(out.y, b.y, F.BALL_TRACK);
-        out.z = lerp(out.z, b.z, F.BALL_TRACK);
-      }
+      if (!b || !ballMesh.visible) return out;
+      const H = F.HIGH_TRACK;
+      const high = clamp((b.y - H.FROM_Y) / (H.FULL_Y - H.FROM_Y), 0, 1);
+      const ahead = b.z > p.z + F.TRACK_MIN_Z;
+      const overhead = high > 0 && b.last === 'cpu' && b.z > p.z - H.BEHIND;
+      if (!ahead && !overhead) return out;
+      const w = lerp(F.BALL_TRACK, H.WEIGHT, high);
+      out.x = lerp(out.x, b.x, w);
+      out.y = lerp(out.y, b.y, w);
+      // 真上より後ろの点を見ると振り向いてしまうので、注視点は目より少し前に留める
+      out.z = Math.max(lerp(out.z, b.z, w), fpEye.z + H.MIN_AHEAD);
       return out;
     }
 
