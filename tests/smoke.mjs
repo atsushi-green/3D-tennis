@@ -3890,13 +3890,20 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
       `the partner's "stay back" order does not drag you back too, z=${g.you.z}`);
   }
 
-  // サーブ前でなければ（ラリー中）R/F は何もしない。シングルスでも何もしない
+  // ラリー中・ポイント間の R/F はその場では動かさないが、覚えておいて次のポイントの構えから効く
+  // （退行テスト：以前はサーブ待ち以外の R/F を黙って捨てていたので「効かない」ように見えた）。
+  // シングルスでは何もしない
   {
-    const { g } = setup('youMate');
+    const { g, calls } = setup('youMate');
     g.phase = 'rally';
     g.you.x = 1.234; g.you.z = -5.678;
     g.setYouFormation('back');
-    ok(near(g.you.z, -5.678) && g.youFormation === 'net', `R/F do nothing during a rally, z=${g.you.z}`);
+    ok(near(g.you.z, -5.678), `R/F do not teleport you during a rally, z=${g.you.z}`);
+    ok(g.youFormation === 'back' && calls.some((c) => c.startsWith('自分:次のポイントから')),
+      `but the order is kept and acknowledged, calls=${calls}`);
+    g.phase = 'over';
+    g.newPoint(); // 得点は動かしていない＝同じ並びでもう一度（パートナーのサーブ）
+    ok(near(g.you.z, DOUBLES.BACK_Z_YOU), `the order takes effect at the next point, z=${g.you.z}`);
 
     const s = new R.Game({ input: fakeInput, hooks: noHooks });
     s.start(false);

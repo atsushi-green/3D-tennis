@@ -960,7 +960,7 @@
        * ダブルスで、人間(you)がサーブ前に立つ位置。'net'（前）か 'back'（後ろ）。
        * 相方がサーバー／レシーバーの番にだけ効き（placeDoublesMate）、次のポイント以降も
        * 覚えておく（youMateFormation と同じ）。ポイントが始まれば人間は自由に走れるので、
-       * ラリー中の動きには関係しない。以前は人間の立ち位置も youMateFormation で決めていた
+       * ラリー中の動きには関係しない（ラリー中に指示しても、次のポイントの構えから効く）。以前は人間の立ち位置も youMateFormation で決めていた
        * ため、パートナーに「下がれ」と言うと、パートナーがサーブする番では人間まで
        * ベースラインに下げられていた。
        */
@@ -1295,21 +1295,25 @@
 
     /**
      * ダブルスで、サーブ前の自分（人間）の立ち位置を指示する。'net'＝前（ネット際）、
-     * 'back'＝後ろ（ベースライン付近）。サーブ待ちの間（phase==='serve'）だけ効き、
-     * その場で置き直す。自分がサーバー／レシーバーの番は動かさない。
-     * 選んだ位置は覚えておき、次に相方が担当する番でもそこに立つ（youFormation）。
+     * 'back'＝後ろ（ベースライン付近）。選んだ位置は覚えておき（youFormation）、相方が
+     * サーバー／レシーバーの番のサーブ前の構え（placeDoublesMate）に使う。
+     * サーブ待ちの間（phase==='serve'）なら、その場で置き直す。ラリー中やポイント間に
+     * 押した指示は、次のポイントの構えから効く（setYouMateFormation と同じ）。以前は
+     * サーブ待ちの間（CPU／パートナーのサーブだと構えてから打つまで2秒ほど）しか受け付けず、
+     * それ以外に押すと何の反応もなく捨てていたため「R/F が効かない」ように見えていた。
+     * 自分がサーバー／レシーバーの番のサーブ待ちでは、立つ位置がルールで決まっているので動かさない。
      * @param {'net'|'back'} formation
      */
     setYouFormation(formation) {
-      if (!this.doubles || this.phase !== 'serve') return;
-      const duty = this.serveDuty('you');
+      if (!this.doubles) return;
+      const duty = this.phase === 'serve' && this.serveDuty('you');
       if (duty) {
         this.flashCall('自分', `${duty}担当は立ち位置を変えられません`);
         return;
       }
       this.youFormation = formation;
-      this.placeBeforeServe('you');
-      this.flashCall('自分', formation === 'net' ? '前に立つ' : '後ろに立つ');
+      const where = formation === 'net' ? '前に立つ' : '後ろに立つ';
+      this.flashCall('自分', this.placeBeforeServe('you') ? where : `次のポイントから${where}`);
     }
 
     /**
