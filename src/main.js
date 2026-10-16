@@ -9,7 +9,9 @@
     SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE, LINE_CALL, REPLAY,
   } = RallyOne.config;
   const { clamp } = RallyOne.math;
-  const { sfx, unlock } = RallyOne.audio;
+  const { sfx, unlock, place } = RallyOne.audio;
+  /** 球の位置から聞こえるように定位する音（hooks.sound の名前） */
+  const BALL_SOUNDS = new Set(['serve', 'hit', 'bounce', 'netIn']);
 
   const input = new RallyOne.Input();
   const hud = new RallyOne.Hud();
@@ -97,7 +99,13 @@
   const createGame = () => new RallyOne.Game({
     input,
     hooks: {
-      sound: (name, ...args) => sfx[name](...args),
+      // 球が鳴らす音（打球・バウンド・ネット）は、球のいる場所から聞こえるように定位する
+      // （AUDIO.SPATIAL。カメラから見て左右・背後）。それ以外の音は今までどおり真ん中で鳴らす。
+      sound: (name, ...args) => {
+        place(BALL_SOUNDS.has(name) ? world.earOf(game.ball) : null);
+        sfx[name](...args);
+        place(null);
+      },
       call: (big, sub, shot) => hud.showCall(big, sub, shot),
       clearCall: () => hud.hideCall(),
       score: () => hud.renderScore(game.match, game.server, game.stats),

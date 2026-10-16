@@ -202,6 +202,19 @@
     }
 
     /**
+     * その位置で鳴った音がカメラ（＝耳）からどう聞こえるか（audio.js#place に渡す）。
+     * pan＝左右（-1 左〜1 右）、behind＝背後の度合い（0 前〜1 真後ろ）。
+     * @param {{x:number, y:number, z:number}} at
+     */
+    const _ear = new THREE.Vector3();
+    function earOf(at) {
+      camera.updateMatrixWorld();
+      camera.worldToLocal(_ear.set(at.x, at.y, at.z)); // カメラの座標：+x＝右、-z＝前
+      const d = Math.hypot(_ear.x, _ear.z) || 1;
+      return { pan: clamp(_ear.x / d, -1, 1), behind: clamp(_ear.z / d, 0, 1) };
+    }
+
+    /**
      * 視点を切り替える（'third'｜'first'）。次の sync() でいつもの画面へ瞬時に切り替わる
      * （三人称の高い位置から目の高さへ lerp で降りてくる途中を見せない）。
      */
@@ -842,7 +855,7 @@
     return {
       sync, render: stage.render, scene, camera, setSurface, startReplay, skipReplay, isReplaying,
       isCheckingMark, captureClip, pruneClips, resetClips, playHighlights, highlightInfo,
-      setSession, setView, rainLevel: () => weather.rainLevel(),
+      setSession, setView, earOf, rainLevel: () => weather.rainLevel(),
     };
   };
 })(window.RallyOne = window.RallyOne || {});

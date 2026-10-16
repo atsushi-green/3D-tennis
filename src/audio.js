@@ -54,6 +54,35 @@
   const SILENCE = 0.0001;
 
   /**
+   * 次に鳴らす音がどこで鳴ったか（AUDIO.SPATIAL）。{pan:-1〜1（左〜右）, behind:0〜1（前〜真後ろ）}。
+   * main.js が鳴らす直前に place() で入れ、鳴らし終えたら null に戻す（null＝真ん中で鳴らす）。
+   */
+  let placing = null;
+  function place(at) {
+    placing = at;
+  }
+
+  /**
+   * 音のつなぎ先。定位が入っていれば、背後の音をこもらせるローパスと左右の振りを通してから
+   * スピーカーへ（1発ぶんの音の層はすべて同じつなぎ先を共有する）。
+   */
+  function out(ac) {
+    if (!placing) return ac.destination;
+    const S = AUDIO.SPATIAL;
+    const lowpass = ac.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    lowpass.frequency.value = lerp(S.OPEN_HZ, S.BEHIND_LOWPASS_HZ, clamp(placing.behind, 0, 1));
+    if (ac.createStereoPanner) {
+      const panner = ac.createStereoPanner();
+      panner.pan.value = clamp(placing.pan, -1, 1) * S.PAN_MAX;
+      lowpass.connect(panner).connect(ac.destination);
+    } else {
+      lowpass.connect(ac.destination);
+    }
+    return lowpass;
+  }
+
+  /**
    * 立ち上がり(AUDIO.ATTACK)だけ持たせて指数的に減衰するエンベロープ。
    * ATTACK が 0 だと頭にプツッというデジタルなクリックが乗る。
    */
@@ -95,7 +124,7 @@
   /**
    * 胴鳴り（ボディ層）。当たった瞬間の高さから DROP 倍まで一気に落ちることで、
    * 一定の音程の「ピー」ではなく打撃音の「コッ」に聞こえる。
-   * @param {{vol:number, hz:number, drop:number, dur:number, wave?:string}} o
+   * @param {{vol:number, hz:number, drop:number, dur:number, wave?:string, dest?:AudioNode}} o
    */
   function bodyVoice(ac, o) {
     const vol = jVol(o.vol);
@@ -107,7 +136,7 @@
     const t0 = ac.currentTime;
     osc.frequency.setValueAtTime(hz, t0);
     osc.frequency.exponentialRampToValueAtTime(Math.max(20, hz * o.drop), t0 + dur);
-    osc.connect(envelope(ac, vol, dur)).connect(ac.destination);
+    osc.connect(envelope(ac, vol, dur)).connect(o.dest || ac.destination);
     osc.start(t0);
     osc.stop(t0 + dur);
   }
@@ -125,17 +154,20 @@
     const gain = mod.gain === undefined ? 1 : mod.gain;
     const dur = mod.dur === undefined ? 1 : mod.dur;
     try {
+      const dest = out(ac);
       noiseVoice(ac, {
         vol: voice.NOISE_VOL * gain,
         hz: voice.NOISE_HZ * pitch,
         q: voice.NOISE_Q,
         dur: voice.NOISE_DUR * dur,
+        dest,
       });
       bodyVoice(ac, {
         vol: voice.BODY_VOL * gain,
         hz: voice.BODY_HZ * pitch,
         drop: voice.BODY_DROP,
         dur: voice.BODY_DUR * dur,
+        dest,
       });
       if (voice.BRUSH_VOL) {
         noiseVoice(ac, {
@@ -144,6 +176,7 @@
           hz: voice.BRUSH_HZ,
           q: 0.7,
           dur: voice.BRUSH_DUR * dur,
+          dest,
         });
       }
     } catch (e) {
@@ -847,7 +880,8 @@
       // 指数で落とすと出た直後に萎んで「プチッ」としか聞こえないので、保ってから下ろす
       amp.gain.setValueAtTime(vol, t0 + dur * G.HOLD);
       amp.gain.linearRampToValueAtTime(SILENCE, t0 + dur);
-      amp.connect(ac.destination);
+      const dest = out(ac); // 打った選手の位置（＝打った瞬間の球の位置）から聞こえる
+      amp.connect(dest);
       G.FORMANTS.forEach(([hz, g]) => {
         const bp = ac.createBiquadFilter();
         bp.type = 'bandpass';
@@ -859,7 +893,9 @@
       });
       src.start(t0);
       src.stop(t0 + dur + 0.02);
-      noiseVoice(ac, { type: 'bandpass', vol: G.BREATH_VOL * T.VOL, hz: G.BREATH_HZ, q: 0.8, dur });
+      noiseVoice(ac, {
+        type: 'bandpass', vol: G.BREATH_VOL * T.VOL, hz: G.BREATH_HZ, q: 0.8, dur, dest,
+      });
     } catch (e) {
       /* 音が出ないだけなのでゲームは続行 */
     }
@@ -996,6 +1032,7 @@
             hz: B.SKID_HZ,
             q: 0.7,
             dur: B.SKID_DUR,
+            dest: out(ac),
           });
         } catch (e) {
           /* 音が出ないだけなのでゲームは続行 */
@@ -1047,5 +1084,5 @@
     matchPointEnd: () => settleRoar(),
   };
 
-  RallyOne.audio = { unlock, sfx };
+  RallyOne.audio = { unlock, sfx, place };
 })(window.RallyOne = window.RallyOne || {});
