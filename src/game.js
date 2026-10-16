@@ -4726,7 +4726,10 @@
       // テイクバックではなく「頭の後ろに担ぐ振りかぶり」の構えにする（そのまま離せば
       // スマッシュになる、ということが構えの時点で見て分かる）。
       const windUpSmash = this.you.charging && !!this.smashHint && this.smashHint.ready;
-      this.you.prep = windUpSmash
+      // 溜めていなくても、叩けるロブが上がってきて間に合うなら、実際の選手と同じく半身になって
+      // 逆手で球を指す（振り付け MOTION.SMASH の φ0）。一人称では、この手の先が照準になる。
+      const pointAtLob = !this.you.charging && !!this.smashHint && this.smashHint.inTime;
+      this.you.prep = windUpSmash || pointAtLob
         ? 'smash'
         : this.you.charging
           ? this.you.chargeStroke

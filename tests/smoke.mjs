@@ -11010,5 +11010,19 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   RULES.SETS_TO_WIN = saved.sets;
 }
 
+// --- 叩けるロブが上がってきたら、溜めていなくても半身になって逆手で指す（スマッシュの構え） ---
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(false, 'you');
+  g.phase = 'rally';
+  g.you.charging = false;
+  g.smashHint = { x: 0, z: -2, y: 2.6, t: 0.8, ready: false, inTime: true };
+  g.updatePrep();
+  ok(g.you.prep === 'smash', `pointing at an incoming lob uses the smash wind-up: ${g.you.prep}`);
+  g.smashHint = { x: 0, z: -2, y: 2.6, t: 0.2, ready: false, inTime: false };
+  g.updatePrep();
+  ok(g.you.prep !== 'smash', `but not when it is too late to get there: ${g.you.prep}`);
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);
