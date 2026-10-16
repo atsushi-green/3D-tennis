@@ -4786,6 +4786,33 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   }
 }
 
+// --- ラリー中の溜め：フォア/バックは相手が打った瞬間と離した瞬間に決め直す ---
+// 以前は chargeStart() の瞬間に固定したまま変えなかったため、相手が打つ前から溜めていたり、
+// 溜めながら走って球の反対側へ回り込んだりすると、逆の向きで振っていた（ユーザー報告。
+// レシーブは serve() が打たれた瞬間に決め直すので起きなかった）。
+{
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.phase = 'rally';
+  // 人間のフォア側は world -x。x=+5 に立てば、相手がコートのどこへ打ってもフォア側に来る
+  g.you.x = 5; g.you.z = -HALF_L - 0.6;
+  // 自分の打球がまだ相手コートへ飛んでいる最中（バック側＝world +x 寄り）に溜め始める
+  Object.assign(g.ball, { x: 6, y: 1, z: HALF_L, vx: 0, vy: 0, vz: 0, bounces: 1, last: 'you' });
+  g.cpu.x = 6; g.cpu.z = HALF_L + 0.6;
+  g.chargeStart('flat');
+  ok(g.you.chargeStroke === 'backhand', `precondition: the takeback starts as a backhand, got ${g.you.chargeStroke}`);
+  g.hit('cpu');
+  ok(g.you.chargeStroke === 'forehand',
+    `the opponent's shot re-decides forehand/backhand while charging, got ${g.you.chargeStroke}`);
+  // 溜めたまま球の反対側へ走り込んでから離す（相手の打球はランダムなので、ここでは
+  // 球をまっすぐ自分の深さへ向かわせ、その延長線の 1m 左＝フォアの逆側に立つ）
+  Object.assign(g.ball, { x: 0, z: 0, vx: 0, vz: -20, vy: 0 });
+  g.you.x = -1;
+  ok(g.currentStroke() === 'backhand', `the special-move preview follows the ball while charging, got ${g.currentStroke()}`);
+  g.chargeRelease();
+  ok(g.you.chargeStroke === 'backhand', `releasing re-decides it from where the ball is now, got ${g.you.chargeStroke}`);
+}
+
 // --- スピン選択：B=フラット／V=トップスピン／C=スライス、それぞれ独立した溜め・スイングキー ---
 // chargeStart(spin) の引数（押されたキーに対応するスピン）をその瞬間に固定する。当たる瞬間
 // まで押し続ける必要はない（chargeStroke（フォア/バック）と同じ方式）。
@@ -8071,9 +8098,9 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   {
     const scene = (g) => {
       g.you.z = -9;
-      ballAt(g, 1.0);
       chargeUp(g);      // 溜め（鷹の目の条件）
       draggedWide(g);   // 振り回されたフォアのトップスピン（バギーホイップの条件）
+      ballAt(g, 1.0);   // 振り回された先のフォア側（溜めている間のフォア/バックは今の球で決まる）
     };
     const both = rally(['hawkEye', 'buggyWhip']);
     scene(both);
@@ -8170,9 +8197,9 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   {
     const g = rally(['buggyWhip', 'hawkEye']);
     g.you.z = -9;
-    ballAt(g, 1.0);
     chargeUp(g);    // 振り回されたフォアのトップスピンを溜めて打つ場面＝
     draggedWide(g); // バギーホイップ（優先度が上）と鷹の目の両方が条件を満たす
+    ballAt(g, 1.0); // 振り回された先のフォア側
     ok(g.pickSpecial() === 'buggyWhip', `precondition: the buggy whip is picked first, got ${g.pickSpecial()}`);
     g.spendSpecial('buggyWhip');
     ok(g.usesLeft('buggyWhip') === 0 && g.usesLeft('hawkEye') === SPECIAL.USES_PER_GAME,

@@ -1460,6 +1460,9 @@
       // 離した瞬間に「必殺技が乗るか」を確定させる（＝この1振りにだけ乗る）。
       // specialAim() はラリー中「溜めている間」だけ候補を出すので、charging を
       // 落とすより先に聞くこと。回数を減らすのは実際に技が起きたとき（spendSpecial）。
+      // フォア/バックは離した瞬間の球との位置関係で決め直す（recommitStroke()）。技の条件
+      // （ジャックナイフ＝バック、バギーホイップ＝フォア）も決め直した向きで見る。
+      if (this.phase === 'rally') this.recommitStroke();
       const armed = this.specialAim();
       const move = (armed && armed.move) || null;
       this.armSpecial(move); // 技が出ないときは null で上書きする（前の1振りを持ち越さない）
@@ -1559,11 +1562,29 @@
     }
 
     /**
-     * いま振ったらフォアハンドとバックハンドのどちらになるか。溜め始めに固定した向き
-     * （chargeStroke）があればそれ、なければ今のボールとの位置関係で見積もる。
+     * 溜めている間のフォア/バック（chargeStroke）を、いまの球で決め直す。
+     * chargeStart() で固定した向きは、押した時点の球（相手が打つ前なら自分の打球が
+     * 遠ざかっている最中）で決めたもので、溜めながら走って球の反対側へ回り込んだり、
+     * 相手が逆側へ打ってきたりすると逆のまま振ってしまっていた（ユーザー報告：レシーブは
+     * serve() が打たれた瞬間に決め直すので起きない）。そこで相手が打った瞬間（hit()）と
+     * 離した瞬間（chargeRelease()）に決め直す。溜めている途中の毎フレームの判定し直しは
+     * しない（テイクバックの向きが細かく反転して見えるため）。
+     * 判定は serve() と同じ仮想延長線（classifyStroke）。predictContact() の打点は
+     * 「リーチの円に入った瞬間」で、斜めに来る球だと体の反対側になりうるので使わない。
+     */
+    recommitStroke() {
+      if (this.you.charging) this.you.chargeStroke = classifyStroke('you', this.ball, this.you);
+    }
+
+    /**
+     * いま振ったらフォアハンドとバックハンドのどちらになるか。ラリー中に溜めているなら、
+     * 離した瞬間に recommitStroke() が決め直すのと同じ今のボールとの位置関係（＝技の予告と
+     * 実際に出る技が食い違わない）。それ以外は溜め始めに固定した向き（chargeStroke）、
+     * なければ今のボールとの位置関係で見積もる。
      * @returns {'forehand'|'backhand'}
      */
     currentStroke() {
+      if (this.phase === 'rally' && this.you.charging) return classifyStroke('you', this.ball, this.you);
       return this.you.chargeStroke || classifyStroke('you', this.ball, this.you);
     }
 
@@ -3157,6 +3178,9 @@
       ball.windZ = this.windZ;
       ball.last = TEAM_OF[who]; // スコア判定はチーム単位。誰が打ったかは player.stroke 側で個別に持つ
       ball.bounces = 0;
+      // 相手が打つ前から溜めていたなら、フォア/バックはこの球で決め直す（recommitStroke()。
+      // レシーブで serve() がしているのと同じ）
+      if (TEAM_OF[who] !== 'you') this.recommitStroke();
       ball.age = 0; // ここから相手の「反応に使える時間」を数え直す
       // 必殺技はフル溜め扱いの演出にする（溜めずに出しても「必殺技を打った」感が出る）。
       // 打った強さの演出（閃光・ボールの膨らみ・打球音・振り抜きの大きさ）。人間は溜め量、
@@ -3472,7 +3496,7 @@
      */
     previewStroke(contact, charge, special) {
       const at = contact || this.ball;
-      const base = this.you.chargeStroke || classifyStroke('you', this.ball, this.you);
+      const base = this.currentStroke();
       if (special === 'dunkSmash') return 'smash';
       if (special === 'divingVolley') return `volley-${base}`;
       if (special === 'tweener') return 'tweener';
