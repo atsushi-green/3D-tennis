@@ -311,7 +311,8 @@
 
     /**
      * サーブ待ちの時計と、ボールボーイの投げ渡しを始めるかどうかを進める（生の state のときだけ）。
-     * 投げ渡すのは自分のファーストサーブの番だけ。トスを上げたらそこで打ち切る。
+     * 投げ渡すのは一人称視点での自分のファーストサーブの番だけ。トスを上げたら、または
+     * 一人称以外に切り替えたらそこで打ち切る（球はすぐサーバーの手に現れる）。
      */
     function tickServeWait(state, dt) {
       if (state.phase !== 'serve') {
@@ -322,12 +323,13 @@
       }
       if (servePhaseT < 0) {
         servePhaseT = 0;
-        serveFeed = state.servingPlayer() === 'you' && state.serveNumber === 1 && !state.practice;
+        serveFeed = view === 'first' && state.servingPlayer() === 'you' && state.serveNumber === 1
+          && !state.practice;
         feedCaughtT = -1;
       } else {
         servePhaseT += dt;
       }
-      if (state.tossActive) serveFeed = false;
+      if (state.tossActive || view !== 'first') serveFeed = false;
       if (feedState && feedState.caught) feedCaughtT = feedCaughtT < 0 ? 0 : feedCaughtT + dt;
     }
 
