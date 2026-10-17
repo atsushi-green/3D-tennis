@@ -9,6 +9,7 @@
     SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE, LINE_CALL, REPLAY,
   } = RallyOne.config;
   const { clamp } = RallyOne.math;
+  const { pointLabel } = RallyOne.scoring;
   const { sfx, unlock, place } = RallyOne.audio;
   /** 球の位置から聞こえるように定位する音（hooks.sound の名前） */
   const BALL_SOUNDS = new Set(['serve', 'hit', 'bounce', 'netIn']);
@@ -108,7 +109,7 @@
       },
       call: (big, sub, shot) => hud.showCall(big, sub, shot),
       clearCall: () => hud.hideCall(),
-      score: () => hud.renderScore(game.match, game.server, game.stats),
+      score: () => showScore(),
       wind: (x, z) => hud.setWind(x, z),
       serveSpeed: (kmh) => hud.setServeSpeed(kmh),
       // 1セットが終わって振り返りを出す番になった（game.js が締めのカットを終えたところで呼ぶ）。
@@ -118,6 +119,25 @@
     },
   });
   let game = createGame();
+
+  /**
+   * スコアを画面のスコアボード（hud）と会場のスコアボード（world）の両方へ出す。会場の盤面は
+   * 文字を描くだけなので、ポイントの呼び方（15/30/40/Ad、タイブレークの素点）はここで決めて渡す。
+   */
+  function showScore() {
+    const { match, server } = game;
+    hud.renderScore(match, server, game.stats);
+    const label = (mine, theirs) => (match.tiebreak
+      ? String(match.tiebreakPoints[mine]) : pointLabel(match.points[mine], match.points[theirs]));
+    const names = hud.teamNames || {};
+    world.setScoreboard({
+      names: { you: names.you || 'YOU', cpu: names.cpu || 'CPU' },
+      sets: match.setScores.map((set) => ({ you: set.you, cpu: set.cpu })),
+      games: { you: match.games.you, cpu: match.games.cpu },
+      points: { you: label('you', 'cpu'), cpu: label('cpu', 'you') },
+      server,
+    });
+  }
 
   /** applyCpuLevel/Style/Surface を適用してから実際に試合を始める（トスの結果が決まった後）。 */
   function beginMatch(wantDoubles, initialServer) {
@@ -137,6 +157,7 @@
       return [r.key, character ? character.temper : 'normal'];
     })));
     game.start(wantDoubles, initialServer);
+    showScore(); // 会場のスコアボードにも選んだ選手の名前を出す
   }
 
   /* ------------------------------------------------------------ 練習モード */
@@ -414,11 +435,15 @@
     onToggleView: () => menu.onToggleView(),
     onCycleGames: () => menu.onCycleGames(),
     onCycleSets: () => menu.onCycleSets(),
-    // リプレイのスキップは Space だけ（以前はどのキーでも飛んでしまい、ラリー用の
-    // キーに触れただけで意図せずスキップされていた）。チェンジエンズの休憩も同じ Space で
-    // 切り上げる。リプレイ中は game.update() が止まっていて休憩はまだ始まっていないので、
-    // 1回の押下で両方が飛ぶことはない。
+    // 演出のスキップは Space だけ（以前はどのキーでも飛んでしまい、ラリー用の
+    // キーに触れただけで意図せずスキップされていた）。リプレイ・チェンジエンズの休憩・
+    // マッチポイントの演出・締めのカット・雨天中断・ポイント間やフォールト後の一拍
+    // （game.skipPause）・ボールボーイの投げ渡し（world.skipFeed）を、どれも同じ Space で
+    // 切り上げる。1回の押下で飛ぶのは目の前の1つだけ：リプレイ中は game.update() が止まって
+    // いて後ろの演出はまだ始まっていないし、一拍を切り上げて始まった演出（チェンジエンズなど）は
+    // 次の押下で飛ぶ（skipPause を最後に呼ぶ）。
     onSkipReplay: () => {
+      const replaying = world.isReplaying();
       world.skipReplay();
       // ネットから落ちきる前に飛ばされても、ハイライトの候補としては録っておく
       if (netReplayPending) world.captureClip(netClipId);
@@ -427,6 +452,9 @@
       game.skipMatchPointCut();
       game.skipFinaleCut();
       game.skipRainDelay();
+      if (replaying) return;
+      world.skipFeed();
+      game.skipPause();
     },
     isMatchStatsOpen: () => matchStatsOpen,
     onCloseMatchStats: () => closeMatchStats(),
@@ -460,7 +488,7 @@
     }, game.doubles);
   }
 
-  hud.renderScore(game.match, game.server, game.stats);
+  showScore();
   syncStamina();
   world.sync(game, 0); // スタート画面の後ろにも正しい配置で映しておく
 

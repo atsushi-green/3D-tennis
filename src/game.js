@@ -316,6 +316,36 @@
     };
   }
 
+  /** 高さ h(m) まで跳ぶ体が、踏み切りから頂点まで（＝頂点から着地まで）にかかる秒数（実際の重力）。 */
+  function jumpAirT(h) {
+    return Math.sqrt(2 * Math.max(0, h) / PHYSICS.REAL_G);
+  }
+
+  /**
+   * 跳躍の時計（state.leap の span・rise）と、その中で体が飛ぶ放物線（t0・v0）。
+   * 体の高さは「時計で t0 秒の時に初速 v0 で踏み切り、あとは実際の重力だけ」で決まる
+   * （scene/player.js#leapBodyY。どの跳躍も同じ式）。頂点で当てる跳躍は、当たる時刻
+   * （apex）に頂点が来るよう、その air 秒前に踏み切る。
+   * @param {number} apex 時計が始まってから当たるまで(秒)。振りかぶりの最低限を取るぶん
+   *   air より長いことがある（そのぶん体は遅れて踏み切る）
+   * @param {number} air 踏み切りから頂点まで(秒)
+   * @param {number} tail 当たってから時計が終わるまでの最低限(秒)
+   */
+  function apexLeap(apex, air, tail) {
+    const span = apex + Math.max(air, tail);
+    return { span, rise: apex / span, t0: apex - air, v0: PHYSICS.REAL_G * air };
+  }
+
+  /**
+   * サーブで跳ぶ高さ(m。表示専用)。SWING.SERVE_JUMP_H は人間の打点（SERVE.CONTACT_Y）に
+   * 届く高さで、打点が低い（CPU/AI の AI_CONTACT_Y、離すのが遅れた1本）ほどその差だけ低く跳ぶ
+   * ＝同じ伸ばしきった腕で球に届く。
+   * @param {number} reach 打点の高さ(m)
+   */
+  function serveLift(reach) {
+    return Math.max(0, SWING.SERVE_JUMP_H + reach - SERVE.CONTACT_Y);
+  }
+
   /**
    * スマッシュで跳ぶ高さ(m。表示専用で、当たり判定には効かない)。打点の高さで決める：
    * 立ったまま腕を伸ばしてラケットが届く高さ（SWING.SMASH_STAND_Y）までは**跳ばずに**
@@ -1487,7 +1517,7 @@
         // 溜めている間に（球が届く少し前に）跳ばせているので、ここに来るのは
         // 「球がまだ遠いのに離した」ような場合だけの保険。
         const leap = this.leapKind(move, this.you.swingCharge);
-        this.startLeap(leap, 'you', leap && this.leapTiming(leap, this.youSmashLift(move) || 0));
+        this.startLeap(leap, 'you', leap && this.leapTiming(leap, this.youSmashLift(move) || 0, move === 'dunkSmash'));
       }
     }
 
@@ -2305,7 +2335,7 @@
         const sets = this.match.setScores.map((s) => `${s.you}-${s.cpu}`).join(' ');
         const result = `${winner === 'you' ? 'あなたの勝ち' : 'CPU の勝ち'} ${sets}`;
         this.hooks.call('ゲームセット', `${result} ／ SPACE でスキップ`);
-      });
+      }, 'pause');
     }
 
     tickFinaleCut(dt) {
@@ -2650,18 +2680,31 @@
     }
 
     /**
-     * サーブを振り出して当たるのを待っている間、「あと SERVE_LEAP_RISE_T 秒で当たる」
-     * ところで跳び始める（表示専用）。跳躍の頂点がちょうど当たる瞬間に来るよう、上昇に
-     * かける時間を当たるまでの残り時間に合わせる。跳ぶ高さは打点の高さで決まる
-     * （reach。低い打点ほど低く、跳ばずに届く高さなら跳ばずに腕だけ振り上げる）。
+     * サーブを振り出して当たるのを待っている間に跳び始める（表示専用）。跳ぶ高さ（lift）は
+     * 打点の高さで決まり（serveLift()。跳ばずに届く高さなら跳ばずに腕だけ振り上げる）、
+     * 体は実際の重力（PHYSICS.REAL_G）で飛ぶ：
+     * - 当たるまでの残りが、その高さの頂点までの時間 √(2h/g) 以上あれば、ちょうど頂点で
+     *   当たるように踏み切る
+     * - 足りなければ（振り出してから当たるまで SERVE.SWING_T＝0.2秒しかないので、いつもの
+     *   高さではこちら）、すぐ踏み切って**上がっている途中で打つ**：当たる瞬間に打点の高さを
+     *   通るだけの初速で跳ぶので、打った後も少し上がってから落ちる（実際のサーブも頂点の
+     *   手前で当てる）。
+     * 時計（腕の振り上げ）は「あと SERVE_LEAP_RISE_T 秒」か頂点までの時間の長いほうで始める。
      */
     tickServeSwing() {
       const swing = this.serveSwing;
       if (!swing || this.actor(swing.who).leap) return;
       const until = swing.t;
-      if (until > PLAYER.SERVE_LEAP_RISE_T) return;
-      const span = until + PLAYER.SERVE_LEAP_FALL_T;
-      this.startLeap('serve', swing.who, { span, rise: until / span, reach: swing.y });
+      const lift = serveLift(swing.y);
+      const air = jumpAirT(lift);
+      if (until > Math.max(PLAYER.SERVE_LEAP_RISE_T, air)) return;
+      const t0 = Math.max(0, until - air);
+      const up = until - t0; // 踏み切りから当たるまで（≦ air）
+      const v0 = lift > 0 ? lift / up + PHYSICS.REAL_G * up / 2 : 0;
+      const span = Math.max(t0 + 2 * v0 / PHYSICS.REAL_G, until + PLAYER.SERVE_LEAP_TAIL);
+      this.startLeap('serve', swing.who, {
+        span, rise: until / span, reach: swing.y, lift, t0, v0,
+      });
     }
 
     /**
@@ -3209,7 +3252,8 @@
       // スマッシュの跳ぶ高さはこの打点の高さで決まる（立って届く高さなら跳ばない）。
       if (who !== 'you') {
         const leap = stroke === 'smash' || stroke === 'jackknife' ? stroke : null;
-        this.startLeap(leap, who, leap && this.leapTiming(leap, smashLift(ball.y, special === 'dunkSmash')));
+        this.startLeap(leap, who, leap && this.leapTiming(leap, smashLift(ball.y, special === 'dunkSmash'),
+          special === 'dunkSmash'));
       }
       player.spin = spin; // 振っている間のフォーム（scene/player.js）に使う
       // 必殺技で決めたときは球種名ではなく技名を出す（「何で取ったか」がそのまま伝わる）。
@@ -3303,7 +3347,7 @@
       this.after(RAIN.RESUME_T, () => {
         if (resume) this.beginChangeover(resume);
         else this.newPoint();
-      });
+      }, 'pause');
     }
 
     tickRain(dt) {
@@ -3363,7 +3407,7 @@
         // 叩きつけた瞬間の音（振りかぶって振り下ろした時点）。ゲームの時計なので、リプレイの間は進まない
         if (kind === 'smash') {
           const S = EMOTION.SMASH;
-          this.after(EMOTION.DELAY + S.RAISE_T + S.SLAM_T, () => this.hooks.sound('racketSmash'));
+          this.after(EMOTION.DELAY + S.RAISE_T + S.SLAM_T, () => this.hooks.sound('racketSmash'), 'mood');
         }
       });
     }
@@ -4095,7 +4139,7 @@
         this.hooks.call(`セット — ${mine ? 'YOU' : 'CPU'}`,
           `第${n}セット ${games.you}-${games.cpu} ／ セットカウント ${sets.you}-${sets.cpu}`);
         this.hooks.score();
-        this.after(TIMING.NEXT_POINT, () => this.whenCourtClear(() => this.startNextSet(changeover)));
+        this.after(TIMING.NEXT_POINT, () => this.whenCourtClear(() => this.startNextSet(changeover)), 'pause');
         return;
       }
 
@@ -4125,7 +4169,7 @@
         if (this.rainDue()) this.beginRainDelay(changeover);
         else if (changeover) this.beginChangeover(changeover);
         else this.newPoint();
-      }));
+      }), 'pause');
     }
 
     /* ---------------------------------------------------------- 練習モード */
@@ -4426,13 +4470,34 @@
      * 跳躍の長さ(秒)と、そのうち踏み切りに使う割合。打ち方ごとの定数を1か所に引き当てる。
      * スマッシュは跳ぶ高さ(lift)も持たせる：打点で毎回変わる（smashLift()）ので定数で
      * 引き当てられない。0 なら跳ばない＝体は浮かず、この時計で振り出しだけが進む。
+     * スマッシュは跳ぶ高さから実際の重力で長さを決める（PLAYER.SMASH_WINDUP_T の上のコメント）：
+     * 頂点まで √(2h/g)（振りかぶりの最低限 SMASH_WINDUP_T より短ければそちら）、頂点から
+     * 着地まで同じだけ（最低限 SMASH_LEAP_TAIL）。rise は頂点の位置（span に対する割合）。
      * @param {'smash'|'jackknife'} kind
      * @param {number} [lift] スマッシュで跳ぶ高さ(m)
+     * @param {boolean} [dunk] ダンクスマッシュか（AI が当たる瞬間にその技で打つかの印）
      */
-    leapTiming(kind, lift = 0) {
-      return kind === 'jackknife'
-        ? { span: SPECIAL.JACK.LEAP_T, rise: SPECIAL.JACK.LEAP_RISE }
-        : { span: PLAYER.SMASH_LEAP_T, rise: PLAYER.SMASH_LEAP_RISE, lift };
+    leapTiming(kind, lift = 0, dunk = false) {
+      if (kind === 'jackknife') {
+        // ジャックナイフは毎回同じ高さ（SWING.JACK.JUMP_H）。頂点で当てる
+        const h = SWING.JACK.JUMP_H;
+        const air = jumpAirT(h);
+        return { ...apexLeap(air, air, SPECIAL.JACK.LEAP_TAIL), lift: h };
+      }
+      const air = jumpAirT(lift);
+      return { ...apexLeap(Math.max(air, PLAYER.SMASH_WINDUP_T), air, PLAYER.SMASH_LEAP_TAIL), lift, dunk };
+    }
+
+    /**
+     * スマッシュで跳んだ後に高さ（leap.lift）を寄せ直したら、着地までの長さもその高さに
+     * 合わせる。頂点の時刻（踏み切ってからの秒数）はそのまま＝体は跳んだときに決まった
+     * 頂点を通る放物線で、高さだけが変わる。
+     * @param {object} leap
+     */
+    fitLeapToLift(leap) {
+      const elapsed = leap.span - leap.t;
+      Object.assign(leap, apexLeap(leap.span * leap.rise, jumpAirT(leap.lift), PLAYER.SMASH_LEAP_TAIL));
+      leap.t = leap.span - elapsed;
     }
 
     /**
@@ -4517,9 +4582,10 @@
         ? this.contactPeak(SPECIAL.JACK.MIN_Y).tAbove
         : contact.t;
       if (until === null) return;
-      const { span, rise } = this.leapTiming(kind);
-      if (until > span * rise) return;
-      this.startLeap(kind, 'you', this.leapTiming(kind, smashLift(contact.y, move === 'dunkSmash')));
+      const dunk = move === 'dunkSmash';
+      const timing = this.leapTiming(kind, smashLift(contact.y, dunk), dunk);
+      if (until > timing.span * timing.rise) return;
+      this.startLeap(kind, 'you', timing);
     }
 
     /**
@@ -4527,7 +4593,7 @@
      * 跳び始める。** 以前は AI だけ当たった瞬間（hit()）から跳んでいたので、跳ぶのと振るのが
      * 同時に見えた（ユーザー報告）。AI には「溜めを離す」瞬間が無いので、いつ・どの高さで
      * 振るか（swingAiAt() の当たり判定）を aiContact() で先読みし、そこで跳んで打つ1打に
-     * なるなら（aiLeapPlan()）、残りが踏み切りぶん（LEAP_T×LEAP_RISE）を切ったところで跳ぶ。
+     * なるなら（aiLeapPlan()）、残りが頂点までの時間（leapTiming() の span×rise）を切ったところで跳ぶ。
      * 当たるころには頂点にいて、空中で振り始める。
      * 技（ジャックナイフ・ダンクスマッシュ）にするかは跳ぶときに決まり、跳んだ AI だけが当たる
      * 瞬間にその技で打つ（pickAiSpecial()）＝跳ばずに技が出ることはない。見込みどおりに
@@ -4575,7 +4641,7 @@
       const smash = contact.y >= CPU.SMASH_MIN_Y && contact.vy <= CPU.SMASH_FALLING_VY
         && Math.abs(actor.z) <= CPU.SMASH_Z_MAX;
       if (dunk || smash) {
-        return { kind: 'smash', timing: { ...this.leapTiming('smash', smashLift(contact.y, dunk)), dunk } };
+        return { kind: 'smash', timing: this.leapTiming('smash', smashLift(contact.y, dunk), dunk) };
       }
       const jack = this.jackCommit[who] && this.usesLeft('jackknife', who) > 0
         && actor.speed <= JACK.MAX_SPEED && contact.bounces >= 1 && contact.y >= JACK.MIN_Y
@@ -4616,6 +4682,7 @@
       }
       const target = smashLift(contact.y, leap.dunk);
       leap.lift += (target - leap.lift) * (1 - Math.exp(-dt / SWING.SMASH_LIFT_FOLLOW_T));
+      this.fitLeapToLift(leap);
     }
 
     /**
@@ -4667,6 +4734,7 @@
       const target = this.youSmashLift(move);
       if (target === null) return; // 打点が分からなくなった（届かない所へ動いた）ら今の高さのまま
       leap.lift += (target - leap.lift) * (1 - Math.exp(-dt / SWING.SMASH_LIFT_FOLLOW_T));
+      this.fitLeapToLift(leap);
     }
 
     /**
@@ -5583,7 +5651,7 @@
       this.ball.live = false; // 本物の球はその場で止め、動きは片付け前の球へ引き継ぐ
       this.releaseBall();
       this.hooks.call('フォールト', reason);
-      this.after(TIMING.FAULT_CALL, () => this.whenCourtClear(() => this.retryServe(reason)));
+      this.after(TIMING.FAULT_CALL, () => this.whenCourtClear(() => this.retryServe(reason)), 'pause');
     }
 
     checkSwings() {
@@ -6058,9 +6126,9 @@
      */
     whenCourtClear(fn) {
       if (this.ballKidLeft > 0) {
-        this.after(this.ballKidLeft, () => this.whenCourtClear(fn));
+        this.after(this.ballKidLeft, () => this.whenCourtClear(fn), 'pause');
       } else if (this.looseBalls.some((b) => !b.plan && inPlayArea(b))) {
-        this.after(OFFICIALS.BALLKID.LOOSE.RECHECK, () => this.whenCourtClear(fn));
+        this.after(OFFICIALS.BALLKID.LOOSE.RECHECK, () => this.whenCourtClear(fn), 'pause');
       } else {
         fn();
       }
@@ -6068,8 +6136,38 @@
 
     /* ---------------------------------------------------------- タイマー */
 
-    after(seconds, fn) {
-      this.timers.push({ remaining: seconds, fn });
+    /**
+     * @param {number} seconds
+     * @param {Function} fn
+     * @param {'pause'|'mood'} [tag] 'pause'＝演出の「間」（Space の skipPause() でその場で鳴らす）、
+     *   'mood'＝感情表現に合わせた効果音（skipPause() で捨てる。次のポイントで鳴らないように）
+     */
+    after(seconds, fn, tag) {
+      this.timers.push({ remaining: seconds, fn, tag });
+    }
+
+    /**
+     * 演出の「間」を切り上げる（Space）。ポイント・セットが決まった後の一拍（決まったコールと
+     * 感情表現を見せる TIMING.NEXT_POINT）、フォールトの後の一拍（FAULT_CALL）、試合が決まって
+     * から締めのカットまで（FINALE.DELAY）、雨天中断の明けの一拍（RAIN.RESUME_T）が対象。
+     * ボールボーイの片付けも終わったことにして（転がっている球・ネットの球は消える）、待って
+     * いた続き（次のポイント・チェンジエンズ・セカンドサーブ・締めのカット）をその場で始める。
+     * 始まった続きが別の演出（チェンジエンズ・マッチポイント・締めのカット）なら、それは次の
+     * Space で飛ばす（1回の押下で2つ先まで飛ばない）。
+     * @returns {boolean} 切り上げたか
+     */
+    skipPause() {
+      if (!this.timers.some((t) => t.tag === 'pause')) return false;
+      this.timers = this.timers.filter((t) => t.tag !== 'mood');
+      ACTORS.forEach((w) => { this.actor(w).mood = null; });
+      this.looseBalls = [];
+      this.netBallRest = null;
+      this.ballKidLeft = 0;
+      // 片付けは済んだので、鳴らした続きが whenCourtClear() で待ち直すことはない
+      const due = this.timers.filter((t) => t.tag === 'pause');
+      this.timers = this.timers.filter((t) => t.tag !== 'pause');
+      due.forEach((t) => t.fn());
+      return true;
     }
 
     clearTimers() {

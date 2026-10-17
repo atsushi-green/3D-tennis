@@ -575,14 +575,21 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   ok(frames * (1 / 60) < 0.35, `and that comes soon after releasing: ${(frames / 60).toFixed(2)}s`);
   ok(g.trail[0].y <= SERVE.CONTACT_Y + 1e-9 && g.trail[0].y > SERVE.CONTACT_Y - 0.03,
     `the trail starts at the racket's reach (CONTACT_Y), y=${g.trail[0].y}`);
-  // 跳躍の頂点がちょうど当たる瞬間に来る（頂点を過ぎてから当たると、ラケットが球の下を通って見える）
+  // 当たる瞬間に、体がちょうど跳ぶ高さ（＝ラケットが打点に届く高さ）を通る。体は実際の重力で
+  // 飛ぶ：離してから当たるまで（SWING_T）は頂点まで上がる時間より短いので、離した瞬間に踏み切って
+  // 上がっている途中で当てる（頂点を過ぎてから当てると、ラケットが球の下を通って見える）
   const L = g.you.leap;
   ok(L && L.kind === 'serve' && Math.abs(L.reach - SERVE.CONTACT_Y) < 1e-6,
     `the server jumps into the ball, leap=${JSON.stringify(L)}`);
-  const pastPeak = L && (L.span - L.t) - L.rise * L.span;
-  ok(L && pastPeak >= -1e-9 && pastPeak <= 1 / 60 + 1e-9,
-    `the jump peaks at the moment of contact (within the contact frame), ${pastPeak}s past the peak`);
-  ok(L.rise * L.span <= P.SERVE_LEAP_RISE_T + 1e-9, 'the take-off is no longer than SERVE_LEAP_RISE_T');
+  const G = R.config.PHYSICS.REAL_G;
+  const hitAt = L.rise * L.span - L.t0; // 踏み切ってから当たるまで
+  const bodyAtHit = L.v0 * hitAt - G * hitAt * hitAt / 2;
+  ok(Math.abs(bodyAtHit - L.lift) < 1e-9 && L.lift === R.config.SWING.SERVE_JUMP_H,
+    `the body is at the full jump height at contact, got ${bodyAtHit} vs ${L.lift}`);
+  ok(L.v0 / G >= hitAt - 1e-9, `and has not passed the top yet (top ${(L.v0 / G).toFixed(3)}s, hit ${hitAt.toFixed(3)}s)`);
+  ok(L.span >= L.t0 + 2 * L.v0 / G - 1e-9, `and the clock lasts until it lands (${(L.t0 + 2 * L.v0 / G).toFixed(3)}s)`);
+  ok(L.rise * L.span <= Math.max(P.SERVE_LEAP_RISE_T, Math.sqrt(2 * L.lift / G)) + 1e-9,
+    'the take-off is no earlier than it needs to be');
 }
 
 // --- 振り終わる前にトスが跳ばずに届く高さより下へ落ちる（離すのが遅すぎた）なら、その高さで打つ ---
@@ -5655,12 +5662,13 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
       `precondition: this swing would be a smash, got ${g.leapKind(null, 0.7)}`);
     g.specialArmed = g.specialAim();
     g.tickLeap();
-    ok(g.you.leap && g.you.leap.kind === 'smash' && g.you.leap.t === PLAYER.SMASH_LEAP_T,
+    const leapNow = g.you.leap && g.leapTiming('smash', g.you.leap.lift);
+    ok(g.you.leap && g.you.leap.kind === 'smash' && Math.abs(g.you.leap.t - leapNow.span) < 1e-9,
       `the leap starts while still charging, got ${JSON.stringify(g.you.leap)}`);
     ok(g.you.charging && g.you.anim === 0 && g.you.stroke !== 'smash',
       `and the swing motion has not started: ${g.you.stroke}/${g.you.anim}`);
-    ok(PLAYER.SMASH_LEAP_T * PLAYER.SMASH_LEAP_RISE > 0.1,
-      `the take-off is long enough to read, got ${(PLAYER.SMASH_LEAP_T * PLAYER.SMASH_LEAP_RISE).toFixed(3)}s`);
+    ok(g.you.leap.span * g.you.leap.rise > 0.1,
+      `the take-off is long enough to read, got ${(g.you.leap.span * g.you.leap.rise).toFixed(3)}s`);
 
     // 溜めが足りなければ（スマッシュにならないので）跳ばない
     const weak = mk();
@@ -5677,13 +5685,14 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     ok(!low.you.leap, `a normal groundstroke does not leap, got ${JSON.stringify(low.you.leap)}`);
 
     // 当たったときには、離す前に始めた跳躍がまだ続いている
-    const rise = PLAYER.SMASH_LEAP_T * PLAYER.SMASH_LEAP_RISE;
+    const leapSpan = g.you.leap.span;
+    const rise = leapSpan * g.you.leap.rise;
     for (let i = 0; i < Math.round(rise * 60); i++) g.update(1 / 60);
     g.chargeRelease();
     g.update(1 / 60);
     ok(g.you.leap && g.you.leap.kind === 'smash',
       `the leap is still running at contact, got ${JSON.stringify(g.you.leap)}`);
-    ok(g.you.leap.t < PLAYER.SMASH_LEAP_T - rise + 1 / 60,
+    ok(g.you.leap.t < leapSpan - rise + 1 / 60,
       `and it is past the take-off by then, got ${g.you.leap.t.toFixed(3)}`);
 
     // ポイントをまたいで持ち越さない
@@ -5719,6 +5728,21 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     dunk.tickLeap();
     ok(dunk.you.leap && dunk.you.leap.lift === SWING.SMASH_JUMP_H * R.config.SPECIAL.DUNK.JUMP_MULT,
       `the dunk smash always leaps high, got lift=${dunk.you.leap && dunk.you.leap.lift}`);
+    // 滞空は高さに見合う長さ（実際の重力で頂点まで √(2h/g)。上りと下りが同じ）
+    const dunkUp = Math.sqrt(2 * dunk.you.leap.lift / R.config.PHYSICS.REAL_G);
+    const dunkApex = dunk.you.leap.span * dunk.you.leap.rise;
+    ok(Math.abs(dunkApex - dunkUp) < 1e-9 && dunk.you.leap.span - dunkApex >= dunkUp - 1e-9,
+      `the dunk rises and falls as real gravity says (${dunkUp.toFixed(3)}s each way), got apex ${dunkApex}, span ${dunk.you.leap.span}`);
+
+    // 普通のスマッシュも、跳ぶ高さに見合った長さ（頂点まで √(2h/g)。ただし振りかぶりの最低限
+    // SMASH_WINDUP_T は取る）。いちばん高い 0.55m なら頂点まで 0.33秒、着地まで同じだけ
+    [0.05, 0.3, SWING.SMASH_JUMP_H].forEach((h) => {
+      const tm = g.leapTiming('smash', h);
+      const up = Math.sqrt(2 * h / R.config.PHYSICS.REAL_G);
+      const apex = tm.span * tm.rise;
+      ok(Math.abs(apex - Math.max(up, PLAYER.SMASH_WINDUP_T)) < 1e-9 && tm.span - apex >= up - 1e-9,
+        `a ${h}m smash peaks after ${Math.max(up, PLAYER.SMASH_WINDUP_T).toFixed(3)}s and lands no sooner than real gravity, got ${apex.toFixed(3)}/${tm.span.toFixed(3)}`);
+    });
 
     // 跳んだ後も当たるまでは打点の見込みへ寄せ直す：離すのが遅れて球が落ちてくれば低くなる
     const late = at(SWING.SMASH_STAND_Y + 0.2);
@@ -8850,15 +8874,20 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
       // 溜めキーを離す前に跳び始める
       g.specialArmed = g.specialAim();
       g.tickLeap();
-      ok(g.you.leap && g.you.leap.kind === 'jackknife' && g.you.leap.t === JACK.LEAP_T,
+      const jackSpan = g.leapTiming('jackknife').span;
+      ok(g.you.leap && g.you.leap.kind === 'jackknife' && g.you.leap.t === jackSpan,
         `the leap starts while still charging, got ${JSON.stringify(g.you.leap)}`);
       ok(g.you.charging && g.you.anim === 0 && g.you.stroke !== 'jackknife',
         `before releasing: still charging, no swing yet (${g.you.stroke}/${g.you.anim})`);
       // 踏み切りぶん進めてから離すと、当たるころにはもう跳び上がっている
-      const rise = JACK.LEAP_T * JACK.LEAP_RISE;
+      const rise = jackSpan * g.you.leap.rise;
+      // 頂点までは実際の重力で √(2h/g)（以前は 0.12秒＝重力の約6倍で跳び上がっていた）
+      const jackUp = Math.sqrt(2 * R.config.SWING.JACK.JUMP_H / R.config.PHYSICS.REAL_G);
+      ok(Math.abs(rise - jackUp) < 1e-9 && jackSpan - rise >= jackUp - 1e-9,
+        `the jackknife rises and falls as real gravity says (${jackUp.toFixed(3)}s each way), got ${rise}/${jackSpan}`);
       for (let i = 0; i < Math.round(rise * 60); i++) g.update(1 / 60);
       // 1コマ(1/60秒)ぶんのスラック：跳躍は毎フレーム dt ずつ減るので端数が出る
-      ok(g.you.leap && g.you.leap.t <= JACK.LEAP_T - rise + 1 / 60,
+      ok(g.you.leap && g.you.leap.t <= jackSpan - rise + 1 / 60,
         `the leap keeps running on its own clock, got ${g.you.leap && g.you.leap.t.toFixed(3)}`);
 
       // 技が乗らない普通の1打では跳ばない
@@ -10892,7 +10921,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
 // 当たった瞬間（hit()）から跳んでいた。人間（tickLeap()）と同じく、当たる踏み切りぶん前から跳ぶ。
 {
   const { applyCpuLevel, SPECIAL: SP } = R.config;
-  const RISE = SP.JACK.LEAP_T * SP.JACK.LEAP_RISE; // 踏み切りから頂点まで
+  const RISE = Math.sqrt(2 * R.config.SWING.JACK.JUMP_H / R.config.PHYSICS.REAL_G); // 踏み切りから頂点まで
   /** CPU のバックハンド側（world -x）へ、ゆるく高く弾む球を1本送って、打つまで進める */
   const highToBackhand = (commit) => {
     const g = new R.Game({ input: fakeInput, hooks: noHooks });
@@ -10939,7 +10968,6 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
 // （立って届く高さなら跳ばない）、ダンクにするかも跳ぶときに決まる。
 {
   const { applyCpuLevel, SPECIAL: SP, SWING: SW } = R.config;
-  const RISE = R.config.PLAYER.SMASH_LEAP_T * R.config.PLAYER.SMASH_LEAP_RISE;
   const DUNK_LIFT = SW.SMASH_JUMP_H * SP.DUNK.JUMP_MULT;
   /** ネットへ詰めている CPU へ、頭上を越えそうな山なりの球を1本送って、打つまで進める */
   const lobAtNet = (dunk) => {
@@ -10960,32 +10988,41 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     let leaptBeforeHit = false;
     let airborneAtHit = null;
     let lift = null;
+    let apexAt = null;
+    let span = null;
     for (let f = 0; f < 240 && g.ball.last === 'you'; f++) {
       g.update(1 / 60);
       if (g.ball.last === 'cpu') {
         airborneAtHit = g.cpu.leap ? g.cpu.leap.span - g.cpu.leap.t : null;
+        apexAt = g.cpu.leap ? g.cpu.leap.span * g.cpu.leap.rise : null;
+        span = g.cpu.leap ? g.cpu.leap.span : null;
         lift = g.cpu.leap ? g.cpu.leap.lift : null;
       } else if (g.cpu.leap) {
         leaptBeforeHit = true;
       }
     }
-    return { g, leaptBeforeHit, airborneAtHit, lift };
+    return { g, leaptBeforeHit, airborneAtHit, lift, apexAt, span };
   };
-  const atTop = (t) => t !== null && t >= RISE - 1 / 60 && t <= RISE + 2 / 60;
+  // ダンクは跳ぶ高さから実際の重力で長さが決まる（頂点まで √(2h/g)）
+  const DUNK_RISE = Math.sqrt(2 * DUNK_LIFT / R.config.PHYSICS.REAL_G);
+  // 頂点の時刻は跳ぶ高さで変わる（頂点まで √(2h/g)、最低 SMASH_WINDUP_T）
+  const atTop = (t, rise) => t !== null && rise !== null && t >= rise - 1 / 60 && t <= rise + 2 / 60;
   applyCpuLevel('hard');
   try {
     const smash = lobAtNet(false);
     ok(smash.g.cpu.stroke === 'smash' && smash.g.cpu.special === null,
       `precondition: the AI smashes this lob, got ${smash.g.cpu.stroke}/${smash.g.cpu.special}`);
     ok(smash.leaptBeforeHit, 'the AI is already in the air before it smashes');
-    ok(atTop(smash.airborneAtHit),
-      `and meets the ball at the top of the jump (${RISE.toFixed(3)}s after take-off), got ${smash.airborneAtHit}`);
+    ok(atTop(smash.airborneAtHit, smash.apexAt),
+      `and meets the ball at the top of the jump (${smash.apexAt}s after take-off), got ${smash.airborneAtHit}`);
     ok(smash.lift > 0 && smash.lift < DUNK_LIFT * 0.5,
       `a plain smash jumps only as high as the contact needs, got ${smash.lift}`);
     const dunk = lobAtNet(true);
     ok(dunk.g.cpu.special === 'dunkSmash', `with the roll it is a dunk, got ${dunk.g.cpu.special}`);
-    ok(dunk.leaptBeforeHit && atTop(dunk.airborneAtHit),
-      `the dunk is also jumped before it is hit, got ${dunk.airborneAtHit}`);
+    ok(dunk.leaptBeforeHit && atTop(dunk.airborneAtHit, DUNK_RISE),
+      `the dunk is also jumped before it is hit, at the top (${DUNK_RISE.toFixed(3)}s), got ${dunk.airborneAtHit}`);
+    ok(Math.abs(dunk.apexAt - DUNK_RISE) < 0.02 && dunk.span - dunk.apexAt >= DUNK_RISE - 0.02,
+      `and stays in the air as long as real gravity says (${DUNK_RISE.toFixed(3)}s each way), got ${dunk.apexAt}/${dunk.span}`);
     ok(Math.abs(dunk.lift - DUNK_LIFT) < 0.02, `and at the dunk height, got ${dunk.lift} vs ${DUNK_LIFT}`);
   } finally {
     applyCpuLevel('normal');
@@ -11056,6 +11093,45 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   g.smashHint = { x: 0, z: -2, y: 2.6, t: 0.2, ready: false, inTime: false };
   g.updatePrep();
   ok(g.you.prep !== 'smash', `but not when it is too late to get there: ${g.you.prep}`);
+}
+
+// --- Space（skipPause）で演出の「間」を切り上げる：ポイント間・フォールトの後・締めのカットの前 ---
+// ユーザー要望「全ての演出は Space キーで飛ばせるように」
+{
+  const { FINALE } = R.config;
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start(false, 'you');
+  ok(!g.skipPause(), 'nothing to skip while waiting to serve');
+
+  // ポイントが決まった後の一拍（コール・感情表現・ボールボーイの片付け）
+  g.phase = 'rally';
+  g.ball.live = true;
+  g.ball.last = 'you';
+  g.endPoint('you', 'ツーバウンド');
+  ok(g.phase === 'over', `precondition: the point is over, got ${g.phase}`);
+  g.update(1 / 60);
+  ok(g.phase === 'over', 'precondition: the pause is still running');
+  ok(g.skipPause(), 'Space ends the pause after a point');
+  ok(g.phase === 'serve' && g.timers.every((t) => !t.tag) && g.looseBalls.length === 0 && g.ballKidLeft === 0,
+    `and the next point starts at once with the court cleared, got ${g.phase}`);
+  ok(['you', 'cpu'].every((w) => !g.actor(w).mood), 'and nobody is still celebrating');
+
+  // フォールトの後の一拍 → すぐにセカンドサーブ
+  g.serveNumber = 1;
+  g.phase = 'rally';
+  g.ball.live = true;
+  g.serveFault('ネット');
+  ok(g.phase === 'fault', `precondition: a fault, got ${g.phase}`);
+  ok(g.skipPause() && g.phase === 'serve' && g.serveNumber === 2,
+    `Space goes straight to the second serve, got ${g.phase}/${g.serveNumber}`);
+
+  // 試合が決まってから締めのカットに入るまで → すぐ締めのカット（カット自体は次の Space で飛ぶ）
+  const f = new R.Game({ input: fakeInput, hooks: noHooks });
+  f.start(false, 'you');
+  f.beginFinale('you', null);
+  ok(!f.finale.cut, 'precondition: the finale cut has not started yet');
+  ok(f.skipPause() && f.finale.cut, `Space starts the finale cut at once (instead of after ${FINALE.DELAY}s)`);
+  ok(!f.skipPause() && !f.finale.done, 'and one press does not also skip the cut itself');
 }
 
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);

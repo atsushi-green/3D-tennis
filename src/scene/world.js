@@ -6,10 +6,11 @@
   'use strict';
 
   const {
-    CAMERA, FX, PLAYER, SPECIAL, THEME, REPLAY, HIGHLIGHT, HALF_L, LINE_CALL, BALL_MARK, SURFACE, MATCH_POINT, FINALE, NIGHT,
+    CAMERA, EMOTION, FX, OFFICIALS, PLAYER, SPECIAL, SWING, THEME, REPLAY, HIGHLIGHT, HALF_L, LINE_CALL, BALL_MARK, SURFACE, MATCH_POINT, FINALE, NIGHT,
   } = RallyOne.config;
   const { lerp, clamp } = RallyOne.math;
   const scene3d = RallyOne.scene;
+  const ease = (u) => u * u * (3 - 2 * u);
 
   /**
    * 通常カメラの横位置（本体 pos・注視点 look）。ダブルスサイドラインの内側では
@@ -37,7 +38,9 @@
     const flags = scene3d.createFlags();
     // 観客（マッチポイントの演出・試合が決まった後に沸く。updateCrowd() に盛り上がりの度合いを渡す）
     const crowd = scene3d.createCrowd();
-    venue.add(officials, ballMarks.group, crowd, flags, stage.sun);
+    // スコアボード（main.js が setScoreboard で中身を渡す）。会場と一緒に回る
+    const scoreboards = scene3d.createScoreboards();
+    venue.add(officials, ballMarks.group, crowd, flags, scoreboards.group, stage.sun);
     // ネットはコートと同じく点対称なので会場の側に入れない（ゲームの座標のまま揺らせる）
     const net = scene3d.createNet();
     scene.add(court, net, venue);
@@ -131,12 +134,105 @@
     const fpEye = new THREE.Vector3();
     const fpLook = new THREE.Vector3();    // いま見ている点（寄せた後）
     const fpTarget = new THREE.Vector3();  // このフレームで見たい点
+    const fpHead = new THREE.Vector3();
+    const fpGlance = new THREE.Vector3(); // ポイントの間に見るもの（betweenPoints）
+    const _dirA = new THREE.Vector3();
+    const _dirB = new THREE.Vector3();
 
-    /** 一人称の目の位置（自分の選手の頭の少し後ろ。跳んだぶんだけ上がる）を fpEye に入れる。 */
-    function firstPersonEye(state) {
+    /**
+     * 飛びつきボレーで体ごと飛び込んでいる度合い(0〜1)。飛び込みの形の効き（diveBody の legs）
+     * そのもの：踏み切りから伸び、伏せている間は1、起き上がりで0へ戻る。技が出ていなければ0。
+     */
+    function diveWeight() {
+      const body = you.userData.motion.dive;
+      return body ? body.legs : 0;
+    }
+
+    /**
+     * 一人称で効いている必殺技の演出の度合い（どれも0〜1。同時に2つは出ない）。
+     * - dive：飛びつきボレー（diveWeight）
+     * - tweener：ツイーナーで背を向けている度合い（scene/player.js#tweenerFlip）
+     * - dunk：ダンクスマッシュの跳躍の高さ（頂点で1）。ダンクだけが通常のスマッシュの跳躍の
+     *   上限（SWING.SMASH_JUMP_H）より高く跳ぶので、それで見分ける
+     * - dunkHitT：ダンクで打ってからの秒数（打つ前は -1）
+     */
+    function firstPersonFx(state) {
+      const p = state.you;
+      const leap = p.leap;
+      const dunking = !!leap && leap.kind === 'smash' && leap.lift > SWING.SMASH_JUMP_H + 1e-6;
+      const hit = dunking && p.anim > 0 && p.stroke === 'smash';
+      return {
+        dive: diveWeight(),
+        tweener: scene3d.tweenerFlip(p),
+        dunk: dunking ? clamp(you.position.y / leap.lift, 0, 1) : 0,
+        dunkHitT: hit ? PLAYER.SMASH_ANIM - p.anim : -1,
+      };
+    }
+
+    /**
+     * 一人称の目の位置（自分の選手の頭の少し後ろ。跳んだぶんだけ上がる）を fpEye に入れる。
+     * 必殺技の間は体と一緒に動く：
+     * - 飛びつきボレー：目を頭そのものへ寄せる＝球へ飛び込み、地面へ伏せ、起き上がる（DIVE）
+     * - ツイーナー：背を向けて体を折り、股の下から覗く低い目へ（TWEENER）
+     * - ダンクスマッシュ：跳躍よりさらに高く・前へ持ち上げる（DUNK）
+     */
+    function firstPersonEye(state, fx) {
       const F = CAMERA.FIRST_PERSON;
       fpEye.set(state.you.x, F.EYE_Y + you.position.y, state.you.z - F.BACK);
+      if (fx.dive > 0) {
+        const D = F.DIVE;
+        you.userData.rig.head.getWorldPosition(fpHead); // このフレームのポーズは当て終わっている
+        fpHead.y += D.EYE_UP;
+        fpEye.lerp(fpHead, fx.dive);
+        const p = scene3d.diveProgress(state.you);
+        const s = p === null ? -1 : (p - SWING.DIVE.LAND) / D.JOLT_SPAN;
+        if (s > 0 && s < 1) fpEye.y -= D.JOLT * Math.sin(Math.PI * s);
+      }
+      if (fx.tweener > 0) {
+        const T = F.TWEENER;
+        // 背を向けると頭は足元より自陣の奥（-z）側へ出る
+        fpEye.y = lerp(fpEye.y, T.EYE_Y + you.position.y, fx.tweener);
+        fpEye.z = lerp(fpEye.z, state.you.z - T.HEAD_FWD, fx.tweener);
+      }
+      if (fx.dunk > 0) {
+        fpEye.y += F.DUNK.EYE_BOOST * fx.dunk;
+        fpEye.z += F.DUNK.FWD * fx.dunk;
+      }
       return fpEye;
+    }
+
+    /** ダンクスマッシュを打った瞬間の手応え（目の上下の揺れ(m)。寄せずにそのまま足す）。 */
+    function dunkShake(fx) {
+      const D = CAMERA.FIRST_PERSON.DUNK;
+      if (fx.dunkHitT < 0 || fx.dunkHitT > D.SHAKE_T) return 0;
+      const fade = 1 - fx.dunkHitT / D.SHAKE_T;
+      return D.SHAKE * fade * fade * Math.sin(fx.dunkHitT * D.SHAKE_HZ * Math.PI * 2);
+    }
+
+    /**
+     * 体と一緒に視界を傾ける（lookAt の後に呼ぶ）。
+     * - 飛びつきボレー：体の倒れ込みと同じ向き。体の rotation.z はワールドの z（＝前）まわり、
+     *   カメラのローカル z は後ろ向きなので符号を反転
+     * - ツイーナー：股の下から覗くので、背を向けた度合いだけ逆さまへ
+     */
+    function rollWithBody(fx) {
+      if (you.userData.motion.dive) camera.rotateZ(-you.rotation.z * CAMERA.FIRST_PERSON.DIVE.ROLL);
+      if (fx.tweener > 0) camera.rotateZ(Math.PI * fx.tweener);
+    }
+
+    /**
+     * 一人称の画角と近クリップ面。目のすぐ先に地面（伏せた飛びつきボレー）や自分の脚（ツイーナー）
+     * があるときだけ近クリップ面を近づけ、ダンクスマッシュの跳躍の高さに応じて画角を広げる。
+     * ポイントの間に相手やスコアボードを見ている間（glance.fov）は、その画角まで絞る。
+     */
+    function firstPersonFov(fx, glance) {
+      const F = CAMERA.FIRST_PERSON;
+      const near = Math.min(
+        fx.dive > 0 ? lerp(F.NEAR, F.DIVE.NEAR, fx.dive) : F.NEAR,
+        fx.tweener > 0 ? lerp(F.NEAR, F.TWEENER.NEAR, fx.tweener) : F.NEAR,
+      );
+      const base = F.FOV + F.DUNK.FOV * fx.dunk;
+      setFov(glance && glance.fov ? lerp(base, glance.fov, glance.w) : base, near);
     }
 
     /**
@@ -144,33 +240,170 @@
      * 割合だけ目で追う（背後へ抜けた球・トスで真上にある球では振り向かない）。
      * 高く上がった球だけは HIGH_TRACK の高さに応じて強く追い、ロブを見上げる。相手の打った
      * 高い球は頭上を少し越えても（HIGH_BEHIND まで）真上を見上げて追う（後ろへは振り向かない）。
+     * 必殺技の間は球をいつもより強く追う（飛び込む球・股の下を抜ける球・叩き込んだ球）。
+     * ポイントの間は、見るもの（betweenPoints）のほうへ首を回す。
      */
-    function firstPersonLook(state, out) {
+    function firstPersonLook(state, out, fx, glance) {
       const F = CAMERA.FIRST_PERSON;
       const p = state.you;
       const b = state.ball;
       out.set(p.x * (1 - F.LOOK_X), F.LOOK_Y, p.z + F.LOOK_AHEAD);
-      if (!b || !ballMesh.visible) return out;
+      if (b && ballMesh.visible) trackBall(out, p, b, fx);
+      const D = F.DUNK;
+      if (fx.dunkHitT >= 0 && fx.dunkHitT < D.NOD_T) out.y -= D.NOD * Math.sin(Math.PI * (1 - fx.dunkHitT / D.NOD_T) / 2);
+      if (glance && glance.w > 0) turnToward(out, fpEye, glance.at, glance.w);
+      return out;
+    }
+
+    function trackBall(out, p, b, fx) {
+      const F = CAMERA.FIRST_PERSON;
       const H = F.HIGH_TRACK;
       const high = clamp((b.y - H.FROM_Y) / (H.FULL_Y - H.FROM_Y), 0, 1);
       const ahead = b.z > p.z + F.TRACK_MIN_Z;
       const overhead = high > 0 && b.last === 'cpu' && b.z > p.z - H.BEHIND;
-      if (!ahead && !overhead) return out;
-      const w = lerp(F.BALL_TRACK, H.WEIGHT, high);
+      if (!ahead && !overhead) return;
+      let track = lerp(F.BALL_TRACK, F.DIVE.BALL_TRACK, fx.dive);
+      track = lerp(track, F.TWEENER.BALL_TRACK, fx.tweener);
+      if (fx.dunkHitT >= 0) track = F.DUNK.TRACK;
+      const w = lerp(track, H.WEIGHT, fx.dunkHitT >= 0 ? 0 : high);
       out.x = lerp(out.x, b.x, w);
       out.y = lerp(out.y, b.y, w);
       // 真上より後ろの点を見ると振り向いてしまうので、注視点は目より少し前に留める
       out.z = Math.max(lerp(out.z, b.z, w), fpEye.z + H.MIN_AHEAD);
-      return out;
+    }
+
+    /**
+     * 注視点 out を、目 eye から見て target の方向へ w の割合だけ回す。点どうしを混ぜると
+     * 真横・真後ろを向くとき目のすぐ近くを通って視界が跳ねるので、向き（左右・上下の角度）と
+     * 距離で混ぜる。
+     */
+    function turnToward(out, eye, target, w) {
+      _dirA.subVectors(out, eye);
+      _dirB.subVectors(target, eye);
+      const yawA = Math.atan2(_dirA.x, _dirA.z);
+      const yawB = Math.atan2(_dirB.x, _dirB.z);
+      const pitchA = Math.atan2(_dirA.y, Math.hypot(_dirA.x, _dirA.z));
+      const pitchB = Math.atan2(_dirB.y, Math.hypot(_dirB.x, _dirB.z));
+      const dYaw = Math.atan2(Math.sin(yawB - yawA), Math.cos(yawB - yawA));
+      const yaw = yawA + dYaw * w;
+      const pitch = lerp(pitchA, pitchB, w);
+      const d = lerp(_dirA.length(), _dirB.length(), w);
+      out.set(
+        eye.x + Math.sin(yaw) * Math.cos(pitch) * d,
+        eye.y + Math.sin(pitch) * d,
+        eye.z + Math.cos(yaw) * Math.cos(pitch) * d,
+      );
+    }
+
+    // --- ポイントの間（決着の直後に相手を見る・球を受け取る） ---
+    let servePhaseT = -1;   // サーブ待ちになってからの秒数（サーブ待ちでなければ -1）
+    let serveFeed = false;  // このサーブ待ちで、後ろのボールボーイが球を投げ渡すか
+    let feedState = null;   // 投げ渡しの様子（ballPickup.update の戻り値）
+    let feedCaughtT = -1;   // 球が手に届いてからの秒数
+
+    /** 0→1（IN 秒）→そのまま（HOLD 秒）→0（OUT 秒）の重み。t は始まってからの秒数。 */
+    function rampWindow(t, IN, HOLD, OUT) {
+      if (t <= 0) return 0;
+      if (t < IN) return ease(t / IN);
+      if (t < IN + HOLD) return 1;
+      return 1 - ease(clamp((t - IN - HOLD) / OUT, 0, 1));
+    }
+
+    /**
+     * サーブ待ちの時計と、ボールボーイの投げ渡しを始めるかどうかを進める（生の state のときだけ）。
+     * 投げ渡すのは自分のファーストサーブの番だけ。トスを上げたらそこで打ち切る。
+     */
+    function tickServeWait(state, dt) {
+      if (state.phase !== 'serve') {
+        servePhaseT = -1;
+        serveFeed = false;
+        feedCaughtT = -1;
+        return;
+      }
+      if (servePhaseT < 0) {
+        servePhaseT = 0;
+        serveFeed = state.servingPlayer() === 'you' && state.serveNumber === 1 && !state.practice;
+        feedCaughtT = -1;
+      } else {
+        servePhaseT += dt;
+      }
+      if (state.tossActive) serveFeed = false;
+      if (feedState && feedState.caught) feedCaughtT = feedCaughtT < 0 ? 0 : feedCaughtT + dt;
+    }
+
+    /** ballPickup.update に渡す投げ渡しの指示（投げ渡していなければ null）。 */
+    function feedRequest() {
+      if (!serveFeed) return null;
+      const t = servePhaseT - OFFICIALS.BALLKID.FEED.START;
+      return t >= 0 ? { t, target: ballMesh.position } : null;
+    }
+
+    /**
+     * ボールボーイの投げ渡しを切り上げる（Space）。球はすぐサーバーの手に現れ、目も前へ戻る。
+     * @returns {boolean} 投げ渡しの最中だったか
+     */
+    function skipFeed() {
+      if (!serveFeed) return false;
+      serveFeed = false;
+      return true;
+    }
+
+    /** 投げ渡しを待っている・飛んでいる間は、サーバーの手の本物の球を隠す。 */
+    function feedHidesBall() {
+      return serveFeed && !(feedState && feedState.caught);
+    }
+
+    /**
+     * ポイントの間に一人称の目が見るもの（{at, w, fov}。w＝首を回す割合、fov＝見ている間に
+     * 絞る画角（無ければ絞らない）。何もなければ null）。
+     * - 決着の直後：感情表現（EMOTION）をしている相手の胸元
+     * - 自分のファーストサーブなら、続けて後ろのボールボーイと、投げ渡された球（BETWEEN.FEED）
+     */
+    function betweenPoints(state) {
+      const B = CAMERA.FIRST_PERSON.BETWEEN;
+      if (state.changeover || state.matchPointCut) return null;
+      if (state.phase === 'over') {
+        const team = state.doubles ? ['cpu', 'cpuMate'] : ['cpu'];
+        const who = team.find((w) => state[w].mood);
+        if (!who) return null;
+        const t = state[who].mood.t - EMOTION.DELAY;
+        const out = EMOTION.SPAN - B.MOOD_IN;
+        fpGlance.set(state[who].x, B.MOOD_Y, state[who].z);
+        return { at: fpGlance, w: rampWindow(t, B.MOOD_IN, out - B.MOOD_IN, B.MOOD_IN), fov: B.MOOD_FOV };
+      }
+      if (state.phase !== 'serve' || servePhaseT < 0 || state.tossActive || state.aiTossActive) return null;
+      const req = feedRequest();
+      if (req && feedState) {
+        const F = B.FEED;
+        const flying = req.t >= OFFICIALS.BALLKID.FEED.WIND && !feedState.caught;
+        fpGlance.copy(flying ? feedState.ball : feedState.kid);
+        if (flying) fpGlance.lerp(feedState.kid, 1 - F.BALL_W);
+        const w = feedState.caught ? 1 - ease(clamp(feedCaughtT / F.OUT, 0, 1)) : ease(clamp(req.t / F.IN, 0, 1));
+        if (feedState.caught) fpGlance.copy(ballMesh.position); // 受け取った球を見下ろしてから前へ
+        return { at: fpGlance, w };
+      }
+      return null;
     }
 
     function syncCamera(state, dt) {
       if (view === 'first') {
         const F = CAMERA.FIRST_PERSON;
-        setFov(F.FOV, F.NEAR);
-        camera.position.lerp(firstPersonEye(state), Math.min(1, dt * F.LERP));
-        fpLook.lerp(firstPersonLook(state, fpTarget), Math.min(1, dt * F.LOOK_LERP));
+        const fx = firstPersonFx(state);
+        const glance = betweenPoints(state);
+        firstPersonFov(fx, glance);
+        const eyeLerp = lerp(F.LERP, F.DIVE.LERP, fx.dive);
+        const lookLerp = Math.max(
+          lerp(F.LOOK_LERP, F.DIVE.LOOK_LERP, fx.dive),
+          lerp(F.LOOK_LERP, F.TWEENER.LOOK_LERP, fx.tweener),
+          fx.dunk > 0 ? F.DUNK.LOOK_LERP : 0,
+        );
+        // ツイーナー・ダンクの目は跳躍に合わせて一気に動くので、寄せずにその場へ置く
+        if (fx.tweener > 0 || fx.dunk > 0) camera.position.copy(firstPersonEye(state, fx));
+        else camera.position.lerp(firstPersonEye(state, fx), Math.min(1, dt * eyeLerp));
+        fpLook.lerp(firstPersonLook(state, fpTarget, fx, glance), Math.min(1, dt * lookLerp));
         camera.lookAt(fpLook);
+        rollWithBody(fx);
+        camera.position.y += dunkShake(fx);
         return;
       }
       setFov(CAMERA.FOV);
@@ -189,10 +422,13 @@
      */
     function snapCamera(state) {
       if (view === 'first') {
-        setFov(CAMERA.FIRST_PERSON.FOV, CAMERA.FIRST_PERSON.NEAR);
-        camera.position.copy(firstPersonEye(state));
-        fpLook.copy(firstPersonLook(state, fpTarget));
+        const fx = firstPersonFx(state);
+        const glance = betweenPoints(state);
+        firstPersonFov(fx, glance);
+        camera.position.copy(firstPersonEye(state, fx));
+        fpLook.copy(firstPersonLook(state, fpTarget, fx, glance));
         camera.lookAt(fpLook);
+        rollWithBody(fx);
         return;
       }
       setFov(CAMERA.FOV);
@@ -511,7 +747,7 @@
         // lift（スマッシュで跳ぶ高さ）は当たるまで毎フレーム変わりうるので、コマごとに録る
         leap: p.leap ? {
           t: p.leap.t, kind: p.leap.kind, span: p.leap.span, rise: p.leap.rise, reach: p.leap.reach,
-          lift: p.leap.lift,
+          lift: p.leap.lift, dunk: p.leap.dunk, t0: p.leap.t0, v0: p.leap.v0,
         } : null,
         dash: p.dash ? { x: p.dash.x, z: p.dash.z, t: p.dash.t } : null,
         // 飛びつきボレーの、打つ前の飛び込み（飛ぶ先の足元・打点・向き）
@@ -804,12 +1040,15 @@
         youMate.visible = cpuMate.visible = shadows.youMate.visible = shadows.cpuMate.visible = false;
         Object.keys(nightShadows).forEach((key) => nightShadows[key].forEach((m) => { m.visible = false; }));
       }
+      tickServeWait(state, dt);
+      feedState = ballPickup.update(state, dt, false, feedRequest());
       // 決まった後の球は、本物の球の代わりに ballkid.js の見た目だけの球を見せる（ネットに掛かって
-      // 拾われるのを待つ球、片付け前の球へ動きを引き継いだ球 ball.parked）
-      ballMesh.visible = shadows.ball.visible = !away && !ballPickup.active(state) && !state.ball.parked;
+      // 拾われるのを待つ球、片付け前の球へ動きを引き継いだ球 ball.parked）。サーバーへ投げ渡して
+      // いる間も、手に持つ本物の球を隠す（投げた球が届いたら入れ替わる）
+      ballMesh.visible = shadows.ball.visible = !away && !ballPickup.active(state) && !state.ball.parked
+        && !feedHidesBall();
       poseLineJudges(recClock);
       poseNet(netShake, recClock);
-      ballPickup.update(state, dt, false);
       // 軌跡はラリーの決着がついた後（ポイント間の 'serve' 待ち・'over'）だけ見せる。
       // ラリー中に出しっぱなしだと本来の目的（アウトの結果を振り返る）を超えて
       // 「次にどこへ来るか」の手がかりになってしまうため。観客席や勝者を映す演出のカットでも
@@ -827,6 +1066,9 @@
       // 首・胴が画面に入る）。外から映すカット（マッチポイントの演出・締めのカット）では戻す。
       const cutCamera = !!(cut || (finale && finale.cut));
       scene3d.setOwnView(you, view === 'first' && !cutCamera);
+      // ツイーナーで背を向けたら、股の下から覗く絵になるよう脚と腰だけ映す
+      if (view === 'first' && !cutCamera
+        && scene3d.tweenerFlip(state.you) >= CAMERA.FIRST_PERSON.TWEENER.LEGS_FROM) scene3d.showOwnLegs(you);
       if (cut) {
         placeMatchPointCamera(cut);
         cutShown = true;
@@ -853,7 +1095,8 @@
     }
 
     return {
-      sync, render: stage.render, scene, camera, setSurface, startReplay, skipReplay, isReplaying,
+      sync, render: stage.render, scene, camera, setSurface, startReplay, skipReplay, isReplaying, skipFeed,
+      setScoreboard: scoreboards.set,
       isCheckingMark, captureClip, pruneClips, resetClips, playHighlights, highlightInfo,
       setSession, setView, earOf, rainLevel: () => weather.rainLevel(),
     };

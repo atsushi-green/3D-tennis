@@ -490,6 +490,11 @@
     return clamp((span - anim) / span, 0, 1);
   }
 
+  // 一人称の目（world.js）も、着地の衝撃をこの進行度に合わせる
+  scene3d.diveProgress = diveProgress;
+  /** ツイーナーで背を向けている度合い(0〜1)。一人称の目（world.js）が股の下から覗くのに使う。 */
+  scene3d.tweenerFlip = (state) => tweenerTurn(state.anim, state.stroke) / Math.PI;
+
   /**
    * 選手の足元 (fx, fz) から見たワールドの点 (wx, wy, wz) を、選手の普段の向き（facing）の
    * 座標へ移す（+x＝モデルのローカル x、+z＝前、y は地面からの高さ）。contactPoint() と同じ置き方。
@@ -667,9 +672,7 @@
   function leapRise(state, kind) {
     const u = leapProgress(state, kind);
     if (u === null) return null;
-    const rise = kind === 'serve' ? state.leap.rise
-      : kind === 'smash' ? PLAYER.SMASH_LEAP_RISE
-        : SPECIAL.JACK.LEAP_RISE;
+    const { rise } = state.leap;
     return rise > 0 ? clamp(u / rise, 0, 1) : 1;
   }
 
@@ -1380,7 +1383,8 @@
     // 一人称視点で隠す部位：頭・胴・腰・脚と、肩口（肩の球・袖・上腕）。目の位置から見ると
     // 首や胴の内側・肩の付け根が画面の下に入って違和感があるので、前腕・手・ラケットだけ残す
     // （肘から先は elbow の Group の子なので、肩の直下の Mesh だけ隠せば前腕は残る）。
-    const ownView = [head, body, pelvis, rightLeg.hip, leftLeg.hip].concat(
+    const ownLegs = [pelvis, rightLeg.hip, leftLeg.hip]; // ツイーナーで股の下から覗くときだけ映す
+    const ownView = [head, body, ...ownLegs].concat(
       [racketArm, offArm].flatMap((arm) => arm.shoulder.children.filter((o) => o.isMesh)),
     );
 
@@ -1394,7 +1398,7 @@
       // 体ごと反転させたあと、確実に元の向きへ戻すために基準として持っておく。
       facing: 0,
       rig: {
-        torso, head, hips, racket: racketArm, off: offArm, ownView,
+        torso, head, hips, racket: racketArm, off: offArm, ownView, ownLegs,
       },
       gait: {
         torso, hips, phase: 0, blend: 0,
@@ -1431,29 +1435,36 @@
     player.userData.rig.ownView.forEach((o) => { o.visible = !hidden; });
   };
 
+  /** 一人称で隠した部位のうち、脚と腰だけを映す（setOwnView の後に呼ぶ）。 */
+  scene3d.showOwnLegs = function showOwnLegs(player) {
+    player.userData.rig.ownLegs.forEach((o) => { o.visible = true; });
+  };
+
   /* ------------------------------------------------------------ 跳躍・飛び込み（体の側） */
 
   /**
-   * 上昇（0〜π/2）→ 下降（π/2〜π）の sin カーブ。頂点付近は sin が寝るので滞空感が出る。
-   * @param {number} u 跳躍の進み具合(0〜1)
-   * @param {number} riseFrac そのうち上昇に使う割合
+   * 跳んでいる体の高さ(m)。スマッシュ・ジャックナイフ・サーブのどれも同じ式で、時計
+   * （state.leap）の t0 秒に初速 v0 で踏み切り、あとは実際の重力（PHYSICS.REAL_G）だけで
+   * 上がって落ちる放物線（t0・v0 は game.js#leapTiming・tickServeSwing が決める）。
+   * 見た目だけの値で、当たり判定（PLAYER.REACH_Y）には一切影響しない。
+   * @param {string} kind
    */
-  function leapArc(u, riseFrac) {
-    const phase = u < riseFrac
-      ? (u / riseFrac) * (Math.PI / 2)
-      : Math.PI / 2 + ((u - riseFrac) / (1 - riseFrac)) * (Math.PI / 2);
-    return Math.sin(phase);
+  function leapBodyY(state, kind) {
+    if (leapProgress(state, kind) === null) return 0;
+    const { span, t, t0 = 0, v0 = 0 } = state.leap;
+    const e = span - t - t0; // 踏み切ってからの秒数
+    if (e <= 0) return 0;
+    return Math.max(0, v0 * e - PHYSICS.REAL_G * e * e / 2);
   }
 
   /**
-   * スマッシュのジャンプの高さ(m)。見た目だけの値で、当たり判定（PLAYER.REACH_Y）には
-   * 一切影響しない。頂点の高さ（state.leap.lift）は game.js#smashLift が打点から決める：
-   * 立ったままラケットが届く打点なら 0（跳ばずに打つ）、ダンクスマッシュは高く跳ぶ。
+   * スマッシュのジャンプの高さ(m)。頂点の高さ（state.leap.lift）は game.js#smashLift が
+   * 打点から決める：立ったままラケットが届く打点なら 0（跳ばずに打つ）、ダンクスマッシュは
+   * 高く跳ぶ。頂点は当たる見込みの瞬間（時計の span×rise）。時計が頂点まで振りかぶりの
+   * 最低限（PLAYER.SMASH_WINDUP_T）を取っている低い跳躍は、そのぶん遅れて踏み切る。
    */
   function smashLift(state) {
-    const u = leapProgress(state, 'smash');
-    if (u === null) return 0;
-    return (state.leap.lift || 0) * leapArc(u, PLAYER.SMASH_LEAP_RISE);
+    return leapBodyY(state, 'smash');
   }
 
   /**
@@ -1589,7 +1600,7 @@
    * **跳躍だけは打球のモーション（anim）ではなく専用の時計（state.leap）で動く。**
    * anim は「当たった瞬間」からしか始められないので、そこに跳躍も乗せると跳ぶのと
    * 振るのが同時になり、「打ってから跳んだ」ように見えてしまう（ユーザー報告）。
-   * 踏み切り（LEAP_RISE）で上がり、頂点でふわりと粘ってから着地する。
+   * 体は実際の重力どおりの放物線で、頂点で当てる（leapBodyY）。
    * @param {object} state その選手の見た目に関わる状態（setSwingPose と同じもの）
    * @returns {number} 浮いた高さ(m)。影を小さくするのに使う（world.js 参照）
    */
@@ -1597,7 +1608,7 @@
     const u = leapProgress(state, 'jackknife');
     if (u === null) return 0;
     const J = SWING.JACK;
-    const lift = J.JUMP_H * leapArc(u, SPECIAL.JACK.LEAP_RISE);
+    const lift = leapBodyY(state, 'jackknife');
     player.position.y = lift;
 
     const gait = player.userData.gait;
@@ -1615,8 +1626,9 @@
 
   /**
    * サーブのジャンプ。applySmashJump() と同じく歩行ポーズの後に上から重ねる。
-   * トスが打点（state.leap.reach）まで落ちてくるのに合わせて跳び、頂点でラケットを
-   * 伸ばしきって当てる（頂点＝当たる瞬間になるよう game.js#tickServeSwing が踏み切る）。
+   * トスが打点（state.leap.reach）まで落ちてくるのに合わせて跳び、当たる瞬間にちょうど
+   * 打点に届く高さを通る（game.js#tickServeSwing。時間が足りなければ上がっている途中で
+   * 当て、打った後も少し上がってから落ちる）。
    * - 上がる間は両脚をそろえて伸ばす（トロフィーで曲げた膝を伸ばして跳ぶ）
    * - 打ったあとは振り下ろしに合わせて、ラケット側の脚を後ろへ蹴り上げる
    * 体幹の反り→前への折れは振り付け（MOTION.SERVE の lean）が受け持つ。
@@ -1626,10 +1638,9 @@
   scene3d.applyServeJump = function applyServeJump(player, state) {
     const u = leapProgress(state, 'serve');
     if (u === null) return 0;
-    // SERVE_JUMP_H は人間の打点（SERVE.CONTACT_Y）に届く高さ。打点が低い CPU/AI
-    // （SERVE.AI_CONTACT_Y）はその差だけ低く跳ぶ＝同じ伸ばしきった腕で球に届く。
-    const peak = Math.max(0, SWING.SERVE_JUMP_H + state.leap.reach - SERVE.CONTACT_Y);
-    const lift = peak * leapArc(u, state.leap.rise);
+    // 跳ぶ高さ（打点で決まる。game.js#serveLift）。当たる瞬間に体がこの高さを通る
+    const peak = state.leap.lift || 0;
+    const lift = leapBodyY(state, 'serve');
     player.position.y = lift;
     if (peak <= 0) return 0;
 

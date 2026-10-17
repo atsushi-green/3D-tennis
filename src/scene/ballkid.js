@@ -15,6 +15,7 @@
   const scene3d = RallyOne.scene = RallyOne.scene || {};
 
   const P = OFFICIALS.BALLKID.PICKUP;
+  const F = OFFICIALS.BALLKID.FEED;
   const ease = (u) => u * u * (3 - 2 * u);
 
   /** a から b へ最短で回る角度差(rad)。 */
@@ -184,14 +185,115 @@
       return kid;
     }
 
+    // サーバーへの投げ渡し（feed）。投げた瞬間の手の位置（会場の座標）を覚えておき、そこから飛ばす
+    let feedFrom = null;
+    const feedOut = {
+      ball: new THREE.Vector3(), kid: new THREE.Vector3(), caught: false, feeder: null,
+    };
+    const local = new THREE.Vector3();
+    let path = null; // 投げた球の道のり（feedPath）
+
+    /**
+     * ワンバウンドの投げ渡しの道のり（会場の座標）。弾んでから手（to）に届くまでを UP_T 秒と
+     * 決めて、後ろから逆算する：
+     * - 弾んだ直後の上向きの速さ up … UP_T 秒で地面から手の高さへ届く速さ
+     * - 弾む直前の下向きの速さ V … up を反発係数で割り戻したもの
+     * - 投げてから弾むまで t1 … 手を離れた高さ h0 から、落ちきったとき V になる時間
+     *   （h0 + v0·t − G·t²/2 = 0 と v0 − G·t = −V の短い方の解＝下へ投げ下ろす）
+     * 横は弾むところで KEEP_VX まで落ちるので、弾む点は全体の t1/(t1+KEEP_VX·UP_T) の位置。
+     */
+    function feedPath(from, to) {
+      const R = PHYSICS.BALL_R;
+      const G = PHYSICS.REAL_G;
+      const h0 = Math.max(0, from.y - R);
+      const t2 = F.UP_T;
+      const up = (to.y - R + G * t2 * t2 / 2) / t2;
+      const V = up / F.RESTITUTION;
+      const t1 = (V - Math.sqrt(Math.max(0, V * V - 2 * G * h0))) / G;
+      const f = t1 / (t1 + F.KEEP_VX * t2);
+      return {
+        from: from.clone(), to: to.clone(), t1, t2, up, v0: G * t1 - V,
+        bounce: new THREE.Vector3(lerp(from.x, to.x, f), R, lerp(from.z, to.z, f)),
+      };
+    }
+
+    /** 投げてから s 秒の球の位置（会場の座標）を out に入れる。 */
+    function feedAt(s, out) {
+      const R = PHYSICS.BALL_R;
+      const G = PHYSICS.REAL_G;
+      if (s < path.t1) {
+        const k = s / path.t1;
+        return out.set(lerp(path.from.x, path.bounce.x, k),
+          path.from.y + path.v0 * s - G * s * s / 2, lerp(path.from.z, path.bounce.z, k));
+      }
+      const s2 = s - path.t1;
+      const k = clamp(s2 / path.t2, 0, 1);
+      return out.set(lerp(path.bounce.x, path.to.x, k),
+        R + path.up * s2 - G * s2 * s2 / 2, lerp(path.bounce.z, path.to.z, k));
+    }
+
+    /**
+     * 後ろのコーナーの子が、サーバーの手（target）へ球を投げ渡す（OFFICIALS.BALLKID.FEED）。
+     * 投げ渡すのは target にいちばん近いコーナーの子。振りかぶり（〜WIND）→上から投げ下ろし、
+     * 球はコートで一度弾んで手に届く（feedPath）。
+     * @param {number} t 投げ渡しを始めてからの秒数
+     * @param {{x:number, y:number, z:number}} target 受け取る手（ゲームの座標＝ワールド）
+     * @returns {{ball:THREE.Vector3, kid:THREE.Vector3, caught:boolean}} ball＝球、kid＝その子の胸元
+     *   （どちらもワールドの座標。一人称の目が追う）、caught＝もう手に届いた
+     */
+    function feed(t, target) {
+      venue.updateMatrixWorld(true);
+      venue.worldToLocal(local.set(target.x, target.y, target.z));
+      const kid = corner.reduce((best, k) => (
+        Math.hypot(k.x - local.x, k.z - local.z) < Math.hypot(best.x - local.x, best.z - local.z) ? k : best));
+      goHome(kid);
+      kid.yaw = Math.atan2(local.x - kid.x, local.z - kid.z);
+      kid.mesh.rotation.y = kid.yaw;
+      // 球を持つ腕（+x 側）：頭の上へ振りかぶって、前下へ振り下ろし、ゆっくり下ろす
+      const s = t - F.WIND; // 手を離れてからの秒数
+      if (s < 0) path = null;
+      const flight = path ? path.t1 + path.t2 : 0;
+      const arm = s < 0 ? lerp(0, F.ARM_BACK, ease(t / F.WIND))
+        : s < F.THROW_T ? lerp(F.ARM_BACK, F.ARM_THROW, ease(s / F.THROW_T))
+          : lerp(F.ARM_THROW, 0, ease(clamp((s - F.THROW_T) / Math.max(flight, F.THROW_T), 0, 1)));
+      kid.arms[1].rotation.x = arm;
+      kid.mesh.updateMatrixWorld(true);
+      feedOut.kid.set(kid.x, kid.hipY * F.CHEST, kid.z);
+      venue.localToWorld(feedOut.kid);
+      feedOut.feeder = kid;
+      if (s >= 0 && !path) path = feedPath(feedFrom || handOf(kid).clone(), local);
+      feedOut.caught = !!path && s >= path.t1 + path.t2;
+      if (feedOut.caught) return feedOut; // 手に届いた＝本物の球に入れ替わる
+      const p = prop('feed');
+      if (s < 0) {
+        feedFrom = handOf(kid).clone();
+        place(p, feedFrom.x, feedFrom.y, feedFrom.z);
+      } else {
+        const at = feedAt(s, feedOut.ball);
+        place(p, at.x, at.y, at.z); // 影も出す（サーバーの持つ本物の球は、届くまで影ごと隠れている）
+      }
+      venue.localToWorld(feedOut.ball.copy(p.ball.position));
+      return feedOut;
+    }
+
     /**
      * game の状態どおりにボールボーイと見た目だけの球を置く。replaying の間（リプレイ・
      * ハイライト）はボールボーイを持ち場に立たせ、球もすべて隠す（再生のコマの球と二重に
      * 見えないように。試合の時計も止まっているので、再生が終われば続きから動く）。
+     * @param {{t:number, target:object}|null} [feedReq] サーバーへの投げ渡し（feed() 参照）
+     * @returns {object|null} 投げ渡しの様子（feed() の戻り値）。投げ渡していなければ null
      */
-    function update(state, dt, replaying) {
+    function update(state, dt, replaying, feedReq) {
       used = new Set();
       const busy = new Set();
+      let fed = null;
+      if (!replaying && feedReq) {
+        fed = feed(feedReq.t, feedReq.target);
+        busy.add(fed.feeder);
+      } else {
+        feedFrom = null;
+        path = null;
+      }
       if (!replaying) {
         const plan = state.netBallRest;
         if (active(state)) {
@@ -208,7 +310,9 @@
             if (b.crowd) p.shadow.visible = false; // 客席の段の上（地面の影は壁の裏に落ちる）
           }
         });
-        trips.forEach(({ left, balls }, trip) => busy.add(fetch(corner[trip.kid], trip, left, balls, dt)));
+        trips.forEach(({ left, balls }, trip) => {
+          if (!busy.has(corner[trip.kid])) busy.add(fetch(corner[trip.kid], trip, left, balls, dt));
+        });
       }
       all.forEach((kid) => { if (!busy.has(kid)) goHome(kid); });
       props.forEach((p, key) => {
@@ -217,6 +321,7 @@
         props.delete(key);
         spare.push(p);
       });
+      return fed;
     }
 
     return { update, active };
