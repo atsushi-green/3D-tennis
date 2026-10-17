@@ -99,6 +99,28 @@
   }
 
   /**
+   * CPU/AI がその球を「今」返してよいか（ノーバウンドで手を出してよいか）。
+   * 原則は1バウンド待ってから返すが、ネット際（volleyZ 以内。game.js#aiVolleyZ()）にいるならボレー、
+   * 頭上へ上がってきた球（CPU.SMASH_MIN_Y 以上でコートの中）ならスマッシュで叩ける。
+   * 後者を許さないと、smashApproach() が先回りさせた位置に立っていても
+   * 打点が高いまま素通りさせてしまい、結局バウンド後に打ち直すことになる。
+   * ただし頭上を越されて CPU.SMASH_RETREAT_MAX より下がらされたロブは叩かずにバウンドを待つ
+   * （smashApproach() が先回りをあきらめた球を、追いかける途中で無理に叩かせない）。
+   * 打たせる側（game.js の checkSwings 系）と、追う側（chasePosition() の「もう届くので待つ」）の
+   * 両方がこれを見る。食い違うと、手は届くが打たせてもらえない球の前で立ち止まってしまう。
+   * @param {number} volleyZ ノーバウンドで返してよい深さの限界（game.js#aiVolleyZ()）
+   */
+  function aiCanReturnNow(actor, ball, volleyZ) {
+    if (ball.bounces >= 1) return true;
+    // ボレーの側（ネットへ詰めている最中は自陣どこでもボレーできる＝NET_RUSH_VOLLEY_Z）
+    // にも掛ける。そうしないと、詰めていた CPU だけは何m下がらされても空中で叩けてしまう。
+    if (-actor.runFwd > CPU.SMASH_RETREAT_MAX) return false;
+    return Math.abs(actor.z) <= volleyZ
+      || (ball.y >= CPU.SMASH_MIN_Y && ball.vy <= CPU.SMASH_FALLING_VY
+        && Math.abs(actor.z) <= CPU.SMASH_Z_MAX);
+  }
+
+  /**
    * 既にボールへ手が届く範囲にいるか（＝これ以上動く必要がない）。
    * バウンドした瞬間に追跡目標（着地点の後ろ→頂点や現在地）が切り替わるせいで、実際には
    * もう届く位置に構えられているのに「新しい目標までの距離」だけを見て全力で走り出したと
@@ -157,11 +179,18 @@
     // 頭上を越されて下がる距離（ネットから遠ざかる向きを正）。下がりすぎるロブは
     // 叩きにいかずバウンドを待つ。下がる足は遅いので、そのぶん間に合いにくく見積もる。
     const retreat = side * (mid.z - player.z);
-    if (retreat > CPU.SMASH_RETREAT_MAX) return null;
+    // 下がりすぎかどうかは「相手が打ってから打点までに下がる合計」で見る。打たせてよいかを
+    // 決める game.js#aiCanReturnNow() がその合計（-runFwd）で判定しているため。
+    // (退行: 以前はここだけ「今の位置から」の距離で見ていたので、ネット際で頭上を抜かれた
+    //  CPU が途中まで下がると残りが SMASH_RETREAT_MAX を切って先回りに切り替わり、打点の
+    //  真下で構えて待ったのに、合計では下がりすぎで振らせてもらえず見送っていた)
+    if (retreat - (player.runFwd || 0) > CPU.SMASH_RETREAT_MAX) return null;
     const speed = PLAYER.CPU_CHASE * (retreat > 0 ? CPU.SMASH_BACK_SPEED : 1);
     const runT = Math.hypot(mid.x - player.x, mid.z - player.z) / speed;
     if (runT > mid.t * CPU.SMASH_CHASE_MARGIN) return null; // 走っても間に合わない
-    return { x: clamp(mid.x, -CPU.CHASE_X_LIMIT, CPU.CHASE_X_LIMIT), z: mid.z };
+    // arriveIn＝球が叩ける帯へ入ってくるまでの秒数。早く着きすぎて棒立ちで待たないよう、
+    // 移動側（game.js#moveTowards）がこれに合わせて走る速さを落とす。
+    return { x: clamp(mid.x, -CPU.CHASE_X_LIMIT, CPU.CHASE_X_LIMIT), z: mid.z, arriveIn: window.enter.t };
   }
 
   /**
@@ -180,10 +209,16 @@
    * @param {boolean} [sideStep] 球の通り道から横へずれて、体の横で打てる位置に立つか
    *   （hitSide()）。既定 true。サーブリターンでは false：速いサーブに横へ動き出すと、
    *   体の正面に来たサーブを返せなくなり、逆にコースいっぱいのサーブにも届いてしまう。
+   * @param {number} [volleyZ] ノーバウンドで返してよい深さの限界（game.js#aiVolleyZ()）。
+   *   既定は PLAYER.VOLLEY_Z。
    * @returns {{x:number, z:number}}
    */
-  function chasePosition(ball, side = 1, player, smashNearZ, sideStep = true) {
-    if (player && inReachOf(player, ball)) {
+  function chasePosition(ball, side = 1, player, smashNearZ, sideStep = true, volleyZ = PLAYER.VOLLEY_Z) {
+    // 手が届いても、いま打たせてもらえない球（ネットから下がらされた先で、まだバウンドしていない
+    // 胸の高さの球など）の前では止まらない。止まると球は頭上を素通りし、そこから走り直して
+    // バウンド後を追うことになる（ユーザー報告「止まらなければ追いつきそうなのに、途中で
+    // 止まってから打っている」。実測：攻めのロブに 0.1秒立ち止まり、その間に球が通り過ぎた）。
+    if (player && inReachOf(player, ball) && aiCanReturnNow(player, ball, volleyZ)) {
       return { x: player.x, z: player.z };
     }
     // 頭上に上がってきた球は、バウンドを待たずに叩ける位置へ先回りする（＝スマッシュ）。
@@ -853,7 +888,7 @@
 
   RallyOne.ai = {
     chasePosition, homePosition, netRushPosition, shotTarget, cpuShot, cpuVolleyShot,
-    cpuSmashShot, smashApproach, isResponder, coverPosition, reactReach, aiSpin,
+    cpuSmashShot, smashApproach, aiCanReturnNow, isResponder, coverPosition, reactReach, aiSpin,
     poachSpot, poachRun, pairResponder, frontPosition, backPosition,
     doublesRallyShot, doublesVolleyShot, doublesSmashShot,
   };

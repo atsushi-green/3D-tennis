@@ -7094,6 +7094,69 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   //  下がって先回りし、待てた時間でフルパワーのスマッシュになっていた)
   const atNetZ = { x: 0, z: 1.5 };
   ok(smashApproach(lob, atNetZ, 1) === null, 'a high lob over a net player is left to bounce');
+  // 途中まで下がって残りが SMASH_RETREAT_MAX を切っても、打たれてからの合計で下がりすぎなら
+  // 先回りに切り替えない（打たせる側の aiCanReturnNow() は合計＝-runFwd で判定するため）。
+  // (退行テスト: 以前は今の位置からの距離だけを見ていたので、ネット際で抜かれた CPU が
+  //  途中から打点の真下へ走り込んで構え、結局振らずに見送ってからバウンド後に返していた)
+  const halfway = { x: 0, z: atNetZ.z + 3.5 };
+  ok(smashApproach(lob, halfway, 1) !== null,
+    'precondition: from halfway back, the rest of the way alone would be short enough to smash');
+  ok(smashApproach(lob, { ...halfway, runFwd: -3.5 }, 1) === null,
+    'but having already backed off from the net, the total retreat is too far: keep letting it bounce');
+}
+
+// --- CPU/AI：ネット際で頭上を抜かれたロブの下で、構えたまま見送らない（実際の試合の流れで） ---
+{
+  const g = new R.Game({ input: { moveX: 0, moveZ: 0, lob: true }, hooks: noHooks });
+  g.start();
+  g.windStrength = 0;
+  g.setWindVector();
+  g.phase = 'rally';
+  g.you.x = 0; g.you.z = -11;
+  g.cpu.x = 0; g.cpu.z = 2;
+  g.ball.x = 0.3; g.ball.y = 1.0; g.ball.z = -11; g.ball.bounces = 1; g.ball.live = true;
+  g.you.swingCharge = 0;
+  g.you.chargeSpin = 'flat';
+  g.hit('you');
+  let aimedAtSmash = false; let returned = null;
+  for (let i = 0; i < 60 * 5 && g.phase === 'rally' && !returned; i++) {
+    if (g.ball.bounces === 0 && R.ai.smashApproach(g.ball, g.cpu, 1)) aimedAtSmash = true;
+    const vz = g.ball.vz;
+    g.update(1 / 60);
+    if (vz > 0 && g.ball.vz < 0) returned = g.cpu.stroke;
+  }
+  ok(!aimedAtSmash, 'a net player lobbed deep never switches to waiting under the ball for a smash');
+  ok(returned && returned !== 'smash', `it runs back and plays it after the bounce instead, got ${returned}`);
+}
+
+// --- CPU/AI：頭上を抜かれた攻めのロブを追う途中で、打たせてもらえない球の前に立ち止まらない ---
+// (退行テスト: 追う側の「もう手が届くので待つ」(ai.inReachOf) が、打たせる側の
+//  aiCanReturnNow() を見ていなかった。ネットから下がらされた先で胸の高さを通る球に手が届くと
+//  0.1秒立ち止まり、振らせてもらえないまま頭上を素通りさせてから走り直していた
+//  ＝ユーザー報告「止まらなければ追いつきそうなのに、途中で止まってから打っている」)
+{
+  const g = new R.Game({ input: { moveX: 1, moveZ: 0, lob: true }, hooks: noHooks });
+  g.start();
+  g.windStrength = 0;
+  g.setWindVector();
+  g.phase = 'rally';
+  g.you.x = 0; g.you.z = -11;
+  g.cpu.x = 0; g.cpu.z = 1.5;
+  g.ball.x = 0.3; g.ball.y = 1.0; g.ball.z = -11; g.ball.bounces = 1; g.ball.live = true;
+  g.you.swingCharge = 1;
+  g.you.chargeSpin = 'flat';
+  g.hit('you');
+  let started = false; let stalled = 0;
+  for (let i = 0; i < 60 * 3 && g.phase === 'rally' && g.ball.bounces === 0; i++) {
+    g.update(1 / 60);
+    if (g.cpu.speed > 1) started = true;
+    else if (started && g.ball.bounces === 0 && g.ball.last === 'you') stalled++;
+  }
+  ok(started && stalled === 0, `the CPU keeps running back under the lob without stalling, stalled ${stalled} frames`);
+  ok(R.ai.aiCanReturnNow({ z: 7, runFwd: -5.5 }, { bounces: 0, y: 1.6, vy: -5 }, R.config.PLAYER.VOLLEY_Z) === false
+    && R.ai.chasePosition({ x: 0, y: 1.6, z: 7, vx: 0, vy: -5, vz: 15, bounces: 0, age: 1, spin: 'flat' }, 1,
+      { x: 0, z: 7.2, runFwd: -5.5, attr: { reach: 1 } }).z > 7.2,
+    'chasePosition does not stop in front of a ball it is not allowed to hit yet');
 }
 
 // --- CPU/AI：下がって叩くスマッシュは、落下点で待てていても弱い ---

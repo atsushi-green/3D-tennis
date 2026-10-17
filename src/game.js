@@ -19,7 +19,7 @@
   } = RallyOne.physics;
   const {
     chasePosition, homePosition, netRushPosition, cpuShot, cpuVolleyShot, cpuSmashShot,
-    isResponder, coverPosition, reactReach, aiSpin,
+    isResponder, coverPosition, reactReach, aiSpin, aiCanReturnNow,
     pairResponder, poachRun, frontPosition, backPosition,
     doublesRallyShot, doublesVolleyShot, doublesSmashShot,
   } = RallyOne.ai;
@@ -260,26 +260,6 @@
    */
   function aiVolleyZ(g, who) {
     return who === 'cpu' && !g.doubles && g.cpuNetRush ? CPU.NET_RUSH_VOLLEY_Z : PLAYER.VOLLEY_Z;
-  }
-
-  /**
-   * CPU/AI がその球を「今」返してよいか（ノーバウンドで手を出してよいか）。
-   * 原則は1バウンド待ってから返すが、ネット際（volleyZ 以内。aiVolleyZ()）にいるならボレー、
-   * 頭上へ上がってきた球（CPU.SMASH_MIN_Y 以上でコートの中）ならスマッシュで叩ける。
-   * 後者を許さないと、ai.js#smashApproach() が先回りさせた位置に立っていても
-   * 打点が高いまま素通りさせてしまい、結局バウンド後に打ち直すことになる。
-   * ただし頭上を越されて CPU.SMASH_RETREAT_MAX より下がらされたロブは叩かずにバウンドを待つ
-   * （ai.smashApproach() が先回りをあきらめた球を、追いかける途中で無理に叩かせない）。
-   * @param {number} volleyZ ノーバウンドで返してよい深さの限界（aiVolleyZ()）
-   */
-  function aiCanReturnNow(actor, ball, volleyZ) {
-    if (ball.bounces >= 1) return true;
-    // ボレーの側（ネットへ詰めている最中は自陣どこでもボレーできる＝NET_RUSH_VOLLEY_Z）
-    // にも掛ける。そうしないと、詰めていた CPU だけは何m下がらされても空中で叩けてしまう。
-    if (-actor.runFwd > CPU.SMASH_RETREAT_MAX) return false;
-    return Math.abs(actor.z) <= volleyZ
-      || (ball.y >= CPU.SMASH_MIN_Y && ball.vy <= CPU.SMASH_FALLING_VY
-        && Math.abs(actor.z) <= CPU.SMASH_Z_MAX);
   }
 
   /** ボールの仮想延長線が、ラケット側か逆側（体の反対側に手を伸ばす＝バックハンド）か */
@@ -1947,7 +1927,7 @@
       // 動ける範囲（youBounds() の AI 版）。ネット側の限界と後ろの限界を netDir で鏡にする。
       const nearZ = dir * PLAYER.Z_NEAR;
       const farZ = dir * -(HALF_L + PLAYER.Z_FAR_MARGIN);
-      const spot = chasePosition(ball, side, actor, undefined, !this.serveInFlight);
+      const spot = chasePosition(ball, side, actor, undefined, !this.serveInFlight, aiVolleyZ(this, who));
       const x = clamp(spot.x, -PLAYER.X_LIMIT, PLAYER.X_LIMIT);
       const z = clamp(spot.z, Math.min(nearZ, farZ), Math.max(nearZ, farZ));
       const reach = PLAYER.CPU_REACH * actor.attr.reach;
@@ -5146,7 +5126,7 @@
         ? netRushPosition(this.ball, 1, this.cpu)
         : null;
       const target = incoming
-        ? rushTarget || chasePosition(this.ball, 1, this.cpu, undefined, !this.serveInFlight)
+        ? rushTarget || chasePosition(this.ball, 1, this.cpu, undefined, !this.serveInFlight, aiVolleyZ(this, 'cpu'))
         : homePosition(approachingNet);
       const speed = incoming || approachingNet ? PLAYER.CPU_CHASE : PLAYER.CPU_RECOVER;
       this.moveIfRecovered('cpu', this.cpu, cpuBefore, target, speed, dt);
@@ -5195,7 +5175,7 @@
       const cpuFront = () => frontPosition(this.doublesFoes(frontKey).back, back, DOUBLES.NET_Z_CPU);
       if (cpuTeamChasing && this.doublesResponder('cpu') === backKey) {
         if (this.reactTimers[backKey] <= 0) {
-          this.moveIfRecovered(backKey, back, backBefore, chasePosition(ball, 1, back, undefined, !this.serveInFlight), PLAYER.CPU_CHASE, dt);
+          this.moveIfRecovered(backKey, back, backBefore, chasePosition(ball, 1, back, undefined, !this.serveInFlight, aiVolleyZ(this, backKey)), PLAYER.CPU_CHASE, dt);
         } else {
           back.speed = 0;
         }
@@ -5206,7 +5186,7 @@
           poach || cpuFront(), poach ? PLAYER.CPU_CHASE : DOUBLES.FRONT_MOVE, dt);
       } else if (cpuTeamChasing) {
         if (this.reactTimers[frontKey] <= 0) {
-          this.moveIfRecovered(frontKey, front, frontBefore, chasePosition(ball, 1, front, undefined, !this.serveInFlight), PLAYER.CPU_CHASE, dt);
+          this.moveIfRecovered(frontKey, front, frontBefore, chasePosition(ball, 1, front, undefined, !this.serveInFlight, aiVolleyZ(this, frontKey)), PLAYER.CPU_CHASE, dt);
         } else {
           front.speed = 0;
         }
@@ -5225,7 +5205,7 @@
         && this.doublesResponder('you') === 'youMate';
       const mateSmashNearZ = this.youMateFormation === 'back' ? DOUBLES.BACK_SMASH_Z : undefined;
       if (mateChasing && this.reactTimers.youMate <= 0) {
-        this.moveIfRecovered('youMate', this.youMate, youMateBefore, chasePosition(ball, -1, this.youMate, mateSmashNearZ, !this.serveInFlight), PLAYER.CPU_CHASE, dt);
+        this.moveIfRecovered('youMate', this.youMate, youMateBefore, chasePosition(ball, -1, this.youMate, mateSmashNearZ, !this.serveInFlight, aiVolleyZ(this, 'youMate')), PLAYER.CPU_CHASE, dt);
       } else if (mateChasing) {
         this.youMate.speed = 0;
       } else if (this.hasFrontPlayer('you')) {
@@ -5345,7 +5325,12 @@
       const dist = Math.hypot(dx, dz);
       // 能力値「移動速度」×スタミナ。どちらも倍率なので掛ける順序には依存しない。
       const cappedSpeed = speed * actor.attr.speed * this.staminaSpeedMult(actor.stamina);
-      const step = Math.min(cappedSpeed * dt, dist);
+      // 着く時刻の決まった目標（スマッシュの落下点。ai.smashApproach の arriveIn）は、
+      // 球が来る CPU.SMASH_ARRIVE_LEAD 秒前にちょうど着く速さで寄る（早く着いて棒立ちしない）。
+      const paced = target.arriveIn === undefined
+        ? cappedSpeed
+        : Math.min(cappedSpeed, dist / Math.max(target.arriveIn - CPU.SMASH_ARRIVE_LEAD, dt));
+      const step = Math.min(paced * dt, dist);
       if (dist > 0) {
         actor.x += (dx / dist) * step;
         actor.z += (dz / dist) * step;
