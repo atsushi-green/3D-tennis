@@ -1194,6 +1194,13 @@
     // 相手でも山なりに持ち上げられない範囲にしてある。以前は DEPTH_MAX まで引いていたため、
     // 浅い当たりを引いた1本だけ 90km/h の緩い球になり、難易度どおりの速さが出ていなかった。
     DEPTH_AI_MAX: 2.1,
+    // 能力値「サーブ」が最高（5）の CPU/AI が引く深さの上限（4 はその中間、3 以下は DEPTH_AI_MAX のまま。
+    // attr.serveDepth）。速い選手ほど浅い狙いを山なりに持ち上げられやすい：打点 AI_CONTACT_Y から
+    // ネットを越すには浅いほど滞空時間を伸ばすしかなく、ビッグサーバー（サーブ5）の Hard のフラットは
+    // 1.8m 手前を狙うと 125km/h、0.5m 手前なら 210km/h（実測）。DEPTH_AI_MAX のままでは
+    // 速さの差がほとんど消え、「ビッグサーバーなのに強いサーブが来ない」というユーザー報告になった。
+    // 実際のビッグサーバーも1本目はサービスライン際へ叩き込む。0.8 は Normal〜Hard でほぼ減速しない範囲。
+    DEPTH_AI_MAX_STRONG: 0.8,
     // プレイヤーはトス中に ↑↓ で深さも選べる（トス中は移動入力が無視されるので、
     // 新しいキーを増やさずにコースの選択肢を 3→9 に増やせる）。無入力なら全域から。
     // CPU/AI は常に全域からランダム。
@@ -4580,6 +4587,13 @@
    *   変えることもできる。型にはまらない選手（オールラウンダー等）は 'none'。
    * - temper ポイントの後の感情表現の出やすさ（EMOTION.TEMPERS のキー）。'fiery' だけが
    *   ブレークされるとラケットを叩きつける。カスタムの選手は 'normal'。
+   * - spin その選手が CPU/AI として打つときに好む球種の割合（flat/top/slice、合計1）。
+   *   serve は1本目のサーブ、stroke はラリーのグラウンドストローク（ai.js#aiSpin）。
+   *   セカンドサーブ（SERVE.SECOND_*）・チャンスボールを叩く1本（CHANCE_FLAT_CHANCE へ寄せる）・
+   *   走らされた守りのスライス（SPIN.GROUND.SLICE.STRETCH_PICK）は選手によらず共通。
+   *   省略（オールラウンダー）は CPU.SPIN_FLAT_CHANCE 等の既定の混ぜ方＝これまでと同じ。
+   *   人間（you）が操作する間は使わない（球種は押したキーで決まる）。カスタムの選手は、
+   *   カスタムにする前に選んでいた選手の spin を引き継ぐ（applySpinPref）。
    */
   const CHARACTER_BUDGET = SKILL_DEFAULT * SKILLS.filter((s) => !s.aiOnly).length;
   const CHARACTERS = [
@@ -4600,6 +4614,10 @@
       key: 'bigServer',
       temper: 'fiery',
       cpuStyle: 'aggressiveBaseliner',
+      spin: {
+        serve: { flat: 0.75, top: 0.15, slice: 0.10 },
+        stroke: { flat: 0.50, top: 0.35, slice: 0.15 },
+      },
       name: 'ボリス・ヴァルガ',
       type: 'ビッグサーバー',
       text: '重いサーブとスマッシュで、ポイントを短く決める。足が遅く、走らされると苦しい。',
@@ -4613,6 +4631,10 @@
       key: 'counterPuncher',
       temper: 'calm',
       cpuStyle: 'retriever',
+      spin: {
+        serve: { flat: 0.25, top: 0.45, slice: 0.30 },
+        stroke: { flat: 0.15, top: 0.65, slice: 0.20 },
+      },
       name: 'ルシア・ベガ',
       type: 'カウンターパンチャー',
       text: 'どこまでも走って拾い、ミスをしない。決め球は持たず、相手が崩れるのを待つ。',
@@ -4626,6 +4648,10 @@
       key: 'serveVolley',
       temper: 'normal',
       cpuStyle: 'serveAndVolley',
+      spin: {
+        serve: { flat: 0.35, top: 0.15, slice: 0.50 },
+        stroke: { flat: 0.30, top: 0.25, slice: 0.45 },
+      },
       name: 'オリバー・ハート',
       type: 'サーブ&ボレーヤー',
       text: 'サーブから一気にネットへ詰め、ボレーで仕留める。後ろでの打ち合いは苦手で、ミスも出る。',
@@ -4639,6 +4665,10 @@
       key: 'powerHitter',
       temper: 'fiery',
       cpuStyle: 'aggressiveBaseliner',
+      spin: {
+        serve: { flat: 0.60, top: 0.25, slice: 0.15 },
+        stroke: { flat: 0.60, top: 0.30, slice: 0.10 },
+      },
       name: 'レオ・ブラント',
       type: 'パワーヒッター',
       text: 'フォアの強打で押し込む。当たれば誰より速いが、ミスも多い。',
@@ -4652,6 +4682,10 @@
       key: 'speedster',
       temper: 'normal',
       cpuStyle: 'retriever',
+      spin: {
+        serve: { flat: 0.40, top: 0.40, slice: 0.20 },
+        stroke: { flat: 0.35, top: 0.50, slice: 0.15 },
+      },
       name: 'ミア・ソーン',
       type: 'スピードスター',
       text: 'コートを駆け回る俊足で、届かないはずの球に届く。サーブの威力はない。',
@@ -4665,6 +4699,10 @@
       key: 'technician',
       temper: 'calm',
       cpuStyle: 'none',
+      spin: {
+        serve: { flat: 0.30, top: 0.25, slice: 0.45 },
+        stroke: { flat: 0.30, top: 0.30, slice: 0.40 },
+      },
       name: 'エマ・ルグラン',
       type: 'テクニシャン',
       text: 'バックハンドとボレーの名手。崩れずに打ち分ける。足は速くない。',
@@ -4678,6 +4716,10 @@
       key: 'veteran',
       temper: 'calm',
       cpuStyle: 'none',
+      spin: {
+        serve: { flat: 0.35, top: 0.30, slice: 0.35 },
+        stroke: { flat: 0.35, top: 0.30, slice: 0.35 },
+      },
       name: 'ヨハン・ベルク',
       type: 'ベテラン',
       text: '読みの速さと広い守備範囲、組み立てのうまいサーブ。足と体力は衰えた。',
@@ -4693,6 +4735,10 @@
       key: 'champion',
       temper: 'calm',
       cpuStyle: 'none',
+      spin: {
+        serve: { flat: 0.65, top: 0.25, slice: 0.10 },
+        stroke: { flat: 0.45, top: 0.40, slice: 0.15 },
+      },
       name: 'レイ・カグラ',
       type: '最強のチャンピオン',
       text: 'すべての能力が最高。弱点のない、最強の選手。相手に選べば、どの強さでも手ごわい。',
@@ -4748,6 +4794,9 @@
     out.smash = down('smash', ATTR_SPREAD.POWER);
     out.serve = down('serve', ATTR_SPREAD.SERVE_POWER);
     out.serveWindow = up('serve', ATTR_SPREAD.SERVE_WINDOW);
+    // CPU/AI の1本目が引く深さの上限の倍率。3 以下は 1.0（DEPTH_AI_MAX のまま）、5 で
+    // DEPTH_AI_MAX_STRONG まで縮む（4 はその中間）。サーブが苦手な選手を浅くはしない。
+    out.serveDepth = Math.min(1, down('serve', 1 - SERVE.DEPTH_AI_MAX_STRONG / SERVE.DEPTH_AI_MAX));
     out.out = down('consistency', ATTR_SPREAD.OUT);
     out.timing = down('consistency', ATTR_SPREAD.TIMING);
     out.net = up('netPlay', ATTR_SPREAD.NET);
@@ -4756,6 +4805,41 @@
 
   deriveAttr(defaultRatings(), NEUTRAL_ATTR);
   ROSTER.forEach((r) => deriveAttr(RATINGS[r.key], ATTRS[r.key]));
+
+  /**
+   * 枠ごとの「好む球種」（CHARACTERS の spin）。null＝既定の混ぜ方（CPU.SPIN_FLAT_CHANCE 等）。
+   * ATTRS と同じく中身の書き換えで更新するので、game.js の各アクターは参照を1回持てばよい。
+   * 選手を選ぶと applyCharacter() がその選手の spin に揃える。カスタムのつまみ（setRating）や
+   * ランダム（randomizeRatings）では触らない＝直前に選んでいた選手の好みが残る。
+   */
+  const SPIN_PREFS = Object.fromEntries(ROSTER.map((r) => [r.key, { serve: null, stroke: null }]));
+
+  /**
+   * 1人の「好む球種」を、選手（CHARACTERS）のものに揃える。能力値は変えない
+   * （カスタムの選手を、もとにした選手の好みに戻すときに main.js が呼ぶ）。
+   * @param {'you'|'youMate'|'cpu'|'cpuMate'} who
+   * @param {string} key CHARACTERS のキー（見つからなければ既定の混ぜ方）
+   */
+  function applySpinPref(who, key) {
+    const character = CHARACTERS.find((c) => c.key === key);
+    const spin = (character && character.spin) || {};
+    if (!SPIN_PREFS[who]) return;
+    SPIN_PREFS[who].serve = spin.serve || null;
+    SPIN_PREFS[who].stroke = spin.stroke || null;
+  }
+
+  /**
+   * 好む球種の割合（flat/top/slice、合計1）。null なら既定の混ぜ方を同じ形に直して返す。
+   * ai.js#aiSpin と、スタート画面の表示（hud.js）が使う。
+   * @param {{flat:number, top:number, slice:number}|null} pref SPIN_PREFS[who].serve／.stroke
+   * @param {'serve'|'stroke'} kind
+   */
+  function spinMix(pref, kind) {
+    if (pref) return pref;
+    const flat = kind === 'serve' ? CPU.SPIN_FLAT_CHANCE : CPU.RALLY_FLAT_CHANCE;
+    const top = (1 - flat) * CPU.SPIN_TOP_SHARE;
+    return { flat, top, slice: 1 - flat - top };
+  }
 
   /**
    * 能力値を1つ変える（スタート画面の1クリック＝1回の呼び出し）。
@@ -4778,6 +4862,7 @@
     ROSTER.forEach((r) => {
       Object.assign(RATINGS[r.key], defaultRatings());
       deriveAttr(RATINGS[r.key], ATTRS[r.key]);
+      applySpinPref(r.key, CHARACTER_DEFAULT);
     });
   }
 
@@ -4801,6 +4886,7 @@
     if (!character || !RATINGS[who]) return;
     SKILLS.forEach((s) => { RATINGS[who][s.key] = clampSkill(character.ratings[s.key]); });
     deriveAttr(RATINGS[who], ATTRS[who]);
+    applySpinPref(who, key);
   }
 
   /**
@@ -4823,5 +4909,6 @@
     SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, ATTR_SPREAD, ATTRS, NEUTRAL_ATTR,
     CHARACTERS, CHARACTER_BUDGET, CHARACTER_DEFAULT,
     setRating, getRating, resetRatings, randomizeRatings, applyCharacter, shotSkill,
+    SPIN_PREFS, applySpinPref, spinMix,
   };
 })(window.RallyOne = window.RallyOne || {});

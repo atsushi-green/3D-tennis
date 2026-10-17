@@ -11197,5 +11197,111 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   ok(!f.skipPause() && !f.finale.done, 'and one press does not also skip the cut itself');
 }
 
+// --- 選手ごとの「好む球種」：選手を選ぶと CPU/AI のサーブ・ストロークの球種の割合が変わる ---
+{
+  const { CHARACTERS, SPIN_PREFS, applyCharacter, applySpinPref, resetRatings, setRating, spinMix } = R.config;
+  for (const c of CHARACTERS) {
+    if (!c.spin) continue;
+    for (const kind of ['serve', 'stroke']) {
+      const m = c.spin[kind];
+      ok(Math.abs(m.flat + m.top + m.slice - 1) < 1e-9, `${c.key}.spin.${kind} adds up to 1`);
+    }
+  }
+  // オールラウンダー（既定）は好みを持たない＝これまでどおりの混ぜ方
+  resetRatings();
+  ok(SPIN_PREFS.cpu.serve === null && SPIN_PREFS.cpu.stroke === null, 'the default player has no spin preference');
+  const def = spinMix(null, 'serve');
+  ok(Math.abs(def.flat - R.config.CPU.SPIN_FLAT_CHANCE) < 1e-9 && Math.abs(def.flat + def.top + def.slice - 1) < 1e-9,
+    'spinMix(null) reproduces the default mix');
+
+  applyCharacter('cpu', 'bigServer');
+  const big = CHARACTERS.find((c) => c.key === 'bigServer').spin;
+  ok(SPIN_PREFS.cpu.serve === big.serve && SPIN_PREFS.cpu.stroke === big.stroke, 'picking a player sets their spin preference');
+  // カスタムのつまみを動かしても、好みは選んでいた選手のまま
+  setRating('cpu', 'serve', 1);
+  ok(SPIN_PREFS.cpu.serve === big.serve, 'tweaking ratings (custom) keeps the base player\'s preference');
+  applySpinPref('cpu', 'nobody');
+  ok(SPIN_PREFS.cpu.serve === null, 'an unknown base falls back to the default mix');
+
+  // aiSpin() は好みの割合どおりに引く。セカンドサーブには効かない
+  const share = (fn, n = 6000) => {
+    const c = { flat: 0, top: 0, slice: 0 };
+    for (let i = 0; i < n; i++) c[fn()]++;
+    return { flat: c.flat / n, top: c.top / n, slice: c.slice / n };
+  };
+  const pref = { flat: 0.2, top: 0.2, slice: 0.6 };
+  const got = share(() => R.ai.aiSpin(false, 0, true, 0, pref));
+  ok(['flat', 'top', 'slice'].every((k) => Math.abs(got[k] - pref[k]) < 0.03),
+    `aiSpin follows the preference: ${JSON.stringify(got)}`);
+  const second = share(() => R.ai.aiSpin(true, 0, false, 0, { flat: 1, top: 0, slice: 0 }));
+  ok(Math.abs(second.flat - SERVE.SECOND_FLAT_CHANCE) < 0.03,
+    `the second serve ignores the preference: flat=${second.flat.toFixed(2)}`);
+
+  // 実際の試合の1本目：ビッグサーバーはオールラウンダーよりフラットが多い
+  const flatServes = (key) => {
+    applyCharacter('cpu', key);
+    let flat = 0;
+    for (let i = 0; i < 1500; i++) {
+      const g = new R.Game({ input: fakeInput, hooks: noHooks });
+      g.started = true;
+      g.server = 'cpu';
+      g.newPoint();
+      g.cpu.special = null;
+      g.serve('cpu');
+      if (g.ball.spin === 'flat' && !g.ball.kick) flat++;
+    }
+    return flat / 1500;
+  };
+  const bigFlat = flatServes('bigServer');
+  const stdFlat = flatServes('standard');
+  ok(bigFlat > stdFlat + 0.1, `the big server hits more flat first serves: ${bigFlat.toFixed(2)} vs ${stdFlat.toFixed(2)}`);
+  resetRatings();
+}
+
+// --- 能力値「サーブ」が高い CPU/AI ほど1本目をライン際へ狙う（浅い狙いは山なりに持ち上げられて遅くなる） ---
+// (退行テスト: 以前は誰でも DEPTH_AI_MAX まで浅く引いていたため、ビッグサーバーでも
+//  1本目の平均がオールラウンダーより +10km/h ほどしか速くならなかった)
+{
+  const { applyCharacter, resetRatings, setRating, ATTRS, CPU: C } = R.config;
+  resetRatings();
+  ok(ATTRS.cpu.serveDepth === 1, 'serve 3 keeps the usual depth range');
+  setRating('cpu', 'serve', 1);
+  ok(ATTRS.cpu.serveDepth === 1, 'a weak server does not aim shallower than usual');
+  setRating('cpu', 'serve', 5);
+  ok(Math.abs(SERVE.DEPTH_AI_MAX * ATTRS.cpu.serveDepth - SERVE.DEPTH_AI_MAX_STRONG) < 1e-9,
+    'serve 5 narrows the depth to DEPTH_AI_MAX_STRONG');
+
+  const firstServes = (key) => {
+    applyCharacter('cpu', key);
+    const depths = [];
+    const speeds = [];
+    for (let i = 0; i < 800; i++) {
+      let kmh = null;
+      const g = new R.Game({ input: fakeInput, hooks: { ...noHooks, serveSpeed: (v) => { kmh = v; } } });
+      g.started = true;
+      g.server = 'cpu';
+      g.newPoint();
+      g.cpu.special = null;
+      g.serve('cpu');
+      const L = R.physics.predictLanding(g.ball);
+      // 外す抽選（CPU_FIRST_MISS）・ネット掛かりの1本は除き、ボックスに入る狙いだけを見る
+      if (L.net || Math.abs(L.x) > HALF_W || L.z > 0 || L.z < -COURT.SERVICE || -L.z < 2) continue;
+      depths.push(COURT.SERVICE + L.z);
+      speeds.push(kmh);
+    }
+    const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+    return { maxDepth: Math.max(...depths), kmh: avg(speeds) };
+  };
+  R.config.applyCpuLevel('hard');
+  const std = firstServes('standard');
+  const big = firstServes('bigServer');
+  R.config.applyCpuLevel('normal');
+  ok(big.maxDepth <= SERVE.DEPTH_AI_MAX_STRONG + 0.15 && std.maxDepth > 1.5, // 0.15＝着地予測の刻みと、サーブの風・回転による数cmのずれ
+    `the big server lands first serves near the service line: max ${big.maxDepth.toFixed(2)}m (standard ${std.maxDepth.toFixed(2)}m)`);
+  ok(big.kmh > std.kmh + 25,
+    `and the big server's first serve is clearly faster: ${big.kmh.toFixed(0)} vs ${std.kmh.toFixed(0)}km/h`);
+  resetRatings();
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);

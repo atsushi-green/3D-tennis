@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    ATTRS, AUDIO, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, EMOTION, FINALE, FOOTSTEP, FX, HALF_L, HALF_W,
+    ATTRS, SPIN_PREFS, AUDIO, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, EMOTION, FINALE, FOOTSTEP, FX, HALF_L, HALF_W,
     HIGHLIGHT, LINE_CALL, MATCH_POINT,
     NET, OFFICIALS, PHYSICS, PLAYER, PRACTICE, RAIN, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, SWING,
     SPECTATORS, SPIN, STANDS, TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND, shotSkill,
@@ -844,6 +844,7 @@
         // 書き換えられる形で更新されるので、ここで参照を1度持っておけば以後ずっと最新を指す。
         // 既定（全項目3）ならすべて 1.0＝設定を触らない限り従来と完全に同じ挙動になる。
         attr: ATTRS.you,
+        spinPref: SPIN_PREFS.you, // 人間は押したキーで球種が決まるので使わない（形を AI と揃えるだけ）
         netDir: NET_DIR.you,
       };
       // chaseDist＝この球を追って走った距離、settleT＝目標地点に着いてから動かずに
@@ -871,6 +872,8 @@
         // この球を追い始めた位置（resetChase が入れる）
         chaseFromX: x, chaseFromZ: z,
         attr: ATTRS[who], netDir: NET_DIR[who],
+        // 選んだ選手の好む球種（config.SPIN_PREFS。attr と同じく参照を1度持てば最新を指す）
+        spinPref: SPIN_PREFS[who],
       });
       this.cpu = aiActor(0, CPU.HOME_Z, 'cpu');
       // ダブルス（this.doubles === true）のときだけ動く AI パートナー。シングルスでは未使用のまま。
@@ -2772,15 +2775,16 @@
       const magnitude = who === 'you'
         ? this.serveAimMagnitude(targetSign)
         : this.cpuServeAimMagnitude(second);
-      const target = {
-        x: targetSign * magnitude,
-        y: BALL_R,
-        z: dir * (COURT.SERVICE - (who === 'you'
-          ? (kick ? SPECIAL.KICK.DEPTH : this.serveDepth())
-          : (second
-            ? rand(SERVE.SECOND_DEPTH_MIN, SERVE.SECOND_DEPTH_MAX)
-            : rand(SERVE.DEPTH_MIN, SERVE.DEPTH_AI_MAX)))),
-      };
+      // 深さ（サービスラインからどれだけ手前に落とすか）。CPU/AI の1本目は、能力値「サーブ」が
+      // 高いほどライン際だけを狙う（浅い狙いは山なりに持ち上げられて遅くなるため。
+      // SERVE.DEPTH_AI_MAX_STRONG 参照）。
+      const aiDepthMax = SERVE.DEPTH_AI_MAX * this.actor(who).attr.serveDepth;
+      const depth = who === 'you'
+        ? (kick ? SPECIAL.KICK.DEPTH : this.serveDepth())
+        : (second
+          ? rand(SERVE.SECOND_DEPTH_MIN, SERVE.SECOND_DEPTH_MAX)
+          : rand(SERVE.DEPTH_MIN, aiDepthMax));
+      const target = { x: targetSign * magnitude, y: BALL_R, z: dir * (COURT.SERVICE - depth) };
       // ゲージの線を超えて溜めた（chargeRelease() の抽選に当たった）1本は、狙いそのものを
       // サービスボックスの外へずらして外す。「フォールト」の判定は普段どおり着地で決まる
       // （bounce()→inServiceBox()）ので、ロング／サイドアウトがそのまま画面に出る。
@@ -2809,7 +2813,9 @@
       // 人はトスを上げた瞬間に固定したスピン（V/C。chargeStart() 参照）でスライスサーブ・
       // スピンサーブが打てる。CPU/AI も同じ SPIN 設定（実効重力・バウンドの弾み方）で
       // 一定確率でスピンサーブを混ぜる（aiSpin()。以前は常にフラット固定だった）。
-      const spin = kick ? 'top' : (who === 'you' ? this.you.chargeSpin : aiSpin(second));
+      const spin = kick ? 'top' : (who === 'you'
+        ? this.you.chargeSpin
+        : aiSpin(second, 0, false, 0, this.actor(who).spinPref.serve));
       // プレイヤーは「打つ」瞬間の溜め量で威力が変わる。CPU/AI（cpu・cpuMate・youMate）は
       // 溜め演出がない代わりに、難易度で決まる一定の威力（CPU.SERVE_T）で打つ。
       // どちらにも能力値「サーブ」の倍率が掛かる（attr.serve。小さいほど速い＝強い）。
@@ -3099,7 +3105,7 @@
       // cpuShot() に渡す能力（skill.out）へ先に織り込む必要がある。
       // 走らされた1打ほど守りのスライスを選びやすく、スライスなら苦しさが和らぐ
       // （SPIN.GROUND.SLICE）。ロブに逃げる確率・狙いの浅さ・ミス率はすべてこの値で決まる。
-      const aiGroundSpin = who === 'you' ? null : aiSpin(false, attack, true, stretch);
+      const aiGroundSpin = who === 'you' ? null : aiSpin(false, attack, true, stretch, player.spinPref.stroke);
       const groundStretch = aiGroundSpin === 'slice' ? stretch * SPIN.GROUND.SLICE.STRETCH_MULT : stretch;
       const groundSkill = () => {
         const skill = shotSkill(player.attr, baseStroke);
@@ -3909,7 +3915,7 @@
           // 球種は押したキー（B/V/C）のまま。溜めずに離したスライスでもドロップには
           // ならない（ドロップの分岐より手前で返しているため）＝ライン際を突く技になる。
           // AI には押したキーが無いので、通常の返球と同じ aiSpin() で混ぜる。
-          spin: who === 'you' ? this.you.chargeSpin : aiSpin(),
+          spin: who === 'you' ? this.you.chargeSpin : aiSpin(false, 0, false, 0, this.actor(who).spinPref.stroke),
           risk: 0,
         };
       }

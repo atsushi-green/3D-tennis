@@ -5,6 +5,7 @@
   const { pointLabel } = RallyOne.scoring;
   const {
     GUIDE, SERVE, WIND, STAMINA, SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, getRating,
+    SPIN_PREFS, spinMix,
     CHARACTERS, CHARACTER_BUDGET, CHARACTER_DEFAULT, THEME, SURFACE_COLORS,
     SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE, MATCH_FORMATS,
   } = RallyOne.config;
@@ -23,6 +24,16 @@
     accent: '#e8eef5',
   };
   const PICKABLE = CHARACTERS.concat([CUSTOM]);
+  /** 選手の詳細に出す「好む球種」の行（config.SPIN_PREFS の serve／stroke）と球種の呼び名。 */
+  const SPIN_ROWS = [{ kind: 'serve', label: 'サーブ' }, { kind: 'stroke', label: 'ストローク' }];
+  const SPIN_NAMES = { flat: 'フラット', top: 'トップスピン', slice: 'スライス' };
+  /** クラスと文字を指定して要素を1つ作る（スタート画面の「選手」パネル用）。 */
+  const text = (tag, cls, value) => {
+    const el = document.createElement(tag);
+    el.className = cls;
+    if (value != null) el.textContent = value;
+    return el;
+  };
   const pickOf = (key) => PICKABLE.find((c) => c.key === key) || CUSTOM;
   const accentOf = (c) => (c.look ? c.look.accent : c.accent);
   /** レーダーチャートの軸＝人間にも効く項目（ネット志向は AI の動き方の好みなので外す）。 */
@@ -544,13 +555,6 @@
       this.rosterBars = {}; // key ＝ 能力のキー、値 ＝ その行のバーの部品（renderRoster が使う）
       this.slots = {};      // key ＝ 枠（ROSTER のキー）、値 ＝ その枠の表示の部品
 
-      const text = (tag, cls, value) => {
-        const el = document.createElement(tag);
-        el.className = cls;
-        if (value != null) el.textContent = value;
-        return el;
-      };
-
       // 対戦カード。cpu で始まる枠は右（相手側）。パートナー／CPU2 はシングルスでは使われない
       this.el.teamCpu.classList.add('cpu');
       ROSTER.forEach((actor) => {
@@ -591,11 +595,12 @@
         name: text('span', 'cdName'),
         type: text('span', 'cdType'),
         text: text('div', 'cdText'),
+        spin: text('div', 'cdSpin'),
       };
       const title = text('div', 'cdTitle');
       title.append(this.detail.name, this.detail.type);
       const words = text('div', '');
-      words.append(title, this.detail.text);
+      words.append(title, this.detail.text, this.detail.spin);
       this.el.cdTop.append(this.detail.face, words);
 
       this.buildRadar();
@@ -728,9 +733,11 @@
     /**
      * どの枠に誰を選んでいるかを受け取って描き直す（値そのものは main.js が持つ）。
      * @param {{[who:string]: string}} picks 枠ごとの config.CHARACTERS の key、または 'custom'
+     * @param {{[who:string]: string}} [customBase] カスタムの枠の、もとにした選手（CHARACTERS の key）
      */
-    setPicks(picks) {
+    setPicks(picks, customBase = {}) {
       this.picks = Object.assign({}, picks);
+      this.customBase = Object.assign({}, customBase);
       this.renderRoster();
     }
 
@@ -763,6 +770,7 @@
       this.detail.name.textContent = current.name;
       this.detail.type.textContent = current.type;
       this.detail.text.textContent = current.text;
+      this.renderSpinPref(who, current);
       this.renderRadar(who);
 
       let total = 0;
@@ -787,6 +795,33 @@
         : current.champion
           ? `能力の合計 ${total}（ネット志向を除く）— 全項目が最高。ほかの選手（合計 ${CHARACTER_BUDGET}）とは別格の強さ。`
           : `能力の合計 ${total}（ネット志向を除く）— 最強の選手を除き、みな同じ合計。違うのは得意・不得意だけ。`;
+    }
+
+    /**
+     * 選手の詳細に「好む球種」（CPU/AI として打つときの球種の割合）を出す。いちばん多い球種を
+     * 差し色で強調する。カスタムは、もとにした選手の好みを引き継いでいることも添える。
+     * @param {string} who ROSTER のキー
+     * @param {object} current 選んでいる選手（CHARACTERS の1人、または CUSTOM）
+     */
+    renderSpinPref(who, current) {
+      const rows = SPIN_ROWS.map(({ kind, label }) => {
+        const mix = spinMix(SPIN_PREFS[who][kind], kind);
+        const top = Object.keys(SPIN_NAMES).reduce((a, b) => (mix[b] > mix[a] ? b : a));
+        const row = text('div', 'cdSpinRow');
+        row.append(text('b', '', label));
+        Object.keys(SPIN_NAMES).forEach((spin) => {
+          const pct = text('span', spin === top ? 'main' : '', `${SPIN_NAMES[spin]} ${Math.round(mix[spin] * 100)}%`);
+          row.append(pct);
+        });
+        return row;
+      });
+      const notes = [];
+      const base = current === CUSTOM && CHARACTERS.find((c) => c.key === this.customBase[who]);
+      if (base) notes.push(`球種の好みは「${base.name}」のもの`);
+      if (who === 'you') notes.push('AI が打つときの好み。自分はキーで選ぶ');
+      const head = text('div', 'cdSpinHead', '好む球種');
+      if (notes.length) head.append(text('span', '', `（${notes.join('。')}）`));
+      this.detail.spin.replaceChildren(head, ...rows);
     }
 
     /**

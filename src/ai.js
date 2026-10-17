@@ -875,13 +875,21 @@
    *   CPU.RALLY_FLAT_CHANCE にする（サーブより回転をかけた球が多い）。既定 false。
    * @param {number} [stretch] 走らされた度合い(0〜1)。その分だけ守りのスライス
    *   （SPIN.GROUND.SLICE.STRETCH_PICK）を選びやすい。既定0。
+   * @param {{flat:number, top:number, slice:number}|null} [pref] 打つ選手の好む球種
+   *   （config.SPIN_PREFS の serve／stroke）。あれば上の既定の混ぜ方の代わりに使う。
+   *   セカンドサーブには効かない（選手によらず確実に入れにいく）。既定 null。
    * @returns {'flat'|'top'|'slice'}
    */
-  function aiSpin(second, attack = 0, rally = false, stretch = 0) {
+  function aiSpin(second, attack = 0, rally = false, stretch = 0, pref = null) {
     if (Math.random() < stretch * SPIN.GROUND.SLICE.STRETCH_PICK) return 'slice';
-    const base = second ? SERVE.SECOND_FLAT_CHANCE : rally ? CPU.RALLY_FLAT_CHANCE : CPU.SPIN_FLAT_CHANCE;
+    const own = !second && pref;
+    const base = second ? SERVE.SECOND_FLAT_CHANCE
+      : own ? pref.flat : rally ? CPU.RALLY_FLAT_CHANCE : CPU.SPIN_FLAT_CHANCE;
     const flatChance = lerp(base, CPU.CHANCE_FLAT_CHANCE, attack);
-    const topShare = lerp(second ? SERVE.SECOND_TOP_SHARE : CPU.SPIN_TOP_SHARE, 1, attack);
+    const spun = own ? pref.top + pref.slice : 0;
+    const share = second ? SERVE.SECOND_TOP_SHARE
+      : own ? (spun > 0 ? pref.top / spun : 1) : CPU.SPIN_TOP_SHARE;
+    const topShare = lerp(share, 1, attack);
     if (Math.random() < flatChance) return 'flat';
     return Math.random() < topShare ? 'top' : 'slice';
   }

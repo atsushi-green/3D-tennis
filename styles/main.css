@@ -619,6 +619,11 @@ svg.face{display:block;border-radius:50%;overflow:hidden;box-shadow:0 0 0 1px rg
 }
 .cdFor{font-size:10px;color:var(--dim)}
 .cdText{margin-top:3px;font-size:11px;line-height:1.6;color:rgba(232,238,245,.8)}
+.cdSpin{margin-top:4px;font-size:10px;line-height:1.6;color:var(--dim)}
+.cdSpinHead span{margin-left:2px}
+.cdSpinRow{display:flex;flex-wrap:wrap;gap:0 8px}
+.cdSpinRow b{min-width:5.5em;color:rgba(232,238,245,.8);font-weight:700}
+.cdSpinRow .main{color:var(--accent);font-weight:700}
 .cdBody{display:flex;gap:12px;align-items:center;margin-top:2px}
 #radar{flex:0 0 168px;width:168px;height:168px;overflow:visible}
 #radar .ring{fill:none;stroke:rgba(232,238,245,.12);stroke-width:1}

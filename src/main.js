@@ -4,7 +4,7 @@
 
   const {
     PHYSICS, applyCpuLevel, applyCpuStyle, applySurface, applyMatchFormat, MATCH_FORMATS, TOSS,
-    setRating, getRating, resetRatings, randomizeRatings, applyCharacter,
+    setRating, getRating, resetRatings, randomizeRatings, applyCharacter, applySpinPref,
     SKILLS, ROSTER, CHARACTERS, CHARACTER_DEFAULT,
     SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE, LINE_CALL, REPLAY,
   } = RallyOne.config;
@@ -69,6 +69,16 @@
    * 作りかけの値から続けられるように覚えておく。
    */
   const customRatings = {};
+  /**
+   * 枠ごとの「カスタムのもとにした選手」（config.CHARACTERS の key）。カスタムにした瞬間に
+   * 選んでいた選手で、その選手の好む球種（config.SPIN_PREFS）をカスタムでも引き継ぐ。
+   * 別の選手を挟んでカスタムに戻したときも、能力値（customRatings）と一緒にこれへ戻す。
+   */
+  const customBase = {};
+  /** その枠をカスタムにする直前に呼ぶ。もう カスタムなら、もとにした選手はそのまま。 */
+  const enterCustom = (who) => {
+    if (picks[who] !== 'custom') customBase[who] = picks[who];
+  };
   const ratingsOf = (who) => Object.fromEntries(SKILLS.map((s) => [s.key, getRating(who, s.key)]));
   /** トス（コイントス）に人間が勝ち、サーブ/レシーブの選択を待っている間だけ true。 */
   let awaitingToss = false;
@@ -351,9 +361,10 @@
       if (key !== 'custom') applyCharacter(who, key);
       else if (customRatings[who]) {
         SKILLS.forEach((s) => setRating(who, s.key, customRatings[who][s.key]));
-      }
+        applySpinPref(who, customBase[who]);
+      } else enterCustom(who);
       picks[who] = key;
-      hud.setPicks(picks);
+      hud.setPicks(picks, customBase);
       // 相手の主力を選んだら、その選手の型に合わせて CPU のプレースタイルも切り替える
       // （例：サーブ&ボレーヤー → サーブ&ボレー）。カスタムは型がないので今の選択のまま。
       if (who === 'cpu') {
@@ -364,9 +375,10 @@
     // つまみを動かしたら、その枠は「カスタム」になる（選んでいた選手をもとにした微調整）
     onChange: (who, key, value) => {
       setRating(who, key, value);
+      enterCustom(who);
       picks[who] = 'custom';
       customRatings[who] = ratingsOf(who);
-      hud.setPicks(picks);
+      hud.setPicks(picks, customBase);
     },
     // 既定（全項目3）は CHARACTER_DEFAULT の能力値そのもの（tests/smoke.mjs で確かめている）
     onReset: () => {
@@ -374,20 +386,22 @@
       ROSTER.forEach((r) => {
         picks[r.key] = CHARACTER_DEFAULT;
         delete customRatings[r.key];
+        delete customBase[r.key];
       });
-      hud.setPicks(picks);
+      hud.setPicks(picks, customBase);
       menu.onSelectStyle(CHARACTERS.find((c) => c.key === CHARACTER_DEFAULT).cpuStyle);
     },
     onRandom: () => {
-      randomizeRatings();
+      randomizeRatings(); // 好む球種は変えない＝いま選んでいた選手のものを引き継ぐ
       ROSTER.forEach((r) => {
+        enterCustom(r.key);
         picks[r.key] = 'custom';
         customRatings[r.key] = ratingsOf(r.key);
       });
-      hud.setPicks(picks);
+      hud.setPicks(picks, customBase);
     },
   });
-  hud.setPicks(picks);
+  hud.setPicks(picks, customBase);
   hud.buildMenu(menu);
   hud.setMatchFormat(formatGames, formatSets);
   hud.buildSpecials({ onToggle: menu.onToggleSpecial, onPreset: menu.onSpecialPreset });
