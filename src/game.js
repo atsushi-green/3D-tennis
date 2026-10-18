@@ -2840,6 +2840,7 @@
       ball.spin = spin;
       ball.curve = 0;   // サーブは曲がらない（バギーホイップ専用の効果）
       ball.reactBonus = 0; // 前のツイーナーの「読みにくさ」も持ち越さない
+      ball.lob = false;
       ball.kick = kick; // 1バウンド目だけ大きく跳ね上げる目印（bounce() が読んで消す）
       ball.shotSpeed = Math.hypot(ball.vx, ball.vz); // ゆるいセカンドサーブも叩きにいける
       if (kick) this.spendSpecial('kickServe', undefined, who); // サーブは必ず「起きる」ので打った時点で消費
@@ -3204,6 +3205,8 @@
       // だけ、相手の反応がこの秒数ぶん余計に遅れる（updateReactTimers）。他の1打では 0 に
       // 戻す＝前の1打を持ち越さない。
       ball.reactBonus = shot.reactBonus || 0;
+      // ロブかどうか。追う側が後ろ向きに下がる遅さ（backpedalMult）を、頭上を越されたときだけに絞るのに使う
+      ball.lob = !!shot.lob;
       // サーブの返球も含め、ここで打たれた球は以降このポイントの風(this.wind/windZ)に
       // さらされる（サーブ自体の飛翔だけは beginServe() が0にしているので無風のまま）。
       ball.wind = this.wind;
@@ -3730,7 +3733,7 @@
       const angled = spinAngle({
         x: aimed + spread(-risk, risk),
         y: BALL_R,
-        z: lob ? lerp(SHOT.LOB_Z, SHOT.LOB_ATTACK_Z, charge)
+        z: lob ? lerp(SHOT.LOB_Z, SHOT.LOB_ATTACK_Z, charge) + spread(-SHOT.LOB_Z_SPREAD, SHOT.LOB_Z_SPREAD)
           : spread(depth, depth + SHOT.DRIVE_Z_SPREAD * SPIN.GROUND.DEPTH_SPREAD_MULT[this.you.chargeSpin]),
       }, lob ? 'flat' : this.you.chargeSpin);
       return {
@@ -4278,7 +4281,7 @@
       Object.assign(ball, {
         x: from.x, y: from.y, z: from.z, px: from.x, py: from.y, pz: from.z,
         live: true, last: 'cpu', bounces: 0, age: 0, sinceBounce: 0,
-        spin, curve: 0, wind: 0, windZ: 0, kick: false, reactBonus: 0,
+        spin, curve: 0, wind: 0, windZ: 0, kick: false, reactBonus: 0, lob: false,
         impact: FX.IMPACT_DURATION, impactPower: 0,
       }, solveShot(from, { x: feed.to.x, y: BALL_R, z: feed.to.z }, feed.t, feed.clearance, spin));
       this.rallyShots = 1;
@@ -5415,8 +5418,9 @@
       const dx = stay ? 0 : toX;
       const dz = stay ? 0 : toZ;
       const dist = Math.hypot(dx, dz);
-      // 能力値「移動速度」×スタミナ。どちらも倍率なので掛ける順序には依存しない。
-      const cappedSpeed = speed * actor.attr.speed * this.staminaSpeedMult(actor.stamina);
+      // 能力値「移動速度」×スタミナ×後ろ向きに下がる遅さ。どれも倍率なので掛ける順序には依存しない。
+      const cappedSpeed = speed * actor.attr.speed * this.staminaSpeedMult(actor.stamina)
+        * this.backpedalMult(actor, dx, dz, dist);
       // 着く時刻の決まった目標（スマッシュの落下点。ai.smashApproach の arriveIn）は、
       // 球が来る CPU.SMASH_ARRIVE_LEAD 秒前にちょうど着く速さで寄る（早く着いて棒立ちしない）。
       const paced = target.arriveIn === undefined
@@ -5441,6 +5445,24 @@
       // 状況が「苦しい」と誤判定されるので、その打ち消しに使う（hit() のスマッシュ）。
       actor.settleT = actor.speed <= CPU.SETTLE_SPEED ? actor.settleT + dt : 0;
       this.drainStamina(actor, moved);
+    }
+
+    /**
+     * AI（cpu/cpuMate/youMate）が、まだ弾んでいない向かってくるロブを追って後ろ（ネットから
+     * 遠ざかる向き）へ下がるときの速さの倍率。真後ろなら CPU.BACKPEDAL_MULT、真横なら1で、
+     * その間は下がる成分の割合でなめらかにつなぐ。
+     * 以前は後ろへも前と同じ全速で下がれたので、ネット前の CPU は頭上を越えたロブにも
+     * 下がりながら追いついて叩けた（ロブで頭を越して決まることが normal 以上ではほぼ無かった）。
+     * 定位置へ戻る動きや、弾んだ後の球を追う動きには掛けない（向きを変えて走れる）。
+     * ロブ以外の深い球にも掛けない：掛けると normal の CPU がフル溜めのフラットを返せる率が
+     * 80%→63% まで落ち、ベースライン同士のラリーの釣り合いまで変わってしまった。
+     * 人間（you）は movePlayers() が動かすので、ここは通らない＝人間の下がる速さは変わらない。
+     */
+    backpedalMult(actor, dx, dz, dist) {
+      const ball = this.ball;
+      if (dist <= 0 || !ball.live || !ball.lob || ball.bounces > 0 || ball.vz * actor.netDir >= 0) return 1;
+      const back = clamp(-actor.netDir * dz / dist, 0, 1);
+      return lerp(1, CPU.BACKPEDAL_MULT, back);
     }
 
     stepBall(dt) {

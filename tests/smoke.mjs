@@ -7283,6 +7283,59 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     'chasePosition does not stop in front of a ball it is not allowed to hit yet');
 }
 
+// --- CPU/AI：ロブを追って後ろ向きに下がるときだけ遅い（人間・ロブ以外・弾んだ後は従来どおり） ---
+// (退行テスト: 以前は後ろへも全速で下がれたうえ攻めのロブの頂点が 3.7m しかなく、ネット前の
+//  CPU は normal 以上でほぼ 100% 叩けた＝ユーザー報告「ロブで頭を越せたことが一度もない」)
+{
+  const { CPU } = R.config;
+  const g = new R.Game({ input: fakeInput, hooks: noHooks });
+  g.start();
+  g.phase = 'rally';
+  Object.assign(g.ball, { x: 0, y: 4, z: 0, vx: 0, vy: 1, vz: 12, live: true, bounces: 0, last: 'you', lob: true });
+  const mult = (dx, dz) => g.backpedalMult(g.cpu, dx, dz, Math.hypot(dx, dz));
+  ok(Math.abs(mult(0, 1) - CPU.BACKPEDAL_MULT) < 1e-9, `straight back under a lob is slower, got ${mult(0, 1)}`);
+  ok(mult(1, 0) === 1 && mult(0, -1) === 1, 'sideways or forward is not slowed');
+  g.ball.lob = false;
+  ok(mult(0, 1) === 1, 'backing up for a deep drive (not a lob) is not slowed');
+  g.ball.lob = true; g.ball.bounces = 1;
+  ok(mult(0, 1) === 1, 'chasing a lob after it bounced is not slowed');
+}
+
+// --- 攻めのロブ（フル溜め）は、ネットに詰めた normal の CPU の頭上をときどき抜ける ---
+{
+  const origRandom = Math.random;
+  let seed = 7;
+  Math.random = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  let win = 0; let smash = 0;
+  const N = 40;
+  try {
+    for (let i = 0; i < N; i++) {
+      const g = new R.Game({ input: { moveX: 0, moveZ: 0, lob: true }, hooks: noHooks });
+      g.start();
+      g.phase = 'rally';
+      g.serveInFlight = false;
+      g.wind = 0;
+      g.you.x = 0; g.you.z = -HALF_L;
+      Object.assign(g.cpu, { x: -1.5 + 3 * (i / N), z: 1.2 + 1.3 * ((i * 7) % N) / N });
+      g.cpuNetRush = true;
+      Object.assign(g.ball, { x: 0, y: 0.9, z: -HALF_L + 0.3, live: true, bounces: 1, last: 'cpu', wind: 0 });
+      g.you.chargeSpin = 'flat';
+      g.you.swingCharge = 1;
+      g.you.chargeStroke = 'forehand';
+      g.hit('you');
+      for (let k = 0; k < 400; k++) {
+        g.update(1 / 60);
+        if (g.ball.last === 'cpu') { if (g.cpu.stroke === 'smash') smash++; break; }
+        if (g.phase !== 'rally') { win++; break; }
+      }
+    }
+  } finally {
+    Math.random = origRandom;
+  }
+  ok(win >= N * 0.25, `an attacking lob gets over a normal CPU at the net sometimes, won ${win}/${N} (smashed ${smash})`);
+  ok(smash >= N * 0.1, `but it is not a sure thing either, smashed ${smash}/${N}`);
+}
+
 // --- CPU/AI：下がって叩くスマッシュは、落下点で待てていても弱い ---
 {
   const { CPU } = R.config;
@@ -7296,7 +7349,15 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     g.cpu.runFwd = runFwd;
     g.ball.x = 0.4; g.ball.y = CPU.SMASH_MIN_Y + 0.1; g.ball.z = z; g.ball.bounces = 0;
     g.ball.vx = 0; g.ball.vy = -5; g.ball.vz = 8;
-    g.hit('cpu');
+    // 狙い（横位置・深さ）の乱数で球速が数割ぶれ、まれに「奥からのほうが速い」が出て
+    // 落ちていた（6回に1回ほど）ので、乱数を中央値に固定して打ち方の違いだけを比べる。
+    const origRandom = Math.random;
+    Math.random = () => 0.5;
+    try {
+      g.hit('cpu');
+    } finally {
+      Math.random = origRandom;
+    }
     ok(g.cpu.stroke === 'smash', `precondition: the cpu smashes, got ${g.cpu.stroke}`);
     return Math.hypot(g.ball.vx, g.ball.vy, g.ball.vz);
   };
