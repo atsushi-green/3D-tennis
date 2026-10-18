@@ -225,9 +225,8 @@
      * 一人称の画角と近クリップ面。ラリー中は球を持っていないので近クリップ面を近づけ（RALLY_NEAR）、
      * 構えたラケットや前へ伸ばした逆手を映す。目のすぐ先に地面（伏せた飛びつきボレー）や自分の脚
      * （ツイーナー）があるときはさらに近づけ、ダンクスマッシュの跳躍の高さに応じて画角を広げる。
-     * ポイントの間に相手やスコアボードを見ている間（glance.fov）は、その画角まで絞る。
      */
-    function firstPersonFov(state, fx, glance) {
+    function firstPersonFov(state, fx) {
       const F = CAMERA.FIRST_PERSON;
       const base = state.phase === 'rally' ? F.RALLY_NEAR : F.NEAR;
       const near = Math.min(
@@ -236,7 +235,7 @@
         fx.tweener > 0 ? lerp(base, F.TWEENER.NEAR, fx.tweener) : base,
       );
       const fov = F.FOV + F.DUNK.FOV * fx.dunk;
-      setFov(glance && glance.fov ? lerp(fov, glance.fov, glance.w) : fov, near);
+      setFov(fov, near);
     }
 
     /**
@@ -367,22 +366,20 @@
     }
 
     /**
-     * ポイントの間に一人称の目が見るもの（{at, w, fov}。w＝首を回す割合、fov＝見ている間に
-     * 絞る画角（無ければ絞らない）。何もなければ null）。
-     * - 決着の直後：感情表現（EMOTION）をしている相手の胸元
+     * ポイントの間に一人称の目が見るもの（{at, w}。w＝首を回す割合。何もなければ null）。
+     * - ダブルスで決着の直後：感情表現（EMOTION）をしているペアの胸元
      * - 自分のファーストサーブなら、続けて後ろのボールボーイと、投げ渡された球（BETWEEN.FEED）
      */
     function betweenPoints(state) {
       const B = CAMERA.FIRST_PERSON.BETWEEN;
       if (state.changeover || state.matchPointCut) return null;
       if (state.phase === 'over') {
-        const team = state.doubles ? ['cpu', 'cpuMate'] : ['cpu'];
-        const who = team.find((w) => state[w].mood);
-        if (!who) return null;
-        const t = state[who].mood.t - EMOTION.DELAY;
+        const mate = state.youMate;
+        if (!state.doubles || !mate || !mate.mood) return null;
+        const t = mate.mood.t - EMOTION.DELAY;
         const out = EMOTION.SPAN - B.MOOD_IN;
-        fpGlance.set(state[who].x, B.MOOD_Y, state[who].z);
-        return { at: fpGlance, w: rampWindow(t, B.MOOD_IN, out - B.MOOD_IN, B.MOOD_IN), fov: B.MOOD_FOV };
+        fpGlance.set(mate.x, B.MOOD_Y, mate.z);
+        return { at: fpGlance, w: rampWindow(t, B.MOOD_IN, out - B.MOOD_IN, B.MOOD_IN) };
       }
       if (state.phase !== 'serve' || servePhaseT < 0 || state.tossActive || state.aiTossActive) return null;
       const req = feedRequest();
@@ -403,7 +400,7 @@
         const F = CAMERA.FIRST_PERSON;
         const fx = firstPersonFx(state);
         const glance = betweenPoints(state);
-        firstPersonFov(state, fx, glance);
+        firstPersonFov(state, fx);
         const eyeLerp = lerp(F.LERP, F.DIVE.LERP, fx.dive);
         const lookLerp = Math.max(
           lerp(F.LOOK_LERP, F.DIVE.LOOK_LERP, fx.dive),
@@ -437,7 +434,7 @@
       if (view === 'first') {
         const fx = firstPersonFx(state);
         const glance = betweenPoints(state);
-        firstPersonFov(state, fx, glance);
+        firstPersonFov(state, fx);
         camera.position.copy(firstPersonEye(state, fx));
         fpLook.copy(firstPersonLook(state, fpTarget, fx, glance));
         camera.lookAt(fpLook);
@@ -839,6 +836,30 @@
     }
 
     /**
+     * そのポイントのリプレイをどこから再生するか（録画時刻）。内容で長さを変える（REPLAY.SHOTS 参照）。
+     * 打った瞬間は、球の「打たれてからの時間」(ball.age) が前のコマより戻ったコマで見分ける
+     * （サーブもラリーの1打も age を0に戻す。トスの間は球が生きていないので age は進まない）。
+     * segment の先頭はサーブの構えなので、最初に見つかる1打は必ずサーブ。
+     * @param {Array<object>} segment 決着したサーブの構えから決着までのコマ
+     */
+    function replayStart(segment) {
+      const endT = segment[segment.length - 1].t;
+      const hits = [];
+      for (let i = 1; i < segment.length; i++) {
+        if (segment[i].ball.age < segment[i - 1].ball.age) hits.push(i);
+      }
+      let startT = endT - REPLAY.MIN_PLAY_SEC;
+      if (hits.length) {
+        const last = hits[hits.length - 1];
+        // 決め球が届く前の球が一度も弾んでいない＝ボレー・スマッシュ（サーブそのものは除く）
+        const atNet = hits.length > 1 && segment[last - 1].ball.bounces === 0;
+        const first = Math.max(0, hits.length - (atNet ? REPLAY.NET_SHOTS : REPLAY.SHOTS));
+        startT = segment[hits[first]].t - (first === 0 ? REPLAY.SERVE_LEAD_SEC : REPLAY.LEAD_SEC);
+      }
+      return clamp(startT, endT - REPLAY.MAX_PLAY_SEC, endT - REPLAY.MIN_PLAY_SEC);
+    }
+
+    /**
      * endT（録画時刻）までの、決着したサーブの構えから後のコマを切り出す（足りなければ null）。
      */
     function cutReel(endT) {
@@ -861,7 +882,7 @@
       // 座標）まで含める。ここを history.slice() のまま先頭から MAX_PLAY_SEC ぶんだけ
       // 再生していたときは、肝心の決着の瞬間が再生範囲の外に切り落とされ、
       // リプレイがボールの決着より手前で止まって見えていた。
-      const startT = recorded[recorded.length - 1].t - REPLAY.MAX_PLAY_SEC;
+      const startT = replayStart(segment);
       let cut = segment.filter((f) => f.t >= startT);
       if (cut.length < 2) cut = segment.slice(-2);
       return cut.length < 2 ? null : cut; // このサーブのコマが録れていない

@@ -6792,7 +6792,7 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
     ok(Math.abs(g.you.stamina - expected) < 1e-9, `stamina recovers by RECOVER_PER_POINT between points, got ${g.you.stamina}`);
     ok(g.cpu.stamina === g.you.stamina, 'the same recovery rule applies to CPU/AI too');
 
-    g.you.stamina = 0.9; // 満タンに近い状態からはそれ以上増えずキャップされる
+    g.you.stamina = 1 - STAMINA.RECOVER_PER_POINT / 2; // 満タンに近い状態からはそれ以上増えずキャップされる
     g.newPoint();
     ok(g.you.stamina === 1, `recovery is capped at full, got ${g.you.stamina}`);
   }
