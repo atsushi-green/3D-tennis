@@ -8,7 +8,7 @@ import vm from 'node:vm';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(HERE, '..', 'src');
-const FILES = ['config.js', 'math.js', 'physics.js', 'scoring.js', 'ai.js', 'game.js'];
+const FILES = ['config.js', 'math.js', 'physics.js', 'scoring.js', 'tournament.js', 'ai.js', 'game.js'];
 
 const sandbox = { window: {}, Math, console, Object, Set, Array, JSON, performance };
 sandbox.globalThis = sandbox;
@@ -24,7 +24,7 @@ R.config.OFFICIALS.BALLKID.PICKUP.ENABLED = false;
 let fail = 0;
 const ok = (cond, msg) => { if (!cond) { console.log('  FAIL:', msg); fail++; } };
 
-ok(Object.keys(R).sort().join(',') === 'Game,ai,config,math,physics,scoring',
+ok(Object.keys(R).sort().join(',') === 'Game,ai,config,math,physics,scoring,tournament',
   `namespace: ${Object.keys(R).sort().join(',')}`);
 
 // --- scoring ---
@@ -11486,6 +11486,65 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   ok(big.kmh > std.kmh + 25,
     `and the big server's first serve is clearly faster: ${big.kmh.toFixed(0)} vs ${std.kmh.toFixed(0)}km/h`);
   resetRatings();
+}
+
+// --- トーナメント：8人の組み合わせ、勝ち上がり、自分以外の対戦の結果 ---
+{
+  const { createTournament, opponentOf, recordResult, winChance } = R.tournament;
+  const { TOURNAMENT, CHARACTERS, RULES } = R.config;
+  const saved = { games: RULES.SET_GAMES, sets: RULES.SETS_TO_WIN };
+  R.config.applyMatchFormat(3, 3); // 3ゲーム先取の3セットマッチ（2セット先取）
+  /** 1セットのゲーム数として scoring.js の決まり方で起こりうるか（勝った側 w・負けた側 l） */
+  const validSet = (w, l) => (w === 3 && l <= 1) || (w === 4 && (l === 2 || l === 3));
+  const validMatch = (m) => {
+    const aSets = m.sets.filter((s) => s.a > s.b).length;
+    const bSets = m.sets.length - aSets;
+    const last = m.sets[m.sets.length - 1];
+    const winnerIsA = m.winner === m.a;
+    return Math.max(aSets, bSets) === RULES.SETS_TO_WIN && (aSets > bSets) === winnerIsA
+      && (last.a > last.b) === winnerIsA
+      && m.sets.every((s) => validSet(Math.max(s.a, s.b), Math.min(s.a, s.b)));
+  };
+  for (const you of ['standard', 'champion', 'custom']) {
+    const t = createTournament(you);
+    const keys = t.entrants.map((e) => e.key);
+    ok(keys.length === TOURNAMENT.SIZE && new Set(keys).size === keys.length && keys[0] === you,
+      `tournament (${you}): ${TOURNAMENT.SIZE} distinct entrants with you first: ${keys}`);
+    ok(t.entrants.slice(1).every((e) => !e.you && CHARACTERS.some((c) => c.key === e.key)),
+      `tournament (${you}): opponents are roster characters`);
+    ok(you === 'champion' ? keys.indexOf('champion') === 0 : keys[keys.length - 1] === 'champion',
+      `tournament (${you}): the top seed sits at the far end of the draw (meets you only in the final)`);
+  }
+  {
+    // 3連勝で優勝。毎回の相手は前の回戦の勝者で、自分以外の試合も全部決まっている
+    const t = createTournament('standard');
+    const met = [];
+    for (let r = 0; r < TOURNAMENT.ROUNDS.length; r++) {
+      const opp = opponentOf(t);
+      met.push(opp.key);
+      const status = recordResult(t, true, [{ you: 3, cpu: 1 }, { you: 4, cpu: 3 }]);
+      ok(status === (r === TOURNAMENT.ROUNDS.length - 1 ? 'champion' : 'playing'),
+        `tournament: status after winning round ${r + 1}: ${status}`);
+      ok(t.rounds[r].every((m) => m.winner != null && (m.winner === 0 || validMatch(m))),
+        `tournament: every match of round ${r + 1} is decided with a valid score`);
+    }
+    ok(t.champion === 0 && opponentOf(t) === null, 'tournament: champion after three wins');
+    ok(new Set(met).size === met.length, `tournament: a different opponent each round: ${met}`);
+  }
+  {
+    // 初戦で負けたら敗退。残りの回戦も最後まで決まり、優勝者が出る
+    const t = createTournament('standard');
+    ok(recordResult(t, false, [{ you: 1, cpu: 3 }, { you: 2, cpu: 4 }]) === 'eliminated', 'tournament: eliminated after a loss');
+    ok(t.rounds.length === TOURNAMENT.ROUNDS.length && t.rounds.every((round) => round.every((m) => m.winner != null)),
+      'tournament: the rest of the draw is played out after you are eliminated');
+    ok(t.champion != null && t.champion !== 0 && opponentOf(t) === null, 'tournament: someone else wins it');
+    ok(t.rounds[0][0].winner === 1 && t.rounds[0][0].sets[0].a === 1 && t.rounds[0][0].sets[0].b === 3,
+      'tournament: your own score is recorded from your side');
+  }
+  ok(Math.abs(winChance('bigServer', 'speedster') - 0.5) < 1e-9 && winChance('champion', 'standard') > 0.9,
+    `tournament: equal characters are even, the champion is a heavy favourite (${winChance('champion', 'standard').toFixed(2)})`);
+  RULES.SET_GAMES = saved.games;
+  RULES.SETS_TO_WIN = saved.sets;
 }
 
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);

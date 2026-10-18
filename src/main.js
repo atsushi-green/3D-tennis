@@ -10,6 +10,9 @@
   } = RallyOne.config;
   const { clamp } = RallyOne.math;
   const { pointLabel } = RallyOne.scoring;
+  const {
+    createTournament, opponentOf, recordResult, roundName,
+  } = RallyOne.tournament;
   const { sfx, unlock, place } = RallyOne.audio;
   /** 球の位置から聞こえるように定位する音（hooks.sound の名前） */
   const BALL_SOUNDS = new Set(['serve', 'hit', 'bounce', 'netIn']);
@@ -101,6 +104,20 @@
   let lessonCursor = 0;
   /** このページを開いてからクリアしたレッスンの key（一覧に ✓ を付ける）。 */
   const clearedLessons = new Set();
+  /**
+   * トーナメントモード（tournament.js の組み合わせ）。出ている間だけ持ち、やめる・終わって
+   * スタート画面へ戻ると null。試合中もそのまま持っていて、スタッツ画面を閉じたところで結果を書き込む。
+   */
+  let tournament = null;
+  /** トーナメント表を開いている間だけ true（スタート画面の上で、#menuBody と差し替え）。 */
+  let tournamentOpen = false;
+  /**
+   * トーナメントに入る前の CPU 枠の能力値。試合ごとに相手の選手で上書きするので、
+   * トーナメントを抜けるときにスタート画面で選んでいた値へ戻す。
+   */
+  let cpuRatingsBefore = null;
+  /** 最後に出したスタッツ（トーナメントの結果として、閉じたときに記録する）。 */
+  let lastSummary = null;
 
   /**
    * Game を作る。練習モードでレッスンを替える／スタート画面へ戻るときは作り直す
@@ -149,21 +166,37 @@
     });
   }
 
+  /** トーナメントで次に当たる相手（config.CHARACTERS の1人）。トーナメント中でなければ null。 */
+  const tournamentOpponent = () => {
+    const opp = tournament && opponentOf(tournament);
+    return opp ? CHARACTERS.find((c) => c.key === opp.key) : null;
+  };
+  /** この試合の4つの枠の選手。トーナメント中は CPU 枠だけ、その回戦の相手に差し替える。 */
+  const matchPicks = () => {
+    const opp = tournamentOpponent();
+    return opp ? { ...picks, cpu: opp.key } : picks;
+  };
+
   /** applyCpuLevel/Style/Surface を適用してから実際に試合を始める（トスの結果が決まった後）。 */
   function beginMatch(wantDoubles, initialServer) {
+    const opp = tournamentOpponent();
     applyCpuLevel(cpuLevel);
-    applyCpuStyle(cpuStyle); // 必ず applyCpuLevel() の後（config.js のコメント参照）
+    // 必ず applyCpuLevel() の後（config.js のコメント参照）。トーナメントは相手の選手の型どおり
+    applyCpuStyle(opp ? opp.cpuStyle : cpuStyle);
     applySurface(surface);
     applyMatchFormat(formatGames, formatSets);
     hud.hideStartScreen();
     hud.setMatchLevel(cpuLevel);
-    hud.setPlayerNames(picks, wantDoubles);
+    const who = matchPicks();
+    hud.setPlayerNames(who, wantDoubles);
+    hud.setTournamentRound(opp ? roundName(tournament.round) : null);
+    hud.setMatchStatsAction(opp ? 'トーナメント表へ' : '次の試合へ');
     game.setGuide(guide);
     game.setSpecials(specials);
     game.setRain(rainOn);
     // 選んだ選手の気性（ポイントの後の感情表現の出やすさ）。カスタムは型がないので 'normal'
     game.setTempers(Object.fromEntries(ROSTER.map((r) => {
-      const character = CHARACTERS.find((c) => c.key === picks[r.key]);
+      const character = CHARACTERS.find((c) => c.key === who[r.key]);
       return [r.key, character ? character.temper : 'normal'];
     })));
     game.start(wantDoubles, initialServer);
@@ -235,6 +268,54 @@
     const next = PRACTICE.LESSONS.indexOf(game.practice.lesson) + 1;
     if (next >= PRACTICE.LESSONS.length) backToLessons();
     else beginPractice(next);
+  }
+
+  /* ------------------------------------------------------ トーナメント */
+
+  const tournamentFormat = () => ({ games: formatGames, sets: formatSets, level: cpuLevel });
+
+  /** O：トーナメント表を開く。出ていなければ、自分の枠の選手で新しい組み合わせを作る。 */
+  function openTournament() {
+    if (!tournament) {
+      tournament = createTournament(picks.you);
+      cpuRatingsBefore = ratingsOf('cpu');
+    }
+    tournamentOpen = true;
+    hud.showTournament(tournament, tournamentFormat());
+  }
+
+  /** トーナメントを抜けてスタート画面の設定へ戻る（CPU 枠はトーナメント前の選手に戻す）。 */
+  function leaveTournament() {
+    tournamentOpen = false;
+    hud.hideTournament();
+    if (!tournament) return;
+    tournament = null;
+    SKILLS.forEach((s) => setRating('cpu', s.key, cpuRatingsBefore[s.key]));
+    applySpinPref('cpu', picks.cpu === 'custom' ? customBase.cpu : picks.cpu);
+    hud.setPicks(picks, customBase);
+  }
+
+  /** トーナメント表の Space：次の試合を始める（もう終わっていればスタート画面へ）。 */
+  function playTournamentMatch() {
+    const opp = tournamentOpponent();
+    if (!opp) {
+      leaveTournament();
+      return;
+    }
+    applyCharacter('cpu', opp.key);
+    tournamentOpen = false;
+    hud.hideTournament();
+    beginToss(false); // トーナメントはシングルス
+  }
+
+  /** トーナメントの1試合のスタッツ画面を閉じた：結果を書き込み、トーナメント表へ戻る。 */
+  function finishTournamentMatch(summary) {
+    recordResult(tournament, summary.winner === 'you', summary.sets);
+    replaceGame();
+    hud.showStartScreen();
+    hud.setTournamentRound(null);
+    world.sync(game, 0); // 背後のコートも立ち位置・会場の向きを初期へ戻す
+    openTournament();
   }
 
   /**
@@ -344,7 +425,10 @@
         : sameSpecials(specials, SPECIAL_PRESETS.preset) ? 'all' : 'none';
       menu.onSpecialPreset(next);
     },
-    onPlay: () => beginToss(doubles),
+    onPlay: () => {
+      if (tournament) leaveTournament(); // 念のため（トーナメント表が出ている間はボタンが見えない）
+      beginToss(doubles);
+    },
     onSelectToss: (choice) => {
       awaitingToss = false;
       beginMatch(doublesPending, choice === 'serve' ? 'you' : 'cpu');
@@ -409,6 +493,11 @@
   // 試合後のスタッツ画面の「次の試合へ」。キーボード（Space/Enter）側は input.js が
   // 同じ closeMatchStats() を呼ぶ＝マウスとキーで挙動がずれない。
   hud.buildMatchStats({ onClose: () => closeMatchStats() });
+  hud.buildTournament({
+    onOpen: () => openTournament(),
+    onPlay: () => playTournamentMatch(),
+    onBack: () => leaveTournament(),
+  });
   hud.buildLessons({
     onOpen: () => openLessons(),
     onSelect: (index) => beginPractice(index),
@@ -480,6 +569,10 @@
     isPracticing: () => !!game.practice,
     onNextLesson: () => nextLesson(),
     onBackToMenu: () => backToLessons(),
+    onOpenTournament: () => openTournament(),
+    isTournamentOpen: () => tournamentOpen,
+    onTournamentPlay: () => playTournamentMatch(),
+    onTournamentBack: () => leaveTournament(),
   });
 
   /**
@@ -490,6 +583,9 @@
     if (!matchStatsOpen) return;
     matchStatsOpen = false;
     hud.hideMatchStats();
+    // トーナメントは1試合ずつ。game.js が仕掛けた次のマッチは始めず、トーナメント表へ戻る
+    if (tournament && lastSummary) finishTournamentMatch(lastSummary);
+    lastSummary = null;
   }
 
   /** hud.setStamina() に渡す4人ぶんの残量をそのつど組み立てる。 */
@@ -529,6 +625,7 @@
         }
         if (!world.isReplaying()) {
           hud.showMatchStats(summary);
+          lastSummary = summary;
           pendingSummary = null;
           matchStatsOpen = true;
         }

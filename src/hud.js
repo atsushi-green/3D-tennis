@@ -3,11 +3,12 @@
   'use strict';
 
   const { pointLabel } = RallyOne.scoring;
+  const { roundName } = RallyOne.tournament;
   const {
     GUIDE, SERVE, WIND, STAMINA, SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, getRating,
     SPIN_PREFS, spinMix,
     CHARACTERS, CHARACTER_BUDGET, CHARACTER_DEFAULT, THEME, SURFACE_COLORS,
-    SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE, MATCH_FORMATS,
+    SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET, PRACTICE, MATCH_FORMATS, TOURNAMENT,
   } = RallyOne.config;
   /** 練習モードのレッスン一覧の見出し（config.PRACTICE.LESSONS の group ごと） */
   const LESSON_GROUPS = { basic: '基本', special: '必殺技' };
@@ -274,6 +275,15 @@
         practiceMenu: $('practiceMenu'),
         lessonList: $('lessonList'),
         practiceBack: $('practiceBack'),
+        tournamentBtn: $('tournamentBtn'),
+        tournamentMenu: $('tournamentMenu'),
+        tmHead: $('tmHead'),
+        tmBracket: $('tmBracket'),
+        tmNext: $('tmNext'),
+        tmPlay: $('tmPlay'),
+        tmBack: $('tmBack'),
+        tourRound: $('tourRound'),
+        msCloseLabel: $('msCloseLabel'),
         call: $('call'),
         callBig: $('callBig'),
         callSub: $('callSub'),
@@ -1305,6 +1315,132 @@
         dots.push(clear);
       }
       this.el.lsProgress.replaceChildren(...dots);
+    }
+
+    /* ------------------------------------------------ トーナメント */
+
+    /**
+     * スタート画面のトーナメントの入口と、トーナメント表のボタンを配線する（main.js から一度だけ呼ぶ）。
+     * キーボード側（O／Space／Esc）は input.js が同じハンドラを呼ぶ。
+     * @param {{onOpen:Function, onPlay:Function, onBack:Function}} handlers
+     */
+    buildTournament(handlers) {
+      this.el.tournamentBtn.addEventListener('click', () => handlers.onOpen());
+      this.el.tmPlay.addEventListener('click', () => handlers.onPlay());
+      this.el.tmBack.addEventListener('click', () => handlers.onBack());
+    }
+
+    /**
+     * 設定（#menuBody）を隠してトーナメント表を出す。組み合わせ・結果は tournament.js の t をそのまま描く。
+     * @param {object} t RallyOne.tournament.createTournament() の結果
+     * @param {{games:number, sets:number, level:string}} format いまの試合の長さとCPUの強さ（見出しに添える）
+     */
+    showTournament(t, format) {
+      this.el.menuBody.style.display = 'none';
+      this.el.tossChoice.classList.remove('on'); // 前の試合のトスの選択が残っていても隠す
+      this.el.start.classList.add('lessons'); // 説明文を畳む（レッスン一覧と同じ）
+      this.el.tournamentMenu.classList.add('on');
+      this.renderTournament(t, format);
+    }
+
+    hideTournament() {
+      this.el.start.classList.remove('lessons');
+      this.el.tournamentMenu.classList.remove('on');
+      this.el.menuBody.style.display = '';
+    }
+
+    /** @param {object} t @param {{games:number, sets:number, level:string}} format */
+    renderTournament(t, format) {
+      const games = MATCH_FORMATS.GAMES.find((f) => f.key === format.games);
+      const sets = MATCH_FORMATS.SETS.find((f) => f.key === format.sets);
+      const level = this.el.diffOpts.find((el) => el.dataset.level === format.level);
+      const info = [`${TOURNAMENT.SIZE}人のシングルス`, games && games.label, sets && sets.label,
+        level && `CPU ${level.querySelector('.optName').textContent.trim()}`].filter(Boolean).join(' · ');
+      this.el.tmHead.replaceChildren(TOURNAMENT.NAME, text('span', '', info));
+
+      const entrantName = (e) => (e.you && pickOf(e.key) === CUSTOM ? 'YOU' : pickOf(e.key).name);
+      const kitOf = (e) => ROSTER.find((r) => r.key === (e.you ? 'you' : 'cpu')).kit;
+      const entrantRow = (index, m, side) => {
+        const row = text('div', 'tmRow');
+        if (index == null) {
+          row.classList.add('tbd');
+          row.append(text('span', 'tmName', '—'));
+          return row;
+        }
+        const e = t.entrants[index];
+        const face = text('span', 'faceBox');
+        setPortrait(face, pickOf(e.key), kitOf(e));
+        row.append(face, text('span', 'tmName', entrantName(e)));
+        if (e.you) row.classList.add('you');
+        if (m.winner != null) {
+          row.classList.add(m.winner === index ? 'win' : 'lose');
+          row.append(text('span', 'tmSets', m.sets.map((s) => s[side]).join(' ')));
+        }
+        return row;
+      };
+      // 列＝回戦。まだ組まれていない回戦は「—」の枠だけ並べる（表の形を最初から見せる）
+      const columns = TOURNAMENT.ROUNDS.map((_, r) => {
+        const col = text('div', 'tmCol');
+        const count = TOURNAMENT.SIZE / 2 ** (r + 1);
+        for (let i = 0; i < count; i++) {
+          const m = t.rounds[r] && t.rounds[r][i];
+          const box = text('div', 'tmMatch');
+          if (m && t.status === 'playing' && r === t.round && (m.a === 0 || m.b === 0)) box.classList.add('next');
+          box.append(entrantRow(m ? m.a : null, m || {}, 'a'), entrantRow(m ? m.b : null, m || {}, 'b'));
+          col.append(box);
+        }
+        return col;
+      });
+      const champCol = text('div', 'tmCol champ');
+      const champBox = text('div', 'tmMatch');
+      champBox.append(entrantRow(t.champion, { winner: t.champion, sets: [] }, 'a'));
+      champCol.append(champBox);
+      // 回戦の見出しは表の上に1行で並べる（列の中に入れると、試合の縦の並びに合わせてずれる）
+      const heads = TOURNAMENT.ROUNDS.map((_, r) => text('div', 'tmRound', roundName(r)))
+        .concat([text('div', 'tmRound', '優勝')]);
+      this.el.tmBracket.replaceChildren(...heads, ...columns, champCol);
+
+      // 下の札：次の相手／優勝／敗退
+      const next = this.el.tmNext;
+      next.className = t.status;
+      if (t.status === 'playing') {
+        const m = t.rounds[t.round].find((x) => x.a === 0 || x.b === 0);
+        const opp = pickOf(t.entrants[m.a === 0 ? m.b : m.a].key);
+        const face = text('span', 'faceBox');
+        setPortrait(face, opp, 'CPU');
+        const body = text('div', 'tmNextBody');
+        body.append(
+          text('div', 'tmKicker', `${roundName(t.round)}の相手`),
+          text('div', 'tmOpp', `${opp.name}`),
+          text('div', 'tmType', opp.type),
+          text('div', 'tmText', opp.text),
+        );
+        next.replaceChildren(face, body);
+      } else {
+        const champ = pickOf(t.entrants[t.champion].key);
+        const lostAt = t.rounds.findIndex((round) => round.some((m) => (m.a === 0 || m.b === 0) && m.winner !== 0));
+        const body = text('div', 'tmNextBody');
+        body.append(t.status === 'champion'
+          ? text('div', 'tmOpp', `🏆 優勝！ ${TOURNAMENT.NAME} チャンピオン`)
+          : text('div', 'tmOpp', `${roundName(lostAt)}で敗退 — 優勝は ${champ.name}`));
+        next.replaceChildren(body);
+      }
+      this.el.tmPlay.firstChild.textContent = t.status === 'playing' ? '試合開始' : 'スタート画面へ';
+      // 終わった後は「スタート画面へ」1つだけ（Esc でも同じく戻る）
+      this.el.tmBack.hidden = t.status !== 'playing';
+    }
+
+    /**
+     * 試合画面の右上（CPUの強さの下）に、トーナメントの何回戦かを出す。null なら消す。
+     * @param {string|null} label
+     */
+    setTournamentRound(label) {
+      this.el.tourRound.textContent = label ? `${TOURNAMENT.NAME} · ${label}` : '';
+    }
+
+    /** 試合後のスタッツ画面の決定ボタンの文言（トーナメント中は「トーナメント表へ」）。 */
+    setMatchStatsAction(label) {
+      this.el.msCloseLabel.textContent = label;
     }
 
     /**

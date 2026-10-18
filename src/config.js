@@ -4886,6 +4886,30 @@
   const CHARACTER_DEFAULT = CHARACTERS[0].key;
 
   /**
+   * トーナメントモード（スタート画面の O）。8人のシングルスのトーナメントを、自分（ROSTER の 'you'
+   * 枠に選んだ選手）と CHARACTERS から選んだ7人で戦う。試合の長さ・CPUの強さ・サーフェスなどは
+   * スタート画面の選択のまま、相手の選手（能力値・好む球種・プレースタイル・気性）だけが毎回替わる。
+   * 自分の試合以外の対戦は結果だけを決める（tournament.js#simulate）。
+   */
+  const TOURNAMENT = {
+    NAME: 'Rally One Open',
+    SIZE: 8,
+    /** 回戦の呼び名（SIZE=8 なので3回戦。添字＝何回戦目か） */
+    ROUNDS: ['準々決勝', '準決勝', '決勝'],
+    /**
+     * 最強の選手（champion: true）は第1シードとして、自分と反対の山の端に置く＝当たるとしたら決勝。
+     * 自分がその選手を選んでいるときは出場しない（同じ選手は2人出さない）。
+     */
+    TOP_SEED: 'champion',
+    /**
+     * 自分の試合以外の勝ち負け。能力値の合計（ネット志向を除く9項目）の差をこの値で割ったものを
+     * ロジスティックに通した確率で勝つ。合計は最強の選手だけ 45、他はみな 27 なので、ふつうの
+     * 選手どうしはちょうど五分、最強の選手はふつうの選手に 1/(1+e^-3)≈95% で勝つ。
+     */
+    SIM_SCALE: 6,
+  };
+
+  /**
    * 能力値を範囲内へ丸めるためだけの小さなクランプ。math.js の clamp() と同じものだが、
    * config.js は依存順で math.js より前に読み込まれる（＝RallyOne.math がまだ無い）ので、
    * ここにだけローカルで持つ。
@@ -5039,7 +5063,7 @@
     STANDS, SPECTATORS, FLAG, MOTION, SCOREBOARD,
     SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET,
     SKILLS, ROSTER, SKILL_MIN, SKILL_MAX, SKILL_DEFAULT, ATTR_SPREAD, ATTRS, NEUTRAL_ATTR,
-    CHARACTERS, CHARACTER_BUDGET, CHARACTER_DEFAULT,
+    CHARACTERS, CHARACTER_BUDGET, CHARACTER_DEFAULT, TOURNAMENT,
     setRating, getRating, resetRatings, randomizeRatings, applyCharacter, shotSkill,
     SPIN_PREFS, applySpinPref, spinMix,
   };

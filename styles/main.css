@@ -717,6 +717,40 @@ svg.face{display:block;border-radius:50%;overflow:hidden;box-shadow:0 0 0 1px rg
 .pmFoot{margin:10px 0;font-size:10px;color:var(--dim);text-align:center}
 #practiceMenu .playBtn.sub{text-align:center}
 
+/* トーナメント表（既定は非表示）。出すときは #menuBody を隠す。列＝回戦で、各列の試合を
+   縦に均等に並べる＝勝ち上がった先の枠が、元の2試合のちょうど間に来る */
+#tournamentMenu{display:none;width:min(900px,100%);margin:4px auto auto}
+#tournamentMenu.on{display:block}
+#tmBracket{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px 10px;margin:10px 0 12px}
+.tmCol{display:flex;flex-direction:column;justify-content:space-around;gap:8px}
+.tmRound{font-size:10px;letter-spacing:.2em;color:var(--dim);text-align:center}
+.tmMatch{border:1px solid var(--edge);border-radius:4px;background:var(--soft);overflow:hidden}
+.tmMatch.next{border-color:var(--ball);box-shadow:0 0 0 2px rgba(216,242,74,.18)}
+.tmRow{display:flex;align-items:center;gap:6px;padding:4px 7px;font-size:12px;min-height:30px}
+.tmRow + .tmRow{border-top:1px solid var(--edge)}
+.tmRow .face{width:22px;height:22px}
+.tmRow .tmName{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tmRow .tmSets{font-variant-numeric:tabular-nums;letter-spacing:.08em;color:var(--dim)}
+.tmRow.you .tmName{color:var(--ball);font-weight:700}
+.tmRow.win .tmSets{color:var(--line);font-weight:700}
+.tmRow.lose{opacity:.45}
+.tmRow.tbd{color:var(--dim);justify-content:center}
+.tmCol.champ .tmMatch{border-color:#ffc83d}
+#tmNext{display:flex;align-items:center;gap:14px;padding:10px 12px;border:1px solid var(--edge);border-radius:4px;background:var(--soft)}
+#tmNext .face{width:54px;height:54px}
+#tmNext.champion{border-color:#ffc83d}
+.tmKicker{font-size:10px;letter-spacing:.2em;color:var(--dim)}
+.tmOpp{font-size:16px;font-weight:700}
+.tmType{font-size:11px;color:var(--ball)}
+.tmText{font-size:11px;color:var(--dim);margin-top:2px}
+.tmBtns{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:12px}
+#tourRound{margin:6px 0 0 auto;display:table;font-size:10px;color:var(--line)}
+#tourRound:empty{display:none}
+@media (max-width:640px){
+  #tmBracket{gap:4px 4px}
+  .tmRow .face{display:none}
+}
+
 /* コイントスに人間が勝ったときだけ出るサーブ／レシーブの選択（既定は非表示）。
    このときは設定（#menuBody）を隠して、選択だけを残す。 */
 #tossChoice{display:none;width:min(520px,100%);margin:4px auto auto;text-align:center}

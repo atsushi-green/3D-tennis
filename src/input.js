@@ -110,6 +110,13 @@
   const LESSON_BACK = ['Escape', 'Backspace'];
   const NEXT_LESSON = ['KeyN'];
   const BACK_TO_MENU = ['Escape'];
+  /**
+   * トーナメントモード。スタート画面の O でトーナメント表を開き、表の中は Space/Enter で次の試合
+   * （終わっていればスタート画面へ）、Esc でやめて設定へ戻る（O＝tOurnament。どの局面でも空いている）。
+   */
+  const OPEN_TOURNAMENT = ['KeyO'];
+  const TOURNAMENT_PLAY = ['Space', 'Enter'];
+  const TOURNAMENT_BACK = ['Escape', 'Backspace'];
   /** ブラウザのスクロールを止めたいキー */
   const SWALLOW = MOVE_LEFT.concat(MOVE_RIGHT, MOVE_UP, MOVE_DOWN, SWING_CODES, SKIP_REPLAY, VIEW_KEYS);
 
@@ -134,7 +141,9 @@
      *   isMatchStatsOpen:Function, onCloseMatchStats:Function,
      *   onOpenPractice:Function, isLessonMenuOpen:Function, onLessonCursor:(step:number)=>void,
      *   onLessonStart:Function, onLessonBack:Function,
-     *   isPracticing:Function, onNextLesson:Function, onBackToMenu:Function}} handlers
+     *   isPracticing:Function, onNextLesson:Function, onBackToMenu:Function,
+     *   onOpenTournament:Function, isTournamentOpen:Function, onTournamentPlay:Function,
+     *   onTournamentBack:Function}} handlers
      */
     attach(handlers) {
       addEventListener('keydown', (e) => {
@@ -151,6 +160,16 @@
             if (LESSON_MOVE[e.code]) handlers.onLessonCursor(LESSON_MOVE[e.code]);
             else if (LESSON_START.indexOf(e.code) !== -1) handlers.onLessonStart();
             else if (LESSON_BACK.indexOf(e.code) !== -1) handlers.onLessonBack();
+            return;
+          }
+          // トーナメント表を開いている間も、表の操作だけ
+          if (handlers.isTournamentOpen()) {
+            if (TOURNAMENT_PLAY.indexOf(e.code) !== -1) handlers.onTournamentPlay();
+            else if (TOURNAMENT_BACK.indexOf(e.code) !== -1) handlers.onTournamentBack();
+            return;
+          }
+          if (OPEN_TOURNAMENT.indexOf(e.code) !== -1) {
+            handlers.onOpenTournament();
             return;
           }
           if (OPEN_PRACTICE.indexOf(e.code) !== -1) {

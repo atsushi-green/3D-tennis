@@ -15,9 +15,9 @@ Rally One（3Dテニスゲーム）の規約。詳しい構成・依存関係は
   })(window.RallyOne = window.RallyOne || {});
   ```
 - ファイルを追加したら `index.html` の `<script src>` にも依存順で1行足す。
-- `src/game.js`・`src/physics.js`・`src/scoring.js`・`src/ai.js` は **three.js にも DOM にも触らない**。表示側との連絡は `hooks`（音・コール・スコア更新）経由。DOM に触るのは `src/hud.js` だけ。
+- `src/game.js`・`src/physics.js`・`src/scoring.js`・`src/ai.js`・`src/tournament.js` は **three.js にも DOM にも触らない**。表示側との連絡は `hooks`（音・コール・スコア更新）経由。DOM に触るのは `src/hud.js` だけ。
 - 難易度・寸法・演出のタイミングなど、あらゆるチューニング値は `src/config.js` に集約する。マジックナンバーを他ファイルに書かない。
-- 依存の向きは `main → game → (physics/scoring/ai/config)` と `main → scene/*` の二方向のみ。循環させない。
+- 依存の向きは `main → game → (physics/scoring/ai/config)` と `main → scene/*` の二方向のみ（トーナメントの組み合わせは `main → tournament → config`。hud は表示のため `roundName` だけ読む）。循環させない。
 
 ## テスト
 

@@ -82,6 +82,8 @@
     <!-- 対戦しているCPU/AIの強さ（スタート画面の「CPUの強さ」）。試合を始めるときに
          hud.setMatchLevel() が入れる。練習モード中は #head ごと隠れる。 -->
     <div id="matchLevel"></div>
+    <!-- トーナメントモードの試合中だけ、何回戦か（hud.setTournamentRound）。それ以外は空＝:empty で消える -->
+    <div id="tourRound"></div>
   </div>
   <div id="call"><div class="big" id="callBig"></div><div class="sub" id="callSub"></div><div class="shot" id="callShot"></div></div>
   <div id="replayTag"><span class="dot"></span><span class="rtLabel">リプレイ</span><span class="hlTag">ハイライト <span id="hlCount"></span></span><span class="markTag">ボールマーク確認</span><span class="skip">SPACE でスキップ</span></div>
@@ -129,7 +131,7 @@
   <header class="startHead">
     <h1>RALLY <span>ONE</span></h1>
     <p>3Dテニス v0.1 — ループの1周目。ボールが自コートで2バウンドしたら失点。ラインを割っても失点。<br>
-       はじめてなら <b>P</b> で練習モード（操作を1つずつ覚えるチュートリアル）。</p>
+       はじめてなら <b>P</b> で練習モード（操作を1つずつ覚えるチュートリアル）。<b>O</b> で8人のトーナメント。</p>
   </header>
 
   <!-- 設定＋開始ボタン。コイントスに勝ったとき・練習モードの一覧を開いたときは、この塊ごと
@@ -280,6 +282,7 @@
     <!-- 画面の下に貼りついた操作の帯。設定がどれだけ縦に伸びても、開始ボタンは常に見えている。 -->
     <footer class="startFoot">
       <div class="playBtn sub" id="practiceBtn">練習モード（チュートリアル）<kbd>P</kbd></div>
+      <div class="playBtn sub" id="tournamentBtn">トーナメント<kbd>O</kbd></div>
       <div class="footHint"><b>S</b>／<b>D</b> で形式を選んでそのまま開始。各カードのキーでも設定できます。</div>
       <div class="playBtn" id="playBtn">試合開始<kbd>Space</kbd></div>
     </footer>
@@ -292,6 +295,18 @@
     <div id="lessonList"></div>
     <div class="pmFoot">矢印キーで選ぶ ／ Space・Enter で始める ／ Esc で戻る（クリックでも始められる）</div>
     <div class="playBtn sub" id="practiceBack">戻る<kbd>Esc</kbd></div>
+  </div>
+
+  <!-- トーナメント表（#practiceMenu と同じく #menuBody と差し替えて出す）。中身はすべて
+       hud.js#showTournament が tournament.js の組み合わせから組み立てる。 -->
+  <div id="tournamentMenu" class="panel">
+    <div class="pmHead" id="tmHead"></div>
+    <div id="tmBracket"></div>
+    <div id="tmNext"></div>
+    <div class="tmBtns">
+      <div class="playBtn sub" id="tmBack">やめる<kbd>Esc</kbd></div>
+      <div class="playBtn" id="tmPlay">試合開始<kbd>Space</kbd></div>
+    </div>
   </div>
 
   <div id="tossChoice" class="panel">
@@ -313,7 +328,7 @@
   <div id="msScore"></div>
   <div id="msTable"></div>
   <div id="msRally"></div>
-  <div class="playBtn" id="msClose">次の試合へ<kbd>Space</kbd></div>
+  <div class="playBtn" id="msClose"><span id="msCloseLabel">次の試合へ</span><kbd>Space</kbd></div>
 </div></div>
 
 <!-- 依存の順に読み込む。各ファイルは window.RallyOne に自分の分を足していく。 -->
@@ -322,6 +337,7 @@
 <script src="src/math.js"></script>
 <script src="src/physics.js"></script>
 <script src="src/scoring.js"></script>
+<script src="src/tournament.js"></script>
 <script src="src/ai.js"></script>
 <script src="src/audio.js"></script>
 <script src="src/input.js"></script>
