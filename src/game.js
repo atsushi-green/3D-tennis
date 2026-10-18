@@ -4919,6 +4919,45 @@
     }
 
     /**
+     * 足さばきの自動補正（PLAYER.FOOTWORK）で寄る先。打つと決めている（溜めている／離して
+     * 球を待っている）ときだけ、これから LEAD_T 秒の軌道のうち打てる球（checkSwings() と
+     * 同じ条件）がいちばん近くを通る点を探す。いちばん近くを通るのが LEAD_T より先なら
+     * まだ動かない（最後のひと調整だけを受け持つ。大きく寄るのは手動）。そこが手の届く範囲を少しだけ外れているなら、
+     * 通り道が REACH×INNER に入るところまで、その点のほうへ寄った位置を返す。
+     * もう届く球・半歩では届かない球・必殺技を乗せて離した1打（届く範囲が技ごとに違う）は対象外。
+     * @returns {{x:number, z:number}|null}
+     */
+    footworkTarget() {
+      const F = PLAYER.FOOTWORK;
+      const ball = this.ball;
+      const you = this.you;
+      if (!F.ON || this.phase !== 'rally' || !ball.live || ball.last === 'you') return null;
+      if (!you.charging && !(you.swing > 0)) return null;
+      if (you.special) return null;
+      const reach = PLAYER.REACH * this.reachMult();
+      let best = null;
+      let last = null;
+      // 区間を探すのではなく全サンプルを覗くだけなので、accept は常に false を返す
+      predictWindow(ball, (at) => {
+        if (at.z >= PLAYER.NET_MARGIN || at.y >= PLAYER.REACH_Y) return false;
+        if (this.serveInFlight && at.bounces < 1) return false;
+        const d = Math.hypot(at.x - you.x, at.z - you.z);
+        last = d;
+        if (!best || d < best.d) best = { x: at.x, z: at.z, d };
+        return false;
+      }, F.LEAD_T, 1);
+      // 見た範囲の最後でもまだ近づいている＝いちばん近くを通るのは LEAD_T より先。まだ動かない
+      if (!best || last === best.d) return null;
+      if (best.d <= reach * F.INNER || best.d > reach * F.OUTER) return null;
+      const k = (best.d - reach * F.INNER) / best.d;
+      const bounds = this.youBounds();
+      return {
+        x: clamp(you.x + (best.x - you.x) * k, bounds.xMin, bounds.xMax),
+        z: clamp(you.z + (best.z - you.z) * k, bounds.zMin, bounds.zMax),
+      };
+    }
+
+    /**
      * ツイーナーを狙って背走している間だけ掛かる足の速さの倍率（それ以外は常に1）。
      * ロブで抜かれた球はバウンド後 12m/s 前後で後ろへ抜けていくので、通常の足
      * （PLAYER.SPEED=7.2m/s）では「ボールに追い越される一瞬」にしか手が届かない
@@ -4970,9 +5009,22 @@
         const hasInput = mx !== 0 || mz !== 0;
         const maxSpeed = PLAYER.SPEED * this.you.attr.speed
           * this.staminaSpeedMult(this.you.stamina) * this.tweenerChaseMult();
-        const desiredVx = hasInput ? (mx / len) * maxSpeed : 0;
-        const desiredVz = hasInput ? (mz / len) * maxSpeed : 0;
-        const rate = (hasInput ? PLAYER.ACCEL : PLAYER.DECEL) * dt;
+        let desiredVx = hasInput ? (mx / len) * maxSpeed : 0;
+        let desiredVz = hasInput ? (mz / len) * maxSpeed : 0;
+        // 移動キーを押していなければ、届きそうで届かない球へ半歩だけ自分から寄る
+        // （PLAYER.FOOTWORK）。寄る先に近づくほど遅くして、行き過ぎないようにする。
+        const step = hasInput ? null : this.footworkTarget();
+        if (step) {
+          const dx = step.x - this.you.x;
+          const dz = step.z - this.you.z;
+          const dist = Math.hypot(dx, dz);
+          if (dist > PLAYER.FOOTWORK.ARRIVE) {
+            const speed = Math.min(PLAYER.FOOTWORK.SPEED, Math.sqrt(2 * PLAYER.DECEL * dist));
+            desiredVx = (dx / dist) * speed;
+            desiredVz = (dz / dist) * speed;
+          }
+        }
+        const rate = (hasInput || step ? PLAYER.ACCEL : PLAYER.DECEL) * dt;
         const v = approach2D(this.you.vx, this.you.vz, desiredVx, desiredVz, rate);
         this.you.vx = v.x;
         this.you.vz = v.z;

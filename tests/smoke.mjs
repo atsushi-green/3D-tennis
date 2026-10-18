@@ -1558,6 +1558,64 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   }
 }
 
+// --- 足さばきの自動補正（PLAYER.FOOTWORK）：溜めていて移動キーを押していなければ、打つ直前に、手の
+//     届く範囲をほんの少しだけ外れて通る球へ小さく寄って打てる（最後のひと調整だけ）。球がまだ遠い間・
+//     ひと調整では足りない球・移動キーを押している間・溜めていない間は寄らない ---
+{
+  const FW = R.config.PLAYER.FOOTWORK;
+  const onBefore = FW.ON;
+  // 横に REACH×mult 離れたところを通る球（自陣で1回弾んで、腰の高さで横を抜ける）を、
+  // 3m 手前で離して打ちにいく。寄った量と、当たったかを返す。
+  const pass = (mult, { on = true, input = { moveX: 0, moveZ: 0, lob: false }, charge = true } = {}) => {
+    FW.ON = on;
+    const g = new R.Game({ input, hooks: noHooks });
+    g.start();
+    g.windStrength = 0;
+    g.setWindVector();
+    g.phase = 'rally';
+    Object.assign(g.you, { x: 0, z: -11.5, vx: 0, vz: 0 });
+    const L = R.config.PLAYER.REACH * g.reachMult() * mult;
+    Object.assign(g.ball, {
+      live: true, last: 'cpu', x: -L, y: 1.0, z: -4, px: -L, py: 1.0, pz: -4,
+      vx: 0, vy: 0, vz: -16, bounces: 0, sinceBounce: null, spin: 'flat',
+    });
+    if (charge) g.chargeStart();
+    let released = false;
+    let maxShift = 0;
+    let earlyShift = 0; // 球が届くまでまだ LEAD_T より十分ある間に寄った量（大きく寄るのは手動）
+    for (let i = 0; i < 120; i++) {
+      if (charge && !released && Math.hypot(g.ball.x - g.you.x, g.ball.z - g.you.z) < 3) {
+        g.chargeRelease();
+        released = true;
+      }
+      const early = Math.abs(g.ball.z - g.you.z) > -g.ball.vz * (FW.LEAD_T + 0.1);
+      g.update(1 / 60);
+      maxShift = Math.max(maxShift, -g.you.x * Math.sign(L));
+      if (early) earlyShift = maxShift;
+      if (g.ball.last === 'you') return { hit: true, shift: maxShift, earlyShift };
+      if (g.phase !== 'rally') break;
+    }
+    return { hit: false, shift: maxShift, earlyShift };
+  };
+  const inside = pass(0.7);
+  ok(inside.hit && inside.shift === 0, `a ball already well inside the reach needs no step, got ${JSON.stringify(inside)}`);
+  for (const mult of [1.03, 1.12]) {
+    const off = pass(mult, { on: false });
+    const on = pass(mult);
+    ok(!off.hit, `without the assist a ball at reach x${mult} is missed, got ${JSON.stringify(off)}`);
+    ok(on.hit && on.shift > 0 && on.shift < R.config.PLAYER.REACH * (FW.OUTER - FW.INNER) + 0.05,
+      `with the assist the player steps toward a ball at reach x${mult} and hits it, got ${JSON.stringify(on)}`);
+    ok(on.earlyShift === 0, `the step only comes in the last moment before contact, got ${JSON.stringify(on)}`);
+  }
+  const far = pass(FW.OUTER + 0.15);
+  ok(!far.hit && far.shift === 0, `a ball beyond REACH x OUTER is left to the player to run for, got ${JSON.stringify(far)}`);
+  const steering = pass(1.2, { input: { moveX: 0, moveZ: -1, lob: false } });
+  ok(steering.shift === 0, `no sideways assist while a move key is held, got ${JSON.stringify(steering)}`);
+  const idle = pass(1.2, { charge: false });
+  ok(idle.shift === 0, `no assist while not committed to a swing, got ${JSON.stringify(idle)}`);
+  FW.ON = onBefore;
+}
+
 // --- ロブの頂点の高さは球種（実効重力）で変わらない ---
 // (退行テスト: 以前はスライスでロブを打つと、重力が軽いぶん同じ飛翔時間で頂点が 3.2m
 //  （フラットは 4.2m）しか上がらない平たい球になり、コートの中ほどで叩かれていた)

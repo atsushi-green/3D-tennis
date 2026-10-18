@@ -138,6 +138,7 @@
     const fpGlance = new THREE.Vector3(); // ポイントの間に見るもの（betweenPoints）
     const _dirA = new THREE.Vector3();
     const _dirB = new THREE.Vector3();
+    const _ball = new THREE.Vector3();
 
     /**
      * 飛びつきボレーで体ごと飛び込んでいる度合い(0〜1)。飛び込みの形の効き（diveBody の legs）
@@ -221,18 +222,21 @@
     }
 
     /**
-     * 一人称の画角と近クリップ面。目のすぐ先に地面（伏せた飛びつきボレー）や自分の脚（ツイーナー）
-     * があるときだけ近クリップ面を近づけ、ダンクスマッシュの跳躍の高さに応じて画角を広げる。
+     * 一人称の画角と近クリップ面。ラリー中は球を持っていないので近クリップ面を近づけ（RALLY_NEAR）、
+     * 構えたラケットや前へ伸ばした逆手を映す。目のすぐ先に地面（伏せた飛びつきボレー）や自分の脚
+     * （ツイーナー）があるときはさらに近づけ、ダンクスマッシュの跳躍の高さに応じて画角を広げる。
      * ポイントの間に相手やスコアボードを見ている間（glance.fov）は、その画角まで絞る。
      */
-    function firstPersonFov(fx, glance) {
+    function firstPersonFov(state, fx, glance) {
       const F = CAMERA.FIRST_PERSON;
+      const base = state.phase === 'rally' ? F.RALLY_NEAR : F.NEAR;
       const near = Math.min(
-        fx.dive > 0 ? lerp(F.NEAR, F.DIVE.NEAR, fx.dive) : F.NEAR,
-        fx.tweener > 0 ? lerp(F.NEAR, F.TWEENER.NEAR, fx.tweener) : F.NEAR,
+        base,
+        fx.dive > 0 ? lerp(base, F.DIVE.NEAR, fx.dive) : base,
+        fx.tweener > 0 ? lerp(base, F.TWEENER.NEAR, fx.tweener) : base,
       );
-      const base = F.FOV + F.DUNK.FOV * fx.dunk;
-      setFov(glance && glance.fov ? lerp(base, glance.fov, glance.w) : base, near);
+      const fov = F.FOV + F.DUNK.FOV * fx.dunk;
+      setFov(glance && glance.fov ? lerp(fov, glance.fov, glance.w) : fov, near);
     }
 
     /**
@@ -270,6 +274,13 @@
       out.y = lerp(out.y, b.y, w);
       // 真上より後ろの点を見ると振り向いてしまうので、注視点は目より少し前に留める
       out.z = Math.max(lerp(out.z, b.z, w), fpEye.z + H.MIN_AHEAD);
+      // 相手の球が向かってくる間は、近づくほど打点まで目で追う（INCOMING_TRACK）。点どうしを
+      // 混ぜると遠くの注視点に引っ張られて視線がほとんど下がらないので、向きで寄せる
+      const I = F.INCOMING_TRACK;
+      if (ahead && b.last === 'cpu') {
+        const near = clamp((I.FROM_D - Math.hypot(b.x - p.x, b.z - p.z)) / (I.FROM_D - I.FULL_D), 0, 1);
+        if (near > 0) turnToward(out, fpEye, _ball.set(b.x, b.y, b.z), I.WEIGHT * near * near * (3 - 2 * near));
+      }
     }
 
     /**
@@ -392,7 +403,7 @@
         const F = CAMERA.FIRST_PERSON;
         const fx = firstPersonFx(state);
         const glance = betweenPoints(state);
-        firstPersonFov(fx, glance);
+        firstPersonFov(state, fx, glance);
         const eyeLerp = lerp(F.LERP, F.DIVE.LERP, fx.dive);
         const lookLerp = Math.max(
           lerp(F.LOOK_LERP, F.DIVE.LOOK_LERP, fx.dive),
@@ -426,7 +437,7 @@
       if (view === 'first') {
         const fx = firstPersonFx(state);
         const glance = betweenPoints(state);
-        firstPersonFov(fx, glance);
+        firstPersonFov(state, fx, glance);
         camera.position.copy(firstPersonEye(state, fx));
         fpLook.copy(firstPersonLook(state, fpTarget, fx, glance));
         camera.lookAt(fpLook);

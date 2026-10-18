@@ -790,10 +790,13 @@
     };
   }
 
-  /** MOTION の座標（+x＝ラケット側、ひねる前）でのラケット側の肩の位置 */
-  function shoulderAt(twist, bend) {
-    const x = RIG.SHOULDER_X * Math.cos(bend) - RIG.SHOULDER_Y * Math.sin(bend);
-    return [x * Math.cos(twist), RIG.SHOULDER_X * Math.sin(bend) + RIG.SHOULDER_Y * Math.cos(bend), -x * Math.sin(twist)];
+  /**
+   * MOTION の座標（+x＝ラケット側、ひねる前）でのラケット側の肩の位置。
+   * sx に -RIG.SHOULDER_X を渡すと逆手側の肩になる。
+   */
+  function shoulderAt(twist, bend, sx = RIG.SHOULDER_X) {
+    const x = sx * Math.cos(bend) - RIG.SHOULDER_Y * Math.sin(bend);
+    return [x * Math.cos(twist), sx * Math.sin(bend) + RIG.SHOULDER_Y * Math.cos(bend), -x * Math.sin(twist)];
   }
 
   const ARM_REACH = RIG.UPPER + RIG.FORE - 0.01;
@@ -989,6 +992,27 @@
     for (let i = 0; i < 3; i++) out[C.DIR + i] = d[i];
   }
 
+  /**
+   * テイクバックの間、空いている逆手を前へ伸ばして打点の目安を指す（MOTION.OFF_AIM）。
+   * 逆手がラケットを握っている（両手打ち・片手バックの構え）なら何もしない。
+   * @param {{y:number}|null} point 打点の見積もり（y は地面からの高さ）
+   */
+  function aimOffHand(out, point, phi) {
+    const A = MOTION.OFF_AIM;
+    if (!point || out[C.W_GRIP] > 0 || out[C.W_THROAT] > 0) return;
+    const w = A.WEIGHT * (1 - ease(clamp(phi / A.FWD_PHI, 0, 1)));
+    if (w <= 0) return;
+    // 指す点を MOTION の座標へ：体幹の原点（腰の高さ）から測り、振り付けの前傾（lean）を戻す
+    const y = clamp(point.y, A.Y_MIN, A.Y_MAX) - (GAIT.HIP_Y - crouchDrop(out[C.CROUCH]));
+    const lean = out[C.LEAN];
+    const at = [A.AT_X, y * Math.cos(lean) + A.AT_Z * Math.sin(lean), -y * Math.sin(lean) + A.AT_Z * Math.cos(lean)];
+    const sh = shoulderAt(out[C.TWIST], out[C.BEND], -RIG.SHOULDER_X);
+    const v = [at[0] - sh[0], at[1] - sh[1], at[2] - sh[2]];
+    const len = Math.hypot(v[0], v[1], v[2]) || 1;
+    const arm = Math.min(A.ARM, len);
+    for (let i = 0; i < 3; i++) out[C.OFF + i] = lerp(out[C.OFF + i], sh[i] + (v[i] / len) * arm, w);
+  }
+
   /** 打った後（anim>0）の φ。FINISH_AT まで進んだら振り終わりの形を保つ */
   function afterContactPhi(clip, progress) {
     const p = clamp(progress / MOTION.FINISH_AT, 0, 1);
@@ -1086,6 +1110,7 @@
       evalClip(clip, phi, charge, out);
       reachForBall(out, clip, phi, intent.point);
       if (clip === CLIPS.smash && intent.point) lowerSmash(out, phi, intent.point.y);
+      else aimOffHand(out, intent.point, phi);
       return { key: clip.id, kind: 'prep' };
     }
 
