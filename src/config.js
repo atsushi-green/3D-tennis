@@ -311,6 +311,40 @@
   };
 
   /**
+   * ディップ：相手がネットに詰めているときに、トップスピン（V）をほとんど溜めずに離したときの
+   * 「足元へ沈める」球。CPU 側の netDropShot() に相当する人間用の1打。
+   * 通常の溜めなしトップスピンは SHOT.TAP_Z(4.8m) へ山なりに落ちるので、ネット前の相手の
+   * ところを胸〜肩の高さ（ベースラインから打って1.7〜1.9m）で通り、絶好のボレーになっていた。
+   * こちらは相手の立ち位置の少し手前へ、トップスピンの重い落ち方で速めに沈める
+   * （実測：ベースラインから打つと、ネットから2.5mの地点を0.3m前後で通る）。
+   * CPU のボレーは打点が CPU.VOLLEY_LOW_Y より低いと中央への緩いブロックしか返せないので、
+   * 沈められればそのまま次の1球で攻められる。
+   * ただし CPU はネットへ詰めながら迎え撃つ（ai.netRushPosition()）ので、実際にはネット際
+   * （z≈0）で、ネットの高さ＋余裕（CLEARANCE）ぶんの打点で触ることが多い。だから効き目を
+   * 決めるのは飛翔時間より CLEARANCE（ネットの上をどれだけ低く通すか）。
+   * 実測（normal、ベースラインから、CPU はネットから2.5m）：
+   *   半分溜めたトップスピン → CPU の打点1.97m・返球58km/h
+   *   ディップ（CLEARANCE 0.30）→ 打点1.3m・返球43km/h
+   *   ディップ（CLEARANCE 0.15）→ 打点1.1m・返球28km/h、自分のネットミスは2〜3%
+   * 相手が詰めていない場面では、溜めなしのトップスピンは従来どおりの浅いつなぎ球のまま。
+   */
+  const DIP = {
+    MAX_CHARGE: 0.25, // これ以下の溜めで離したトップスピンだけディップになる（DROP.MAX_CHARGE と同じ区切り）
+    FOE_Z: 4.0,       // 相手がネットからこの距離以内にいるときだけ（CPU.NET_Z と同じ「詰めている」の線）
+    SHORT_MIN: 0.5,   // 相手の立ち位置から、これだけ手前に落とす(m)
+    SHORT_MAX: 1.0,
+    Z_MIN: 1.6,       // 着地の深さの下限・上限（ネットからの距離）
+    Z_MAX: 3.8,
+    AIM_X: 1.3,       // ←→ を入れたとき、相手の正面からそちらへずらす幅(m)
+    JITTER_X: 0.3,    // 左右のばらつき(±m)
+    EDGE_X: 3.7,      // 狙いの左右の上限（サイドラインの内側）
+    T: 0.55,          // 飛翔時間の初期値。ネットに掛かるなら solveShot() が伸ばして解き直す
+    // ネットの上に取る余裕(m)。通常（PHYSICS.NET_CLEARANCE=0.30）より詰めて低く通す。
+    // DROP.CLEARANCE(0.12) ほどは詰めない（速い球なので、狙いのぶれでネットに掛かりやすい）
+    CLEARANCE: 0.15,
+  };
+
+  /**
    * ネットに掛かった球の扱い。既定は常にフォールト（サーブ）／失点（ラリー）で、ネットに
    * 当たって自陣側へ弱く跳ね返る（FAULT_*）。ラリー中（サーブ中は対象外）に限り、ごく低い
    * 確率でネットコードに救われてそのまま相手コートへ入り続ける＝「ネットイン」になる
@@ -4981,7 +5015,7 @@
   RallyOne.config = {
     COURT, HALF_W, HALF_L, PHYSICS, PLAYER, SHOT, SERVE,
     BOUNDS, CPU, DOUBLES, RULES, MATCH_FORMATS, applyMatchFormat, TIMING, CHANGEOVER, MATCH_POINT, FINALE, PRACTICE, THEME, CAMERA, GAIT, SWING, FX, CHARGE, TIMING_AIM, RETURN, VOLLEY, AUDIO, NET,
-    FOOTSTEP, CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, SMASH_HINT, GUIDE,
+    FOOTSTEP, CPU_LEVELS, applyCpuLevel, CPU_STYLES, applyCpuStyle, SPIN, WIND, TRAIL, DROP, DIP, SMASH_HINT, GUIDE,
     SURFACE, SURFACE_PRESETS, applySurface, SURFACE_COLORS, COURT_PLANE, REPLAY, HIGHLIGHT, EMOTION, RAIN, SESSIONS, NIGHT, STAMINA, TOSS, OFFICIALS, LINE_CALL, BALL_MARK,
     STANDS, SPECTATORS, FLAG, MOTION, SCOREBOARD,
     SPECIAL, SPECIAL_MOVES, SPECIAL_PRESET,

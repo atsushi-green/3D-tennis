@@ -6,7 +6,7 @@
   'use strict';
 
   const {
-    ATTRS, SPIN_PREFS, AUDIO, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DROP, EMOTION, FINALE, FOOTSTEP, FX, HALF_L, HALF_W,
+    ATTRS, SPIN_PREFS, AUDIO, BOUNDS, CHANGEOVER, CHARGE, COURT, CPU, DOUBLES, DIP, DROP, EMOTION, FINALE, FOOTSTEP, FX, HALF_L, HALF_W,
     HIGHLIGHT, LINE_CALL, MATCH_POINT,
     NET, OFFICIALS, PHYSICS, PLAYER, PRACTICE, RAIN, RETURN, RULES, SERVE, SHOT, SMASH_HINT, SPECIAL, SPECIAL_MOVES, STAMINA, SWING,
     SPECTATORS, SPIN, STANDS, TIMING, TIMING_AIM, TRAIL, VOLLEY, WIND, shotSkill,
@@ -347,7 +347,7 @@
    * サーブはさらに狙ったコース（センター／ボディ／ワイド／角度）も添える：エースで決まった
    * ときに「何が良かったのか」が球種だけでは伝わらないため（以前は一律「サービス」だった）。
    * @param {'forehand'|'backhand'|'smash'|'serve'|'volley-forehand'|'volley-backhand'} stroke
-   * @param {'flat'|'top'|'slice'|'drop'} spin
+   * @param {'flat'|'top'|'slice'|'drop'|'dip'} spin ディップ（shot.dip）は球そのものは 'top' だが、呼び名だけ 'dip' で引く
    * @param {boolean} [lob]
    * @param {string} [course] サーブのときだけ渡すコース名（serveCourse()）
    */
@@ -355,6 +355,7 @@
     top: 'スピンショット',
     slice: 'スライスショット',
     drop: 'ドロップショット',
+    dip: 'ディップ',
     flat: 'フラットショット',
   };
 
@@ -611,10 +612,12 @@
     //   浅くても速い球になる（specialShot 参照）。
     // ・ただし**ロブ（Shift）とドロップショット（C をほとんど溜めずに離す）では出さない**。
     //   どちらも「叩かない」ことを選んだ1打で、溜めを見ない技がそこまで拾うと、
-    //   ベースラインでつなぎのロブ／ドロップを打つたびに強打へ化けてしまう。
+    //   ベースラインでつなぎのロブ／ドロップを打つたびに強打へ化けてしまう。ネット前の相手の
+    //   足元へ沈めるディップ（V をほとんど溜めずに離す）も同じ理由で除く。
     rising: (g, c) => {
       if (c.serving || g.input.lob) return false;
       if (c.spin === 'slice' && c.charge <= DROP.MAX_CHARGE) return false;
+      if (c.spin === 'top' && c.charge <= DIP.MAX_CHARGE && g.dipTarget()) return false; // ディップも同じ
       const at = c.contact('rising');
       return risingContact(g.you, at)
         && !naturalStroke(g, 'you', at, g.you, c.charge).smash;
@@ -3149,8 +3152,8 @@
         ? (who === 'you' ? this.you.chargeSpin : aiGroundSpin)
         : 'flat');
       // 球種ごとの性格づけ（SPIN.GROUND）が効くのは、通常のグラウンドストロークだけ。
-      // ロブ・ドロップ（shot.spin）・必殺技は、それぞれ専用の弾道で狙いが決まっている。
-      const shaped = !special && !shot.lob && !shot.spin && (stroke === 'forehand' || stroke === 'backhand');
+      // ロブ・ドロップ（shot.spin）・ディップ（shot.dip）・必殺技は、それぞれ専用の弾道で狙いが決まっている。
+      const shaped = !special && !shot.lob && !shot.spin && !shot.dip && (stroke === 'forehand' || stroke === 'backhand');
       let flight = shot.flight * (shaped ? SPIN.GROUND.T_MULT[spin] : 1);
       // トップスピンのショートクロス（spinAngle）。人間は playerShot() で済ませてある（ガイドの
       // 着地点と一致させるため。浅くした度合いは shot.angle）。CPU/AI は横へ振る球のうち
@@ -3248,7 +3251,7 @@
       // 出てしまっていた。
       this.lastShotBy[TEAM_OF[who]] = special
         ? (player.specialLabel || SPECIAL_LABEL[special])
-        : shotLabel(stroke, spin, shot.lob);
+        : shotLabel(stroke, shot.dip ? 'dip' : spin, shot.lob);
       // 練習モードは、この1本が狙いどおりの打ち方だったかを決着のときに見る（practiceMiss()）
       if (this.practice && who === 'you') this.practice.shot = { stroke, spin, lob: !!shot.lob };
       // 音程はチーム単位（誰が打っても同じ）。音色は打ち方(stroke)とスピンで変わる。
@@ -3573,9 +3576,9 @@
         waited,
         stroke,
         // 打点タイミングでコースが変わるのはグラウンドストロークだけ。ロブ・ドロップ
-        // ショット・ボレー・スマッシュ・必殺技は、引きつけても早振りしても同じところへ飛ぶ。
+        // ショット・ディップ・ボレー・スマッシュ・必殺技は、引きつけても早振りしても同じところへ飛ぶ。
         timingMatters: !special && (stroke === 'forehand' || stroke === 'backhand')
-          && !shot.lob && shot.spin !== 'drop',
+          && !shot.lob && shot.spin !== 'drop' && !shot.dip,
         // 0 より大きければ「ライン際を狙っていて、この幅で散る＝外れることもある」
         risk: shot.risk || 0,
         x: shot.target.x,
@@ -3676,6 +3679,27 @@
         };
       }
 
+      // 弱いトップスピン（Vで溜めずに離す）は、相手がネットに詰めているときだけディップ
+      // （足元へ沈める球）。狙いは相手の立ち位置が基準で、←→ はそこからずらすだけ。
+      // スピンは 'top' のまま（弾道もバウンドも普通のトップスピン）で、球種の性格づけ
+      // （SPIN.GROUND の T_MULT・余裕の増減）は hit() 側で掛けない（shot.dip）。
+      const dipFoe = !lob && this.you.chargeSpin === 'top' && charge <= DIP.MAX_CHARGE
+        ? this.dipTarget() : null;
+      if (dipFoe) {
+        const short = spread(DIP.SHORT_MIN, DIP.SHORT_MAX);
+        const x = dipFoe.x + Math.sign(aim) * DIP.AIM_X + spread(-DIP.JITTER_X, DIP.JITTER_X);
+        return {
+          target: {
+            x: clamp(x, -DIP.EDGE_X, DIP.EDGE_X),
+            y: BALL_R,
+            z: clamp(Math.abs(dipFoe.z) - short, DIP.Z_MIN, DIP.Z_MAX),
+          },
+          flight: DIP.T * attr[stroke === 'backhand' ? 'backhand' : 'forehand'],
+          clearance: DIP.CLEARANCE,
+          dip: true,
+        };
+      }
+
       // ロブは威力ではなくタッチの球なので能力の倍率は掛けない（CPU/AI 側の cpuShot() と同じ扱い）。
       const strokeAttr = attr[stroke === 'backhand' ? 'backhand' : 'forehand'];
       // ロブは溜めで高い守りのロブ（溜めなし）〜低く速い攻めのロブ（フル溜め）を打ち分ける。
@@ -3717,6 +3741,16 @@
         // ガイド表示用（この狙いがどれだけ荒れるか）。実際の打球には上で反映済み。
         risk,
       };
+    }
+
+    /**
+     * ディップ（playerShot()）で足元を狙う相手。ネットから DIP.FOE_Z 以内に詰めている
+     * 相手がいなければ null（＝ディップにならず、ふつうの溜めなしトップスピン）。
+     * ダブルスは相手ペアのうちネットに近い方（前衛）を狙う。
+     */
+    dipTarget() {
+      const foe = this.doubles ? this.doublesFoes('you').near : this.cpu;
+      return Math.abs(foe.z) <= DIP.FOE_Z ? foe : null;
     }
 
     /**

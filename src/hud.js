@@ -55,8 +55,8 @@
     smash: 'スマッシュ',
     'volley-forehand': 'ボレー',
     'volley-backhand': 'ボレー',
-    forehand: 'ロブ／ドロップ',
-    backhand: 'ロブ／ドロップ',
+    forehand: 'ロブ／ドロップ／ディップ',
+    backhand: 'ロブ／ドロップ／ディップ',
   };
   /**
    * 試合後のスタッツ画面に並べる行。value() は game.matchSummary() の 1チームぶんを受け取り、

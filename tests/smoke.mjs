@@ -6950,6 +6950,72 @@ function tossAndHit(g, holdFrames = 0, spin = 'flat', kick = false) {
   }
 }
 
+// --- ディップ：相手がネットに詰めているとき、溜めずに離したトップスピンは足元へ沈む ---
+{
+  const { DIP, CPU, PHYSICS } = R.config;
+  const { integrate, predictLanding } = R.physics;
+  const shoot = (foe, { charge = 0, spin = 'top', moveX = 0, doubles = false } = {}) => {
+    const origRandom = Math.random;
+    Math.random = () => 0.5;
+    try {
+      const g = new R.Game({ input: { ...fakeInput, moveX }, hooks: noHooks });
+      g.start(doubles);
+      g.phase = 'rally';
+      g.serveInFlight = false;
+      g.wind = 0;
+      g.you.x = 0; g.you.z = -HALF_L;
+      Object.assign(g.cpu, foe);
+      if (doubles) Object.assign(g.cpuMate, { x: -1, z: HALF_L });
+      Object.assign(g.ball, { x: 0, y: 0.9, z: -HALF_L + 0.3, live: true, bounces: 1, last: 'cpu', wind: 0 });
+      g.you.chargeSpin = spin;
+      g.you.swingCharge = charge;
+      g.you.chargeStroke = 'forehand';
+      g.hit('you');
+      return { g, ball: g.ball };
+    } finally {
+      Math.random = origRandom;
+    }
+  };
+  // 球が奥行き z を通る高さ（その前に弾めば 0）
+  const heightAt = (ball, z) => {
+    const s = { ...ball, px: ball.x, py: ball.y, pz: ball.z };
+    for (let t = 0; t < 3; t += PHYSICS.STEP) {
+      integrate(s, PHYSICS.STEP);
+      if (s.y <= PHYSICS.BALL_R) return 0;
+      if (s.z >= z) return s.y;
+    }
+    return Infinity;
+  };
+
+  const foe = { x: 1.0, z: 2.5 };
+  const { g, ball } = shoot(foe);
+  ok(g.lastShotBy.you === 'ディップ', `an uncharged topspin vs a net player is a dip, got ${g.lastShotBy.you}`);
+  ok(ball.spin === 'top', `the dip is still a topspin ball, got ${ball.spin}`);
+  const land = predictLanding({ ...ball, px: ball.x, py: ball.y, pz: ball.z });
+  ok(land.z > 0 && land.z < foe.z, `the dip lands in front of the net player, got z=${land.z.toFixed(2)}`);
+  ok(Math.abs(land.x - foe.x) < 0.5, `with no aim it goes at the net player's feet, got x=${land.x.toFixed(2)}`);
+  const h = heightAt(ball, foe.z);
+  ok(h < CPU.VOLLEY_LOW_Y, `it passes the net player below a comfortable volley (${CPU.VOLLEY_LOW_Y}m), got ${h.toFixed(2)}m`);
+
+  // 同じ場面の溜めたトップスピンは、ふつうのトップスピン（ディップにならない）
+  ok(shoot(foe, { charge: 1 }).g.lastShotBy.you === 'スピンショット', 'a charged topspin is not a dip');
+  // 溜めなしでもフラットはディップにならない
+  ok(shoot(foe, { spin: 'flat' }).g.lastShotBy.you === 'フラットショット', 'an uncharged flat shot is not a dip');
+  // 相手がベースラインにいれば、溜めなしトップスピンは従来どおり浅いつなぎ球
+  const deep = shoot({ x: 0, z: HALF_L });
+  ok(deep.g.lastShotBy.you === 'スピンショット', 'vs a baseliner an uncharged topspin stays a spin shot');
+  ok(heightAt(deep.ball, foe.z) > 1.2, 'and that ordinary topspin would sail past a net player at chest height');
+  // ←→ は相手の正面からずらす
+  const right = predictLanding((({ ball: b }) => ({ ...b, px: b.x, py: b.y, pz: b.z }))(shoot(foe, { moveX: 1 })));
+  // 画面の → は世界座標では -x（INPUT_X_TO_WORLD）。ずれる向きではなく量を見る
+  ok(Math.abs(right.x - land.x) > DIP.AIM_X * 0.7, `aiming moves the dip off the body, got x=${right.x.toFixed(2)} vs ${land.x.toFixed(2)}`);
+  // ダブルスはネットに近い方（前衛）の足元を狙う
+  const dbl = shoot({ x: -1.5, z: 2.2 }, { doubles: true });
+  const dblLand = predictLanding({ ...dbl.ball, px: dbl.ball.x, py: dbl.ball.y, pz: dbl.ball.z });
+  ok(dbl.g.lastShotBy.you === 'ディップ' && Math.abs(dblLand.x + 1.5) < 0.6,
+    `in doubles the dip goes at the net man, got ${dbl.g.lastShotBy.you} x=${dblLand.x.toFixed(2)}`);
+}
+
 // --- ドロップは「たまに決まる」：定位置の CPU に対して、決まる割合が難易度と場面でなだらかに変わる ---
 {
   const { CPU, applyCpuLevel } = R.config;
